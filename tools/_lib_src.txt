@@ -1,0 +1,773 @@
+## total
+def total(xs):
+    s = 0
+    for x in xs:
+        s += x
+    return s
+--
+[1, 2, 3]
+[]
+[10, -4, 7]
+[5, 5, 5, 5]
+[100, 250]
+## maximum
+def maximum(xs):
+    best = xs[0]
+    for x in xs:
+        if x > best:
+            best = x
+    return best
+--
+[3, 9, 2]
+[-5, -2, -9]
+[7]
+[1, 8, 8, 3]
+[4, 12, 11, 12]
+## minimum
+def minimum(xs):
+    best = xs[0]
+    for x in xs:
+        if x < best:
+            best = x
+    return best
+--
+[3, 9, 2]
+[-5, -2, -9]
+[7]
+[4, 1, 1, 6]
+[9, 8, 7, 10]
+## count_even
+def count_even(xs):
+    return sum(1 for x in xs if x % 2 == 0)
+--
+[1, 2, 4, 6, 7]
+[]
+[3, 5, 9]
+[0, 10, 11, 12]
+[2, 2, 3, 4, 5, 6]
+## average
+def average(xs):
+    return sum(xs) / len(xs)
+--
+[2, 4, 6]
+[10]
+[1, 2, 3, 4]
+[5, 5, 8, 2]
+[7, 9]
+## first_n
+def first_n(xs, n):
+    return xs[:n]
+--
+[5, 6, 7, 8], 3
+[1, 2], 5
+[9, 8, 7], 1
+[4, 3, 2, 1], 4
+[1, 2, 3, 4, 5, 6], 2
+## last_n
+def last_n(xs, n):
+    return xs[len(xs) - n:]
+--
+[5, 6, 7, 8], 2
+[1, 2, 3], 3
+[9, 8, 7, 6, 5], 1
+[4, 3, 2, 1], 4
+[1, 2, 3, 4, 5, 6], 3
+## dedupe
+def dedupe(xs):
+    seen = []
+    for x in xs:
+        if x not in seen:
+            seen.append(x)
+    return seen
+--
+[1, 2, 1, 3, 2]
+[]
+[4, 4, 4]
+[5, 6, 7]
+[9, 8, 9, 7, 8]
+## sum_of_squares
+def sum_of_squares(xs):
+    s = 0
+    for x in xs:
+        s += x * x
+    return s
+--
+[1, 2, 3]
+[]
+[4]
+[-2, 3]
+[5, 5, 1]
+## sort_desc
+def sort_desc(xs):
+    return sorted(xs, reverse=True)
+--
+[3, 1, 2]
+[]
+[5, 5, 1]
+[9, 8, 10]
+[2, 7, 4, 7]
+## second_largest
+def second_largest(xs):
+    vals = sorted(set(xs))
+    return vals[-2]
+--
+[3, 9, 2]
+[1, 5, 5, 4]
+[10, 20]
+[7, 3, 8, 8]
+[6, 2, 9, 9, 4]
+## product
+def product(xs):
+    p = 1
+    for x in xs:
+        p *= x
+    return p
+--
+[1, 2, 3, 4]
+[]
+[5, -2]
+[7]
+[2, 2, 2, 2, 2]
+## count_positive
+def count_positive(xs):
+    return sum(1 for x in xs if x > 0)
+--
+[1, -2, 3, 0]
+[]
+[-1, -2]
+[5, 5, 5]
+[0, 0, 4, -4, 9]
+## running_sum
+def running_sum(xs):
+    out = []
+    acc = 0
+    for x in xs:
+        acc += x
+        out.append(acc)
+    return out
+--
+[1, 2, 3, 4]
+[]
+[5, -5, 5]
+[10]
+[3, 0, 3, 0]
+## flatten
+def flatten(xss):
+    out = []
+    for xs in xss:
+        for x in xs:
+            out.append(x)
+    return out
+--
+[[1, 2], [3], []]
+[]
+[[4, 5, 6]]
+[[], [], [7]]
+[[1], [2], [3], [4]]
+## chunk
+def chunk(xs, n):
+    return [xs[i:i + n] for i in range(0, len(xs), n)]
+--
+[1, 2, 3, 4, 5], 2
+[], 3
+[1, 2, 3], 3
+[1, 2, 3, 4, 5, 6, 7], 3
+[9, 8], 1
+## rotate_left
+def rotate_left(xs, k):
+    if not xs:
+        return []
+    k = k % len(xs)
+    return xs[k:] + xs[:k]
+--
+[1, 2, 3, 4], 1
+[], 5
+[1, 2, 3], 3
+[1, 2, 3, 4, 5], 7
+[5, 6, 7], 2
+## index_of_max
+def index_of_max(xs):
+    best = 0
+    for i in range(len(xs)):
+        if xs[i] > xs[best]:
+            best = i
+    return best
+--
+[3, 9, 2]
+[5]
+[1, 7, 7, 3]
+[-3, -1, -2]
+[2, 4, 6, 8, 1]
+## count_greater
+def count_greater(xs, t):
+    return sum(1 for x in xs if x > t)
+--
+[1, 5, 9, 12], 5
+[], 3
+[4, 4, 4], 4
+[10, 20, 30], 0
+[7, 8, 9], 8
+## take_while_positive
+def take_while_positive(xs):
+    out = []
+    for x in xs:
+        if x <= 0:
+            break
+        out.append(x)
+    return out
+--
+[3, 2, 0, 5]
+[]
+[-1, 4]
+[1, 2, 3]
+[8, 9, -2, 7]
+## pairwise_diff
+def pairwise_diff(xs):
+    return [xs[i + 1] - xs[i] for i in range(len(xs) - 1)]
+--
+[1, 4, 9, 16]
+[5]
+[10, 7, 3]
+[2, 2, 2]
+[0, 5]
+## median
+def median(xs):
+    s = sorted(xs)
+    n = len(s)
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2
+--
+[3, 1, 2]
+[4, 1, 3, 2]
+[7]
+[5, 5, 9, 1]
+[10, 20]
+## range_span
+def range_span(xs):
+    return max(xs) - min(xs)
+--
+[3, 9, 2]
+[5]
+[-4, 4]
+[1, 1, 1]
+[10, 2, 8, 15]
+## partition_even
+def partition_even(xs):
+    ev = [x for x in xs if x % 2 == 0]
+    od = [x for x in xs if x % 2 != 0]
+    return ev, od
+--
+[1, 2, 3, 4]
+[]
+[2, 4]
+[7, 9, 11]
+[10, 3, 8, 5]
+## interleave
+def interleave(a, b):
+    out = []
+    for i in range(max(len(a), len(b))):
+        if i < len(a):
+            out.append(a[i])
+        if i < len(b):
+            out.append(b[i])
+    return out
+--
+[1, 2, 3], [4, 5, 6]
+[1], [2, 3, 4]
+[], [7, 8]
+[5, 6], []
+[1, 3], [2]
+## zip_sum
+def zip_sum(a, b):
+    return [x + y for x, y in zip(a, b)]
+--
+[1, 2, 3], [10, 20, 30]
+[], []
+[5, 5], [1, 2, 3]
+[0, -1], [0, 1]
+[100], [1]
+## reverse_words
+def reverse_words(s):
+    return ' '.join(reversed(s.split()))
+--
+'c a b'
+'one two'
+'solo'
+'x y z w'
+'the quick brown fox'
+## is_palindrome
+def is_palindrome(s):
+    t = s.lower()
+    return t == t[::-1]
+--
+'Level'
+'abc'
+'noon'
+'ab'
+'Racecar'
+## count_vowels
+def count_vowels(s):
+    return sum(1 for c in s.lower() if c in 'aeiou')
+--
+'Hello World'
+'xyz'
+'AEIOU'
+'banana'
+'Queueing'
+## capitalize_words
+def capitalize_words(s):
+    return ' '.join(w.capitalize() for w in s.split())
+--
+'hello big world'
+'a'
+'mIxEd cAsE'
+'one two'
+'  spaced   out '
+## count_words
+def count_words(s):
+    return len(s.split())
+--
+'a b c'
+''
+'  one  '
+'to be or not to be'
+'x'
+## caesar_shift
+def caesar_shift(s, k):
+    out = []
+    for c in s:
+        if 'a' <= c <= 'z':
+            out.append(chr((ord(c) - ord('a') + k) % 26 + ord('a')))
+        else:
+            out.append(c)
+    return ''.join(out)
+--
+'abc', 1
+'xyz', 3
+'hello world', 13
+'abc', 0
+'zebra!', 2
+## longest_word
+def longest_word(s):
+    best = ''
+    for w in s.split():
+        if len(w) > len(best):
+            best = w
+    return best
+--
+'a bb ccc dd'
+''
+'cat dog'
+'one three five'
+'x yy zz'
+## acronym
+def acronym(s):
+    return ''.join(w[0].upper() for w in s.split())
+--
+'portable network graphics'
+'a'
+'  hello   big world '
+'as soon as possible'
+'one two'
+## is_anagram
+def is_anagram(a, b):
+    return sorted(a.lower()) == sorted(b.lower())
+--
+'listen', 'silent'
+'abc', 'abd'
+'Dormitory', 'dirtyroom'
+'aa', 'a'
+'Evil', 'Vile'
+## compress_runs
+def compress_runs(s):
+    if not s:
+        return ''
+    out = []
+    cur = s[0]
+    n = 1
+    for c in s[1:]:
+        if c == cur:
+            n += 1
+        else:
+            out.append(cur + str(n))
+            cur = c
+            n = 1
+    out.append(cur + str(n))
+    return ''.join(out)
+--
+'aaabcc'
+''
+'z'
+'abab'
+'xxxxyyz'
+## remove_spaces
+def remove_spaces(s):
+    return ''.join(c for c in s if c != ' ')
+--
+'a b c'
+''
+'  pad  '
+'nospace'
+'x  y  z'
+## repeat_join
+def repeat_join(s, n, sep):
+    return sep.join([s] * n)
+--
+'ab', 3, '-'
+'x', 1, ','
+'q', 0, '+'
+'go', 2, ' '
+'1', 4, ''
+## count_char
+def count_char(s, ch):
+    return sum(1 for c in s if c == ch)
+--
+'banana', 'a'
+'', 'x'
+'mississippi', 's'
+'Hello', 'l'
+'aaa', 'b'
+## word_freq
+def word_freq(s):
+    d = {}
+    for w in s.lower().split():
+        d[w] = d.get(w, 0) + 1
+    return d
+--
+'a b a'
+''
+'The the THE end'
+'x y z'
+'to be or not to be'
+## invert_dict
+def invert_dict(d):
+    return {v: k for k, v in d.items()}
+--
+{'a': 1, 'b': 2}
+{}
+{'x': 'y'}
+{1: 'one', 2: 'two', 3: 'three'}
+{'k': 0, 'j': 5}
+## merge_sum
+def merge_sum(a, b):
+    out = dict(a)
+    for k, v in b.items():
+        out[k] = out.get(k, 0) + v
+    return out
+--
+{'a': 1}, {'a': 2, 'b': 3}
+{}, {}
+{'x': 5}, {}
+{}, {'y': 7}
+{'p': 1, 'q': 2}, {'q': 10, 'r': 4}
+## max_key
+def max_key(d):
+    best = None
+    for k in d:
+        if best is None or d[k] > d[best]:
+            best = k
+    return best
+--
+{'a': 1, 'b': 5, 'c': 3}
+{'x': 9}
+{'p': -1, 'q': -7}
+{'m': 4, 'n': 4, 'o': 2}
+{}
+## filter_values
+def filter_values(d, t):
+    return {k: v for k, v in d.items() if v >= t}
+--
+{'a': 1, 'b': 5}, 3
+{}, 0
+{'a': 2, 'b': 2}, 2
+{'x': -1, 'y': 0, 'z': 1}, 0
+{'k': 10}, 11
+## group_by_len
+def group_by_len(words):
+    out = {}
+    for w in words:
+        out.setdefault(len(w), []).append(w)
+    return out
+--
+['a', 'bb', 'c']
+[]
+['xx', 'yy', 'zzz']
+['one', 'two', 'three', 'four']
+['q']
+## count_by_first
+def count_by_first(words):
+    out = {}
+    for w in words:
+        out[w[0]] = out.get(w[0], 0) + 1
+    return out
+--
+['apple', 'avocado', 'banana']
+[]
+['x']
+['cat', 'car', 'cow', 'cup']
+['ab', 'ba', 'ab']
+## factorial
+def factorial(n):
+    r = 1
+    for i in range(2, n + 1):
+        r *= i
+    return r
+--
+5
+0
+1
+7
+10
+## fibonacci
+def fibonacci(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+--
+6
+0
+1
+10
+15
+## gcd
+def gcd(a, b):
+    for d in range(min(a, b), 0, -1):
+        if a % d == 0 and b % d == 0:
+            return d
+    return 1
+--
+12, 18
+7, 13
+20, 5
+9, 27
+100, 75
+## clamp
+def clamp(x, lo, hi):
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+--
+5, 0, 10
+-3, 0, 10
+15, 0, 10
+7, 7, 9
+9, 7, 9
+## is_prime
+def is_prime(n):
+    if n < 2:
+        return False
+    for d in range(2, n):
+        if n % d == 0:
+            return False
+    return True
+--
+7
+9
+2
+1
+13
+## digit_sum
+def digit_sum(n):
+    s = 0
+    for ch in str(abs(n)):
+        s += int(ch)
+    return s
+--
+123
+0
+-45
+999
+1001
+## reverse_int
+def reverse_int(n):
+    sign = -1 if n < 0 else 1
+    return sign * int(str(abs(n))[::-1])
+--
+123
+-45
+100
+7
+9001
+## sum_divisors
+def sum_divisors(n):
+    return sum(d for d in range(1, n + 1) if n % d == 0)
+--
+6
+1
+12
+7
+28
+## collatz_steps
+def collatz_steps(n):
+    steps = 0
+    for _ in range(1000):
+        if n == 1:
+            break
+        if n % 2 == 0:
+            n = n // 2
+        else:
+            n = 3 * n + 1
+        steps += 1
+    return steps
+--
+6
+1
+7
+27
+10
+## to_binary
+def to_binary(n):
+    if n == 0:
+        return '0'
+    return bin(n)[2:]
+--
+5
+0
+8
+1
+255
+## lcm | gcd
+def lcm(a, b):
+    return a * b // gcd(a, b)
+--
+4, 6
+7, 3
+5, 5
+12, 18
+9, 6
+## count_primes | is_prime
+def count_primes(n):
+    return sum(1 for k in range(2, n + 1) if is_prime(k))
+--
+10
+2
+1
+30
+20
+## mean_abs_dev | average
+def mean_abs_dev(xs):
+    m = average(xs)
+    return sum(abs(x - m) for x in xs) / len(xs)
+--
+[1, 3, 5]
+[4, 4]
+[2, 8]
+[1, 2, 3, 4]
+[10, 0, 10, 0]
+## normalize_range | range_span
+def normalize_range(xs):
+    span = range_span(xs)
+    lo = min(xs)
+    if span == 0:
+        return [0 for _ in xs]
+    return [(x - lo) * 100 // span for x in xs]
+--
+[0, 5, 10]
+[3, 3]
+[1, 2, 4]
+[10, 20, 40, 50]
+[-5, 0, 5]
+## top_two_sum | sort_desc
+def top_two_sum(xs):
+    s = sort_desc(xs)
+    return s[0] + s[1]
+--
+[3, 9, 2]
+[5, 5]
+[1, 2, 3, 4]
+[-1, -2, -3]
+[10, 20]
+## is_perfect | sum_divisors
+def is_perfect(n):
+    return sum_divisors(n) - n == n
+--
+6
+28
+12
+1
+496
+## word_lengths | count_words
+def word_lengths(s):
+    return [len(w) for w in s.split()][:count_words(s)]
+--
+'a bb ccc'
+''
+'hello world'
+'x'
+'to be or not'
+## Counter
+class Counter:
+    def __init__(self):
+        self.n = 0
+
+    def add(self, k):
+        self.n += k
+        return self.n
+
+    def reset(self):
+        self.n = 0
+--
+=m.Counter().add(5)
+=(lambda c: (c.add(2), c.add(3), c.add(-1)))(m.Counter())
+=(lambda c: (c.add(4), c.reset(), c.add(1)))(m.Counter())
+=(lambda c: [c.add(1) for _ in range(4)])(m.Counter())
+=m.Counter().n
+## Stack
+class Stack:
+    def __init__(self):
+        self.items = []
+
+    def push(self, x):
+        self.items.append(x)
+
+    def pop(self):
+        return self.items.pop()
+
+    def size(self):
+        return len(self.items)
+--
+=(lambda s: (s.push(1), s.push(2), s.pop(), s.size()))(m.Stack())[2:]
+=m.Stack().size()
+=(lambda s: (s.push('a'), s.push('b'), s.pop(), s.pop()))(m.Stack())[2:]
+=(lambda s: ([s.push(i) for i in range(5)], s.size()))(m.Stack())[1]
+=(lambda s: (s.push(9), s.size()))(m.Stack())[1]
+## Interval
+class Interval:
+    def __init__(self, lo, hi):
+        self.lo = lo
+        self.hi = hi
+
+    def length(self):
+        return self.hi - self.lo
+
+    def contains(self, x):
+        return self.lo <= x <= self.hi
+--
+=m.Interval(2, 9).length()
+=m.Interval(0, 0).length()
+=m.Interval(1, 5).contains(5)
+=m.Interval(1, 5).contains(6)
+=m.Interval(-3, 3).contains(0)
+## Queue
+class Queue:
+    def __init__(self):
+        self.items = []
+
+    def put(self, x):
+        self.items.append(x)
+
+    def get(self):
+        return self.items.pop(0)
+
+    def empty(self):
+        return len(self.items) == 0
+--
+=(lambda q: (q.put(1), q.put(2), q.get()))(m.Queue())[2]
+=m.Queue().empty()
+=(lambda q: (q.put('x'), q.empty()))(m.Queue())[1]
+=(lambda q: (q.put(3), q.put(4), q.get(), q.get(), q.empty()))(m.Queue())[2:]
+=(lambda q: ([q.put(i) for i in range(3)], q.get(), q.get()))(m.Queue())[1:]
