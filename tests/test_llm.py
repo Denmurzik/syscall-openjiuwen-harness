@@ -289,3 +289,36 @@ def test_concurrency_env_override(monkeypatch):
     monkeypatch.delenv("HARNESS_LLM_CONCURRENCY")
     importlib.reload(config)
     assert config.LLM_CONCURRENCY == 3
+
+
+def _bad_request():
+    return HTTPErr(400)
+
+
+def test_structured_400_retries_without_and_remembers():
+    seen = []
+
+    async def fake_invoke(messages, **kw):
+        seen.append(dict(kw))
+        if "response_format" in kw:
+            raise _bad_request()
+        return SimpleNamespace(content="ok", usage_metadata=SimpleNamespace(input_tokens=10, output_tokens=5))
+
+    c, fake, ledger = make(None)
+    fake.invoke = fake_invoke
+    r = asyncio.run(c.chat("m", [{"role": "user", "content": "hi"}], 16,
+                           response_format={"type": "json_object"}, extra_body={"x": 1}))
+    assert r.text == "ok" and c.structured_ok is False
+    assert "response_format" not in seen[-1] and "extra_body" not in seen[-1]
+    assert ledger.spent == r.cost and c._failures == 0
+    asyncio.run(c.chat("m", [{"role": "user", "content": "hi"}], 16, response_format={"type": "json_object"}))
+    assert len(seen) == 3 and "response_format" not in seen[-1]
+
+
+def test_400_without_structured_is_unavailable_no_charge():
+    async def bad():
+        raise _bad_request()
+    c, fake, ledger = make(bad)
+    with pytest.raises(LLMUnavailable):
+        run(c)
+    assert fake.calls == 1 and c.structured_ok is True and ledger.spent == 0

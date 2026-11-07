@@ -1,4 +1,4 @@
-"""Entry point: python run_agent.py --tasks-dir DIR (always exits 0)."""
+"""Entry point: python run_agent.py [--tasks-dir DIR | DIR] [--out FILE] (always exits 0)."""
 import argparse
 import os
 import sys
@@ -34,13 +34,38 @@ def _probe_tasks_dir(tasks_dir: Path) -> None:
             print("TASKS DIR NOT WRITABLE: uid=? owner=? mode=?", file=sys.stderr, flush=True)
 
 
+def _resolve_paths(argv=None, env=None) -> tuple[Path, str, str | None]:
+    """(tasks_dir, source, out): --tasks-dir > positional > env TASKS > /data/tasks."""
+    env = os.environ if env is None else env
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tasks-dir", type=Path)
+    ap.add_argument("--out", "--output", dest="out")
+    ap.add_argument("tasks", nargs="?", type=Path)
+    args, _ = ap.parse_known_args(argv)
+    if args.tasks_dir:
+        tasks, src = args.tasks_dir, "--tasks-dir"
+    elif args.tasks:
+        tasks, src = args.tasks, "positional"
+    elif env.get("TASKS"):
+        tasks, src = Path(env["TASKS"]), "env TASKS"
+    else:
+        tasks, src = Path("/data/tasks"), "default /data/tasks"
+    return tasks, src, args.out or env.get("OUT") or None
+
+
 def main(argv=None) -> None:
     summary: dict = {}
     try:
-        ap = argparse.ArgumentParser()
-        ap.add_argument("--tasks-dir", required=True, type=Path)
-        args, _ = ap.parse_known_args(argv)
-        tasks_dir = args.tasks_dir.resolve()  # before any chdir
+        tasks_dir, src, out = _resolve_paths(argv)
+        tasks_dir = tasks_dir.resolve()  # before any chdir
+        print(f"tasks dir: {tasks_dir} (from {src}); answers file: {out or 'none'}",
+              file=sys.stderr, flush=True)
+        if out:
+            try:
+                from harness.tasks import set_answer_sink
+                set_answer_sink(Path(out) if out.endswith(("/", "\\")) else Path(out).resolve())
+            except Exception as e:
+                print(f"answers file unavailable: {e!r}", file=sys.stderr)
         log_dir = Path(os.environ.get("HARNESS_LOG_DIR") or Path(tempfile.gettempdir()) / "harness")
         os.environ["HARNESS_LOG_DIR"] = str(log_dir)
         try:

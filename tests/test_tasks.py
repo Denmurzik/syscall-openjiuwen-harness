@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -58,3 +59,32 @@ def test_load_tasks_ignores_macosx_and_dot_dirs_at_top(tmp_path):
     d.mkdir()
     (d / "task.json").write_text('{"task_id":"ok","task_type":"math","instruction":"x","reward":1}')
     assert [t.task_id for t in load_tasks(tmp_path)] == ["ok"]
+
+
+def test_answer_sink_file_and_dir(tmp_path):
+    from harness.tasks import set_answer_sink
+    ts = load_tasks(copy_task(load_tasks(FIX)[0], tmp_path).dir.parent)
+    try:
+        f = tmp_path / "o" / "a.json"
+        set_answer_sink(f)
+        write_answer(ts[0], " 1 ")
+        write_answer(ts[0], "2")
+        assert json.loads(f.read_text()) == {ts[0].task_id: "2"}
+        d = tmp_path / "dd"; d.mkdir()
+        set_answer_sink(d)
+        write_answer(ts[0], "z")
+        assert json.loads((d / "answers.json").read_text()) == {ts[0].task_id: "z"}
+    finally:
+        set_answer_sink(None)
+
+
+def test_answer_sink_error_keeps_answer_txt(tmp_path):
+    from harness.tasks import set_answer_sink
+    t = copy_task(load_tasks(FIX)[0], tmp_path)
+    blocker = tmp_path / "f"; blocker.write_text("x")
+    try:
+        set_answer_sink(blocker / "x.json")
+        write_answer(t, "7")
+    finally:
+        set_answer_sink(None)
+    assert (t.dir / "answer.txt").read_text() == "7\n"

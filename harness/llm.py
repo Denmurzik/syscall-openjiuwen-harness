@@ -124,6 +124,7 @@ class LLMClient:
         self._sem: asyncio.Semaphore | None = None
         self._models: dict = {}
         self._failures = 0
+        self.structured_ok = True
 
     def _model(self, name: str):
         m = self._models.get(name)
@@ -158,7 +159,11 @@ class LLMClient:
     async def _chat(self, model, messages, max_tokens, extra) -> ChatResult:
         m = self._model(model)
         attempt = 0
+        extra = dict(extra)
         while True:
+            if not self.structured_ok:
+                extra.pop("response_format", None)
+                extra.pop("extra_body", None)
             if self.ledger.exhausted:
                 raise BudgetExhausted("ledger exhausted")
             try:
@@ -169,6 +174,12 @@ class LLMClient:
                 if status in (402, 403):
                     self.ledger.mark_exhausted()
                     raise BudgetExhausted(f"HTTP {status}") from exc
+                if (status == 400 and self.structured_ok
+                        and ("response_format" in extra or "extra_body" in extra)):
+                    # proxy rejects structured output: retry once without it, remember
+                    logger.warning("HTTP 400 with structured output; retrying without it")
+                    self.structured_ok = False
+                    continue
                 connect = status is None and _is_connect_error(exc)
                 if (status == 429 or connect) and attempt < len(RETRY_DELAYS):
                     await asyncio.sleep(RETRY_DELAYS[attempt])

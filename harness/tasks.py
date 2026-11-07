@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -62,7 +63,59 @@ def _fsync_path(path: Path, flags: int = os.O_RDONLY) -> None:
         os.close(fd)
 
 
+_sink_path: Path | None = None
+_sink_answers: dict[str, str] = {}
+_sink_lock = threading.Lock()
+
+
+def set_answer_sink(path: Path | None) -> None:
+    """Also mirror every answer into one JSON file {task_id: answer} (None disables)."""
+    global _sink_path
+    with _sink_lock:
+        _sink_answers.clear()
+        if path is None:
+            _sink_path = None
+            return
+        p = Path(path)
+        if str(path).endswith(("/", "\\")) or p.is_dir():
+            p = p / "answers.json"
+        _sink_path = p
+
+
+def _write_sink(task_id: str, answer: str) -> None:
+    try:
+        with _sink_lock:
+            if _sink_path is None:
+                return
+            _sink_answers[task_id] = answer
+            data = json.dumps(_sink_answers, ensure_ascii=False, indent=1)
+            tmp = _sink_path.with_name(f".{_sink_path.name}.{os.getpid()}.tmp")
+            try:
+                _sink_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, _sink_path)
+            except OSError:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                with open(_sink_path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(data)
+    except Exception as e:
+        log.warning("answers file write failed: %r", e)
+
+
 def write_answer(task: Task, answer: str) -> None:
+    try:
+        _write_answer(task, answer)
+    finally:
+        _write_sink(task.task_id, answer.strip())
+
+
+def _write_answer(task: Task, answer: str) -> None:
     data = answer.strip() + "\n"
     target = task.dir / "answer.txt"
     tmp = task.dir / f".answer.txt.{os.getpid()}.tmp"
