@@ -277,3 +277,15 @@ def test_quiet_logs_never_raises(monkeypatch):
 def test_log_dir_from_env(monkeypatch):
     monkeypatch.setenv("HARNESS_LOG_DIR", "/tmp/hx")
     assert llm_mod._quiet_log_config()["log_path"].replace("\\", "/") == "/tmp/hx/openjiuwen-logs"
+
+
+def test_concurrency_env_override(monkeypatch):
+    import importlib
+    from harness import config
+    for val, want in (("5", 5), ("abc", 3), ("0", 3), ("", 3)):
+        monkeypatch.setenv("HARNESS_LLM_CONCURRENCY", val)
+        importlib.reload(config)
+        assert config.LLM_CONCURRENCY == want
+    monkeypatch.delenv("HARNESS_LLM_CONCURRENCY")
+    importlib.reload(config)
+    assert config.LLM_CONCURRENCY == 3

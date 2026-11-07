@@ -275,29 +275,64 @@ def _write_mylib(path: Path, text: str) -> None:
         os.fsync(f.fileno())
 
 
+def _mylib_names(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """(module aliases, directly imported names) bound from `mylib` by the test file."""
+    aliases: set[str] = set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            aliases |= {a.asname or a.name for a in node.names if a.name == "mylib"}
+        elif isinstance(node, ast.ImportFrom) and node.module == "mylib":
+            names |= {a.asname or a.name for a in node.names if a.name != "*"}
+    return aliases, names
+
+
 def contradictory_tests(test_src: str) -> bool:
-    """True if one test asserts the same call equal to two different literals (unsatisfiable)."""
+    """True if one test method asserts the same mylib call (literal arguments) equal to two
+    different literals, which no implementation can satisfy. Deliberately narrow."""
     try:
         tree = ast.parse(test_src)
     except SyntaxError:
         return False
-    seen: dict[tuple[str, str], str] = {}
-    for fn in ast.walk(tree):
-        if not isinstance(fn, ast.FunctionDef):
-            continue
-        for node in ast.walk(fn):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "assertEqual" and len(node.args) == 2
-                    and isinstance(node.args[0], ast.Call)):
+    aliases, names = _mylib_names(tree)
+    if not aliases and not names:
+        return False
+
+    def is_mylib_call(c: ast.expr) -> bool:
+        if not isinstance(c, ast.Call) or not (c.args or c.keywords):  # no-arg calls may be stateful
+            return False
+        f = c.func
+        return ((isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in aliases)
+                or (isinstance(f, ast.Name) and f.id in names))
+
+    def literal(n: ast.AST):
+        return ast.literal_eval(n)
+
+    seen: dict[tuple, object] = {}
+    for cls in [None] + [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+        scope = tree.body if cls is None else cls.body
+        for fn in scope:
+            if not isinstance(fn, ast.FunctionDef):
                 continue
-            try:
-                expected = ast.literal_eval(node.args[1])
-            except ValueError:
-                continue
-            key = (fn.name, ast.dump(node.args[0]))
-            exp = repr(expected)
-            if seen.setdefault(key, exp) != exp:
-                return True
+            for node in ast.walk(fn):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "assertEqual" and len(node.args) == 2
+                        and is_mylib_call(node.args[0])):
+                    continue
+                call = node.args[0]
+                try:
+                    args = [literal(x) for x in call.args]
+                    kwargs = [(k.arg, literal(k.value)) for k in call.keywords]
+                    expected = literal(node.args[1])
+                except (ValueError, TypeError, SyntaxError, RecursionError):
+                    continue
+                key = (cls.name if cls else None, fn.name, ast.dump(call.func), repr(args), repr(kwargs))
+                if key not in seen:
+                    seen[key] = expected
+                    continue
+                prev = seen[key]
+                if prev != expected:  # assertEqual semantics: 1 == 1.0 == True
+                    return True
     return False
 
 
@@ -315,8 +350,6 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         test_file = cands[0]
     original = mylib.read_text(encoding="utf-8")
     test_src = (ws / test_file).read_text(encoding="utf-8")
-    if contradictory_tests(test_src):
-        return SolveResult("infeasible", note="tests contradict each other")
     refs = _test_refs(test_src)
     ast.parse(original)
 
@@ -338,6 +371,8 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         while not report.ok:
             step = _repair_round(ctx, cur, report, refs)
             if step is None:
+                if contradictory_tests(test_src):  # only after repair failed: saves model tokens
+                    return SolveResult("infeasible", note="tests contradict each other")
                 return SolveResult("unparsed", note=f"no repair found for {report.failed}")
             cur, report = step
         _write_mylib(mylib, cur)

@@ -151,8 +151,48 @@ def test_contradictory_visible_tests_are_infeasible(tmp_path):
     assert r.status == "infeasible" and r.answer is None
 
 
-def test_same_call_same_value_is_not_contradictory():
+def _cd(body: str, header: str = "import mylib as m\n") -> bool:
     from harness.solvers.coding_solver import contradictory_tests
-    ok = "class T:\n    def test_a(self):\n        self.assertEqual(m.f(1), 2)\n        self.assertEqual(m.f(1), 2)\n        self.assertEqual(m.f(2), 3)\n"
-    assert not contradictory_tests(ok)
-    assert not contradictory_tests("def broken(:")
+    return contradictory_tests(header + body)
+
+
+def test_same_call_same_value_is_not_contradictory():
+    ok = ("class T:\n    def test_a(self):\n        self.assertEqual(m.f(1), 2)\n"
+          "        self.assertEqual(m.f(1), 2)\n        self.assertEqual(m.f(2), 3)\n")
+    assert not _cd(ok)
+    assert _cd("class T:\n    def test_a(self):\n        self.assertEqual(m.f(1), 2)\n"
+               "        self.assertEqual(m.f(1), 3)\n")
+    assert _cd("def test_a():\n    self.assertEqual(f(1), 2)\n    self.assertEqual(f(1), 3)\n",
+               "from mylib import f\n")
+    assert not _cd("def broken(:")
+
+
+def test_feasible_patterns_are_not_contradictory():
+    # stateful method on an instance
+    assert not _cd("class T:\n    def test_a(self):\n        s = m.Stack()\n"
+                   "        self.assertEqual(s.pop(), 2)\n        self.assertEqual(s.pop(), 1)\n")
+    # argument mutated between asserts
+    assert not _cd("class T:\n    def test_a(self):\n        xs = [1]\n"
+                   "        self.assertEqual(m.total(xs), 1)\n        xs.append(2)\n"
+                   "        self.assertEqual(m.total(xs), 3)\n")
+    # rebound variable
+    assert not _cd("class T:\n    def test_a(self):\n        x = 1\n"
+                   "        self.assertEqual(m.f(x), 1)\n        x = 5\n        self.assertEqual(m.f(x), 5)\n")
+    # same test name in different classes
+    assert not _cd("class A:\n    def test_x(self):\n        self.assertEqual(m.f(1), 1)\n"
+                   "class B:\n    def test_x(self):\n        self.assertEqual(m.f(1), 2)\n")
+    # 1 and 1.0 are equal for assertEqual
+    assert not _cd("class T:\n    def test_a(self):\n        self.assertEqual(m.f(1), 1)\n"
+                   "        self.assertEqual(m.f(1), 1.0)\n")
+    # unhashable literal does not crash
+    assert not _cd("class T:\n    def test_a(self):\n        self.assertEqual(m.f(1), {[1]: 2})\n")
+    # stateful no-arg module function
+    assert not _cd("class T:\n    def test_a(self):\n        self.assertEqual(m.next_id(), 1)\n"
+                   "        self.assertEqual(m.next_id(), 2)\n")
+
+
+def test_contradiction_never_preempts_a_repair(tmp_path):
+    lib = "def f(x):\n    return x - 1\n"
+    tests = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
+             "    def test_f(self):\n        self.assertEqual(m.f(7), 8)\n")
+    assert solve(_custom(tmp_path, lib, tests)).status == "solved"

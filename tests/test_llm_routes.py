@@ -235,3 +235,6 @@ def test_program_route_uses_only_first_block(tmp_path):
 def test_program_prompt_forbids_answer_file():
     from harness.llm_routes import PROGRAM_SYSTEM
     assert "stdout" in PROGRAM_SYSTEM and "Never write answer.txt" in PROGRAM_SYSTEM
+    import inspect
+    from harness import llm_routes
+    assert "do not write it to a file" in inspect.getsource(llm_routes.solve_with_program)
