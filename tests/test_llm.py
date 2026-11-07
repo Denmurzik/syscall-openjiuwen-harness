@@ -247,3 +247,17 @@ def test_openjiuwen_logs_silent_on_stdout(capfd):
     run(c)
     out = capfd.readouterr()
     assert "PROBE" not in out.out and "PROBE" not in out.err
+
+
+def test_quiet_logs_never_raises(monkeypatch):
+    import openjiuwen.core.common.logging.log_config as lc
+
+    def boom(cfg):
+        raise OSError("unwritable")
+    monkeypatch.setattr(lc, "configure_log_config", boom)
+    llm_mod._quiet_openjiuwen_logs()  # must not raise
+
+
+def test_log_dir_from_env(monkeypatch):
+    monkeypatch.setenv("HARNESS_LOG_DIR", "/tmp/hx")
+    assert llm_mod._quiet_log_config()["log_path"].replace("\\", "/") == "/tmp/hx/openjiuwen-logs"

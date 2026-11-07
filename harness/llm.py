@@ -11,19 +11,27 @@ from harness.config import LLM_CONCURRENCY, LLM_TIMEOUT, TIMEOUT_CHARGE
 
 logger = logging.getLogger(__name__)
 
-_QUIET_LOG_CONFIG = {
-    "level": "WARNING",
-    "log_path": os.path.join(tempfile.gettempdir(), "harness-openjiuwen-logs"),
-    "output": ["file"],
-    "interface_output": ["file"],
-    "performance_output": ["file"],
-}
+def _quiet_log_config() -> dict:
+    base = os.environ.get("HARNESS_LOG_DIR") or os.path.join(tempfile.gettempdir(), "harness")
+    return {
+        "level": "WARNING",
+        "log_path": os.path.join(base, "openjiuwen-logs"),
+        "output": ["file"],
+        "interface_output": ["file"],
+        "performance_output": ["file"],
+    }
 
 
 def _quiet_openjiuwen_logs() -> None:
-    """openjiuwen logs full prompts at INFO to stdout; keep only WARNING+ in files."""
-    from openjiuwen.core.common.logging.log_config import configure_log_config
-    configure_log_config(dict(_QUIET_LOG_CONFIG))
+    """openjiuwen logs full prompts at INFO to stdout; keep only WARNING+ in files.
+
+    Never raises: a logging misconfiguration must not break the run.
+    """
+    try:
+        from openjiuwen.core.common.logging.log_config import configure_log_config
+        configure_log_config(_quiet_log_config())
+    except Exception as exc:
+        logger.warning("could not configure openjiuwen logging: %s", exc)
     logging.getLogger("openjiuwen").setLevel(logging.WARNING)
 
 
