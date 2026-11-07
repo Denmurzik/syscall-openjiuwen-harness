@@ -23,9 +23,7 @@ def _cut(b: bytes | str | None) -> str:
         b = b.decode("utf-8", errors="replace")
     if len(b) <= MAX_OUT:
         return b
-    mark = "
-...[truncated]...
-"
+    mark = "\n...[truncated]...\n"
     return b[:2048] + mark + b[-(MAX_OUT - 2048 - len(mark)):]
 
 
