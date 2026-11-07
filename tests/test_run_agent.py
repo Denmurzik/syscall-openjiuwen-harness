@@ -31,13 +31,35 @@ def _run(argv):
     assert e.value.code == 0
 
 
-def test_resolve_chain(monkeypatch):
-    assert run_agent._resolve_paths([], {})[:2] == (Path("/data/tasks"), "default /data/tasks")
-    assert run_agent._resolve_paths([], {"TASKS": "/t"})[0] == Path("/t")
-    assert run_agent._resolve_paths(["/p"], {"TASKS": "/t"})[0] == Path("/p")
-    assert run_agent._resolve_paths(["--tasks-dir", "/a", "/p"], {"TASKS": "/t"})[0] == Path("/a")
+def test_resolve_chain(tmp_path):
+    dirs = {}
+    for n in "apt":
+        d = tmp_path / n
+        shutil.copytree(FIX, d)
+        dirs[n] = d
+    env = {"TASKS": str(dirs["t"])}
+    assert run_agent._resolve_paths([], env)[0] == dirs["t"]
+    assert run_agent._resolve_paths([str(dirs["p"])], env)[:2] == (dirs["p"], "positional")
+    assert run_agent._resolve_paths(["--tasks-dir", str(dirs["a"]), str(dirs["p"])], env)[0] == dirs["a"]
     assert run_agent._resolve_paths(["--output", "o.json"], {"OUT": "e"})[2] == "o.json"
     assert run_agent._resolve_paths([], {"OUT": "e"})[2] == "e"
+
+
+def test_bad_positional_falls_through(tmp_path):
+    d = _copy(tmp_path)
+    env = {"TASKS": str(d)}
+    assert run_agent._resolve_paths(["--foo", "bar"], env)[:2] == (d, "env TASKS")
+    assert run_agent._resolve_paths(["extra"], env)[0] == d
+    empty = tmp_path / "empty"; empty.mkdir()
+    assert run_agent._resolve_paths(["--tasks-dir", str(empty)], env)[0] == d
+    assert run_agent._resolve_paths([str(d)], {})[1] == "positional"
+
+
+def test_parse_errors_do_not_abort(tmp_path):
+    d = _copy(tmp_path)
+    env = {"TASKS": str(d)}
+    for argv in (["--tasks-dir"], ["-h"], ["--out"], ["--o", "x"]):
+        assert run_agent._resolve_paths(argv, env)[0] == d
 
 
 def test_env_tasks_without_flag(monkeypatch, tmp_path):

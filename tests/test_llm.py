@@ -322,3 +322,13 @@ def test_400_without_structured_is_unavailable_no_charge():
     with pytest.raises(LLMUnavailable):
         run(c)
     assert fake.calls == 1 and c.structured_ok is True and ledger.spent == 0
+
+
+def test_structured_400_both_ways_keeps_flag():
+    async def bad():
+        raise _bad_request()
+    c, fake, ledger = make(bad)
+    with pytest.raises(LLMUnavailable):
+        asyncio.run(c.chat("m", [{"role": "user", "content": "hi"}], 16,
+                           response_format={"type": "json_object"}))
+    assert fake.calls == 2 and c.structured_ok is True

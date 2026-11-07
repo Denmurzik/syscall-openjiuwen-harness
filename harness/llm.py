@@ -160,8 +160,9 @@ class LLMClient:
         m = self._model(model)
         attempt = 0
         extra = dict(extra)
+        stripped = False  # structured params dropped for this call as a trial
         while True:
-            if not self.structured_ok:
+            if not self.structured_ok or stripped:
                 extra.pop("response_format", None)
                 extra.pop("extra_body", None)
             if self.ledger.exhausted:
@@ -177,8 +178,9 @@ class LLMClient:
                 if (status == 400 and self.structured_ok
                         and ("response_format" in extra or "extra_body" in extra)):
                     # proxy rejects structured output: retry once without it, remember
+                    # the flag flips only if the retry succeeds (proves the 400 was about them)
                     logger.warning("HTTP 400 with structured output; retrying without it")
-                    self.structured_ok = False
+                    stripped = True
                     continue
                 connect = status is None and _is_connect_error(exc)
                 if (status == 429 or connect) and attempt < len(RETRY_DELAYS):
@@ -195,6 +197,8 @@ class LLMClient:
                 # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
                 raise LLMUnavailable(msg) from exc
             self._failures = 0
+            if stripped:
+                self.structured_ok = False
             u = getattr(r, "usage_metadata", None)
             if u is None:
                 p = len(str(messages)) // 4

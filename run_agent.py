@@ -34,23 +34,46 @@ def _probe_tasks_dir(tasks_dir: Path) -> None:
             print("TASKS DIR NOT WRITABLE: uid=? owner=? mode=?", file=sys.stderr, flush=True)
 
 
+def _has_tasks(d: Path) -> bool:
+    try:
+        from harness.tasks import _task_dirs
+        return any((t / "task.json").is_file() for t in _task_dirs(d))
+    except Exception:
+        return False
+
+
 def _resolve_paths(argv=None, env=None) -> tuple[Path, str, str | None]:
-    """(tasks_dir, source, out): --tasks-dir > positional > env TASKS > /data/tasks."""
+    """(tasks_dir, source, out).
+
+    Candidates in order: --tasks-dir, positional (only if a dir), env TASKS, /data/tasks.
+    First one holding a task.json wins, else the first existing dir, else the first candidate.
+    """
     env = os.environ if env is None else env
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
     ap.add_argument("--tasks-dir", type=Path)
     ap.add_argument("--out", "--output", dest="out")
     ap.add_argument("tasks", nargs="?", type=Path)
-    args, _ = ap.parse_known_args(argv)
-    if args.tasks_dir:
-        tasks, src = args.tasks_dir, "--tasks-dir"
-    elif args.tasks:
-        tasks, src = args.tasks, "positional"
-    elif env.get("TASKS"):
-        tasks, src = Path(env["TASKS"]), "env TASKS"
-    else:
-        tasks, src = Path("/data/tasks"), "default /data/tasks"
-    return tasks, src, args.out or env.get("OUT") or None
+    try:
+        args, _ = ap.parse_known_args(argv)
+        tasks_dir, positional, out = args.tasks_dir, args.tasks, args.out
+    except (Exception, SystemExit) as e:
+        print(f"argument parsing failed: {e!r}", file=sys.stderr, flush=True)
+        tasks_dir = positional = out = None
+    cands: list[tuple[Path, str]] = []
+    if tasks_dir:
+        cands.append((tasks_dir, "--tasks-dir"))
+    if positional and positional.is_dir():
+        cands.append((positional, "positional"))
+    if env.get("TASKS"):
+        cands.append((Path(env["TASKS"]), "env TASKS"))
+    cands.append((Path("/data/tasks"), "default /data/tasks"))
+    chosen = next((c for c in cands if c[0].is_dir() and _has_tasks(c[0])), None)
+    for c in cands:
+        if c is not chosen and (chosen is None or cands.index(c) < cands.index(chosen)):
+            print(f"tasks dir candidate rejected: {c[0]} ({c[1]})", file=sys.stderr, flush=True)
+    if chosen is None:
+        chosen = next((c for c in cands if c[0].is_dir()), cands[0])
+    return chosen[0], chosen[1], out or env.get("OUT") or None
 
 
 def main(argv=None) -> None:
