@@ -35,3 +35,26 @@ def test_write_answer_falls_back_when_replace_denied(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "replace", lambda *a: (_ for _ in ()).throw(PermissionError()))
     write_answer(t, "7")
     assert (t.dir / "answer.txt").read_text() == "7\n"
+
+
+def test_load_tasks_nested_layout(tmp_path):
+    for sub in ("__MACOSX", ".hidden"):
+        (tmp_path / "outer" / sub / "x").mkdir(parents=True)
+        (tmp_path / "outer" / sub / "x" / "task.json").write_text("{}")
+    for tid in ("a", "b"):
+        d = tmp_path / "outer" / tid
+        d.mkdir(parents=True)
+        (d / "task.json").write_text(
+            f'{{"task_id":"{tid}","task_type":"math","instruction":"x","reward":1}}')
+    (tmp_path / "__MACOSX").mkdir()
+    assert [t.task_id for t in load_tasks(tmp_path)] == ["a", "b"]
+
+
+def test_load_tasks_ignores_macosx_and_dot_dirs_at_top(tmp_path):
+    (tmp_path / "__MACOSX").mkdir()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "__MACOSX" / "task.json").write_text("{}")
+    d = tmp_path / "ok"
+    d.mkdir()
+    (d / "task.json").write_text('{"task_id":"ok","task_type":"math","instruction":"x","reward":1}')
+    assert [t.task_id for t in load_tasks(tmp_path)] == ["ok"]

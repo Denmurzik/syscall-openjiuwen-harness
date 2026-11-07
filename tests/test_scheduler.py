@@ -236,3 +236,84 @@ def test_phase1_does_not_import_openjiuwen(tmp_path):
     r = subprocess.run([sys.executable, "-B", "-c", code], cwd=ROOT, capture_output=True,
                        env={**__import__("os").environ, "HARNESS_LOG_DIR": str(tmp_path / "logs")})
     assert r.returncode == 0, r.stderr
+
+
+def _spec_infeasible(note):
+    async def grp(ttype, template, members, client):
+        return {t.task_id: SolveResult("infeasible", note=note) for t, _ in members}
+    return grp
+
+
+def test_2a_model_infeasible_falls_through_to_2b(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_a", "search", "Frobnicate the alpha quietly?")
+    seen = []
+
+    async def prog(task, client):
+        seen.append(task.task_id)
+        return SolveResult("solved", answer="42")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_group", _spec_infeasible("'X' has no 'Boss'"))
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    summary = scheduler.run(tasks, 100000, object())
+    assert seen == ["search_a"] and summary["solved"] == 1
+    assert (tasks / "search_a" / "answer.txt").read_text().strip() == "42"
+
+
+@pytest.mark.parametrize("note", ["division by zero", "start entity not found: 'Bob'"])
+def test_2a_model_independent_infeasible_is_final(tmp_path, monkeypatch, note):
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_a", "search", "Frobnicate the alpha quietly?")
+
+    async def prog(task, client):
+        raise AssertionError("2b must not run")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_group", _spec_infeasible(note))
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["infeasible"] == 1 and not (tasks / "search_a" / "answer.txt").exists()
+
+
+def test_tasks_dir_probe_reports_unwritable(tmp_path, monkeypatch, capsys):
+    import run_agent
+
+    def boom(*a, **k):
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(run_agent.tempfile, "mkstemp", boom)
+    run_agent._probe_tasks_dir(tmp_path)
+    err = capsys.readouterr().err
+    assert err.startswith("TASKS DIR NOT WRITABLE: uid=") and "owner=" in err and "mode=" in err
+    assert err.count("\n") == 1
+
+
+def test_tasks_dir_probe_silent_when_writable(tmp_path, capsys):
+    import run_agent
+    run_agent._probe_tasks_dir(tmp_path)
+    assert capsys.readouterr().err == "" and list(tmp_path.iterdir()) == []
+
+
+def test_chdir_failure_does_not_disable_llm(tmp_path, monkeypatch, capsys):
+    import run_agent
+    from harness import llm
+    got = {}
+
+    class StubClient:
+        def __init__(self, base, key, ledger):
+            got["client"] = self
+
+    def fake_run(tasks_dir, budget, client):
+        got["run_client"] = client
+        return {}
+
+    monkeypatch.setattr(llm, "LLMClient", StubClient)
+    monkeypatch.setattr(scheduler, "run", fake_run)
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setattr(run_agent.os, "chdir", lambda p: (_ for _ in ()).throw(OSError("denied")))
+    with pytest.raises(SystemExit) as e:
+        run_agent.main(["--tasks-dir", str(tmp_path)])
+    assert e.value.code == 0 and got["run_client"] is got["client"]
+    assert "cannot chdir" in capsys.readouterr().err

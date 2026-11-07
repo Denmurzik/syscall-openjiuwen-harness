@@ -19,11 +19,25 @@ class Task:
     workspace: Path
 
 
+def _task_dirs(root: Path) -> list[Path]:
+    def ok(d: Path) -> bool:
+        return d.is_dir() and d.name != "__MACOSX" and not d.name.startswith(".")
+
+    top = [d for d in sorted(root.iterdir()) if ok(d)]
+    if any((d / "task.json").is_file() for d in top):
+        return top
+    nested = []  # archives may nest as task-dir/task-dir/<tasks>
+    for d in top:
+        try:
+            nested += [c for c in sorted(d.iterdir()) if ok(c) and (c / "task.json").is_file()]
+        except OSError:
+            pass
+    return nested or top
+
+
 def load_tasks(tasks_dir: Path) -> list[Task]:
     tasks = []
-    for d in sorted(Path(tasks_dir).iterdir()):
-        if not d.is_dir():
-            continue
+    for d in _task_dirs(Path(tasks_dir)):
         try:
             data = json.loads((d / "task.json").read_text(encoding="utf-8"))
             tasks.append(Task(

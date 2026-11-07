@@ -18,6 +18,22 @@ def _budget() -> float:
     return DEFAULT_BUDGET
 
 
+def _probe_tasks_dir(tasks_dir: Path) -> None:
+    """Report (one stderr line) if answers cannot be created in the tasks dir; never raises."""
+    try:
+        fd, name = tempfile.mkstemp(prefix=".probe_", dir=tasks_dir)
+        os.close(fd)
+        os.unlink(name)
+    except Exception:
+        try:
+            st = os.stat(tasks_dir)
+            uid = os.getuid() if hasattr(os, "getuid") else "?"
+            print(f"TASKS DIR NOT WRITABLE: uid={uid} owner={st.st_uid} mode={oct(st.st_mode & 0o777)}",
+                  file=sys.stderr, flush=True)
+        except Exception:
+            print("TASKS DIR NOT WRITABLE: uid=? owner=? mode=?", file=sys.stderr, flush=True)
+
+
 def main(argv=None) -> None:
     summary: dict = {}
     try:
@@ -32,12 +48,16 @@ def main(argv=None) -> None:
         except OSError:
             pass
         from harness import config, scheduler
+        _probe_tasks_dir(tasks_dir)
         budget = _budget()
         base, key = os.environ.get("LLM_BASE_URL"), os.environ.get("LLM_API_KEY")
         client = None
         if base and key:
             try:
                 os.chdir(log_dir)  # before openjiuwen is imported
+            except OSError as e:
+                print(f"cannot chdir to {log_dir}: {e!r}", file=sys.stderr)
+            try:
                 from harness.budget import TokenLedger
                 from harness.llm import LLMClient
                 ledger = TokenLedger(budget, budget * config.RESERVE_FRACTION)

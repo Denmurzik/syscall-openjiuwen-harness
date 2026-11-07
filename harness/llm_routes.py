@@ -224,13 +224,21 @@ def apply_patch(src: str, patch: str) -> str | None:
         return None
 
 
+def _test_file(ws: Path) -> str:
+    """Same discovery as phase 1: test_mylib.py, else the first test_*.py."""
+    if (ws / "test_mylib.py").is_file():
+        return "test_mylib.py"
+    cands = sorted(p.name for p in ws.glob("test_*.py"))
+    return cands[0] if cands else "test_mylib.py"
+
+
 def _run_candidate(ws: Path, mylib_text: str) -> TestReport:
     tmp = Path(tempfile.mkdtemp(prefix="llm_fix_"))
     try:
         cand = tmp / "ws"
         shutil.copytree(ws, cand, ignore=shutil.ignore_patterns("__pycache__"))
         (cand / "mylib.py").write_text(mylib_text, encoding="utf-8", newline="\n")
-        return run_in_dir(cand)
+        return run_in_dir(cand, _test_file(ws))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -254,7 +262,8 @@ async def fix_coding(task: Task, client) -> SolveResult:
     mylib_path = ws / "mylib.py"
     try:
         base = mylib_path.read_text(encoding="utf-8")
-        tests = (ws / "test_mylib.py").read_text(encoding="utf-8")
+        test_name = _test_file(ws)
+        tests = (ws / test_name).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
         return SolveResult("unparsed", note=f"cannot read workspace: {e}")
     base_report = await asyncio.to_thread(_run_candidate, ws, base)

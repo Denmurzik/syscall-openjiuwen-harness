@@ -238,3 +238,12 @@ def test_program_prompt_forbids_answer_file():
     import inspect
     from harness import llm_routes
     assert "do not write it to a file" in inspect.getsource(llm_routes.solve_with_program)
+
+
+def test_fix_coding_uses_first_test_file(tmp_path):
+    t = _fixture("coding_0003", tmp_path)
+    ws = t.workspace
+    (ws / "test_mylib.py").rename(ws / "test_other.py")
+    c = FakeClient(["FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE])
+    r = run(fix_coding(t, c))
+    assert r.status == "solved" and "return sum(xs)" in (ws / "mylib.py").read_text()

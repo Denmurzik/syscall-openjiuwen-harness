@@ -171,7 +171,7 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
             return None
 
         if _norm(entity) not in index:
-            return SolveResult("infeasible", note=f"entity not found: {entity!r}")
+            return SolveResult("infeasible", note=f"start entity not found: {entity!r}")
         current = entity
         for key in path:
             nxt = lookup(current, key)

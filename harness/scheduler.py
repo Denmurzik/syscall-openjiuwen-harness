@@ -27,6 +27,17 @@ fix_coding = None
 BudgetExhausted = None
 
 
+# infeasible notes that do not depend on the model's reading of the question
+_MODEL_INDEPENDENT = ("division by zero", "start entity not found")
+
+
+def _final_2a(res: SolveResult) -> bool:
+    """2a settles `solved`, and `infeasible` only for model-independent verdicts; the rest goes to 2b."""
+    if res.status == "solved":
+        return True
+    return res.status == "infeasible" and any(m in (res.note or "") for m in _MODEL_INDEPENDENT)
+
+
 def _log_dir() -> Path:
     return Path(os.environ.get("HARNESS_LOG_DIR") or Path(tempfile.gettempdir()) / "harness")
 
@@ -265,7 +276,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                 el = time.monotonic() - start
                 for task, _ in members:
                     res = results.get(task.task_id)
-                    if res is not None and res.status in ("solved", "infeasible"):
+                    if res is not None and _final_2a(res):
                         settle(2, task, res, el)
             return go
         reward = sum(t.reward for t, _ in members)
