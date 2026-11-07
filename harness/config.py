@@ -5,9 +5,10 @@ import os
 MODEL_FAST = "qwen3.8-27b-noreason"
 MODEL_ALT = "qwen3.6-35b-a3b-noreason"
 MODEL_REASON = "qwen3.8-27b"
+MODEL_ARBITRATE = MODEL_FAST  # re-measured round 2 final: 146/146 hidden-correct, 0 regressions, same as MODEL_ALT
 
 PHASE1_WORKERS = 8
-CODING_TIME_LIMIT = 90
+CODING_TIME_LIMIT = 85
 PHASE1_TIMEOUT = {"coding": 100, "default": 15}
 
 

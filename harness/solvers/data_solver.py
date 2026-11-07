@@ -47,7 +47,7 @@ _METRICS = [
 _ROUND = re.compile(r",?\s+rounded to (\d+) decimal places?(?=\s*\?)", _FLAGS)
 # "What is the total discount given?": a quantity no sales column can provide.
 _ABSENT = re.compile(
-    r"what (?:is|was) the total (discount|tax|shipping|profit|cost|margin|commission|rebate|refund|tip)s?"
+    r"what (?:is|was) the total (discount|tax|shipping|profit|margin|commission|rebate|refund|tip)s?"
     r"(?: given| charged| paid| applied| collected| amount)?\?", _FLAGS)
 _ROUNDABLE = {"sum_revenue", "avg_price", "avg_units"}
 _MAX_DECIMALS = 6
@@ -457,7 +457,8 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
                 return _unparsed("no rows to rank")
             ranked = sorted(groups.values(), key=lambda e: e[1], reverse=True)
             if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
-                return _unparsed("tie for the top value")
+                return SolveResult("unparsed", note="tie for the top value",
+                                   extra={"best_guess": ranked[0][0]})  # first in file order
             return SolveResult("solved", ranked[0][0])
         if metric == "count_orders":
             return SolveResult("solved", str(count))

@@ -86,7 +86,8 @@ def main(argv=None) -> None:
         if out:
             try:
                 from harness.tasks import set_answer_sink
-                set_answer_sink(Path(out) if out.endswith(("/", "\\")) else Path(out).resolve())
+                set_answer_sink(str(Path(out).resolve()) + "/" if out.endswith(("/", "\\"))
+                                else Path(out).resolve())
             except Exception as e:
                 print(f"answers file unavailable: {e!r}", file=sys.stderr)
         log_dir = Path(os.environ.get("HARNESS_LOG_DIR") or Path(tempfile.gettempdir()) / "harness")

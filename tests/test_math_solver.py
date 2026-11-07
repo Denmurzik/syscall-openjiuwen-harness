@@ -223,3 +223,8 @@ def test_mixed_chain_and_zero_split_infeasible():
     assert _run("Then it sells half of the boxes, rounding the number sold down.",
                 "Then the stock is split equally into 0 warehouses and it keeps one share (rounded down).",
                 ).status == "infeasible"
+
+
+def test_nonneg_negative_value_is_best_guess_not_answer():
+    r = execute({"start": 3, "steps": ["x-5", "x*2"], "nonneg": True})
+    assert r.status == "unparsed" and r.extra == {"best_guess": "-4"}

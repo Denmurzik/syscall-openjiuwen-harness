@@ -13,7 +13,7 @@ import textwrap
 from pathlib import Path
 
 from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
-from harness.config import MODEL_FAST
+from harness.config import MODEL_ARBITRATE
 from harness.llm_routes import _run_candidate, write_mylib
 from harness.result import SolveResult
 from harness.solvers.coding_solver import _segment, _splice, _units
@@ -91,12 +91,12 @@ async def _ask(client, items: list[dict], asserts: list[str]) -> list[int] | Non
                 {"role": "user", "content": _prompt(items, asserts)}]
     structured = getattr(client, "structured_ok", True)
     if structured:
-        r = await client.chat(MODEL_FAST, messages, MAX_TOKENS,
+        r = await client.chat(MODEL_ARBITRATE, messages, MAX_TOKENS,
                               extra_body={"guided_regex": _regex(items)})
         picks = parse_choice(r.text, items)
         if picks is not None or not getattr(client, "structured_ok", True):
             return picks
-    r = await client.chat(MODEL_FAST, messages, MAX_TOKENS)
+    r = await client.chat(MODEL_ARBITRATE, messages, MAX_TOKENS)
     return parse_choice(r.text, items)
 
 

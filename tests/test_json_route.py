@@ -218,6 +218,41 @@ def test_data_top_metric_via_2a():
     assert out["d1"].status == "solved" and out["d1"].answer == "widget", out
 
 
+def _data_task(check="exact_int"):
+    ws = FIX / "data_analysis_0002" / "workspace"
+    ins = json.loads((FIX / "data_analysis_0002" / "task.json").read_text(encoding="utf-8"))["instruction"]
+    return Task("d1", "data_analysis", ins, 1.0, check, ws.parent, ws), ins
+
+
+def test_data_max_units_via_2a():
+    t, ins = _data_task()
+    spec = {"file": "sales.csv", "metric": "max_units", "product": None, "region": None,
+            "month_from": None, "month_to": None}
+    out = asyncio.run(solve_group("data_analysis", templatize(ins)[0], [(t, {})], FakeClient(json.dumps(spec))))
+    assert out["d1"].status == "solved" and out["d1"].answer.isdigit(), out
+
+
+def test_data_decimals_via_2a():
+    t, ins = _data_task("exact_str")
+    spec = {"file": "sales.csv", "metric": "avg_price", "product": None, "region": None,
+            "month_from": None, "month_to": None, "decimals": 3}
+    out = asyncio.run(solve_group("data_analysis", templatize(ins)[0], [(t, {})], FakeClient(json.dumps(spec))))
+    assert out["d1"].status == "solved", out
+    assert len(out["d1"].answer.split(".")[1]) == 3, out["d1"].answer
+
+
+def test_data_schema_lists_new_metrics():
+    from harness.json_route import _system_prompt
+    p = _system_prompt("data_analysis")
+    assert "max_units" in p and "min_units" in p and "decimals" in p
+    assert "six keys" not in p
+
+
+def test_arbitrate_model_comes_from_config():
+    from harness import arbitrate, config
+    assert arbitrate.MODEL_ARBITRATE == config.MODEL_ARBITRATE
+
+
 def test_model_names_come_from_config():
     from harness import config, json_route, llm_routes
     assert json_route.MODEL == config.MODEL_FAST

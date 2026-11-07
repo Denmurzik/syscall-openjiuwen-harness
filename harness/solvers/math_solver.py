@@ -184,6 +184,7 @@ def execute_steps(spec: dict) -> SolveResult:
         steps = spec["steps"]
         if not _is_int(x) or abs(x) > _LIMIT or not isinstance(steps, list):
             return _unparsed("bad spec")
+        went_negative = False
         for step in steps:
             if _is_int(step):  # a whole-placeholder step ("{N2}") arrives as an int: set x to it
                 x = step
@@ -198,7 +199,9 @@ def execute_steps(spec: dict) -> SolveResult:
             if abs(x) > _LIMIT:
                 return _unparsed("value too large")
             if spec.get("nonneg") and x < 0:
-                return _unparsed("stock below zero")
+                went_negative = True
+        if went_negative:  # kept only as a last-resort guess (the scheduler writes it if nothing better appears)
+            return SolveResult("unparsed", note="stock below zero", extra={"best_guess": str(x)})
         return SolveResult("solved", str(x))
     except _Infeasible as e:
         return SolveResult("infeasible", note=str(e))

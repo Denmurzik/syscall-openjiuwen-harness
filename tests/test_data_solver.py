@@ -451,3 +451,13 @@ def test_extreme_of_unknown_product_is_infeasible_but_empty_month_is_not_declare
     ws.mkdir()
     res = _solve_q(ws, "What is the largest number of units in a single order in month 11?")
     assert res.status == "unparsed"
+
+
+def test_top_tie_carries_first_in_file_order_as_best_guess(tmp_path):
+    ws = _ws(tmp_path, "1,west,widget,1,5,2\n2,east,gizmo,1,5,2\n")
+    r = solve(_task(_q("Which product sold the most units overall?"), ws, "exact_str"))
+    assert r.status == "unparsed" and r.extra == {"best_guess": "widget"}
+
+
+def test_total_cost_is_not_declared_absent(tmp_path):
+    assert _solve_q(tmp_path, "What is the total cost?").status != "infeasible"

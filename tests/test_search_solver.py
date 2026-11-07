@@ -362,3 +362,19 @@ def test_bench_grammar_missing_entity_is_infeasible(tmp_path):
 ])
 def test_qualified_entity_is_unparsed_not_infeasible(q):
     assert solve(_task(_q(q))).status != "infeasible"
+
+
+def test_possessive_start_entity_is_unparsed_not_infeasible():
+    r = execute({"entity": "Jonas Dubois's Mentor", "path": [], "field": "Born"}, WS1)
+    assert r.status == "unparsed", r
+
+
+def test_disagreeing_readings_carry_first_reading_as_best_guess(tmp_path):
+    ws = _kb(tmp_path, {
+        "a.md": "# Ann\nEmployer: Acme\nMentor: Bob\n",
+        "b.md": "# Bob\nEmployer: Zed\nMentor: Cy\n",
+        "c.md": "# Acme\nEmployer: Q\nMentor: Dan\n",
+        "d.md": "# Ann's employer\nMentor: Eve\n",
+    })
+    r = solve(_task(_q("Who is the mentor of Ann's employer?"), ws))
+    assert r.status == "unparsed" and r.extra["best_guess"] in {"Eve", "Dan"}

@@ -63,6 +63,8 @@ def _clean_name(entity: str) -> bool:
     tokens = entity.split()
     if not tokens or len(tokens) > 5:
         return False
+    if any(t.endswith(("'s", "’s")) or "'s " in t for t in tokens):
+        return False  # a possessive: the entity text still holds a chain fragment
     return all(t.casefold() not in _QUALIFIERS and _NAME_TOKEN.match(t) for t in tokens)
 
 
@@ -331,7 +333,9 @@ def _run(specs: list[dict], workspace: Path) -> SolveResult:
     if len(answers) == 1:
         return SolveResult("solved", answers.pop())
     if len(answers) > 1:
-        return _unparsed(f"ambiguous question, readings disagree: {sorted(answers)!r}")
+        first = next(r.answer for r in results if r.status == "solved")
+        return SolveResult("unparsed", note=f"ambiguous question, readings disagree: {sorted(answers)!r}",
+                           extra={"best_guess": first})
     if any(r.status == "unparsed" for r in results):
         return _unparsed("bad spec")
     return SolveResult("infeasible", note="no reading has an answer")

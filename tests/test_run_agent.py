@@ -95,3 +95,13 @@ def test_out_failure_does_not_break_answer(monkeypatch, tmp_path):
     blocker.write_text("x")
     _run(["--tasks-dir", str(d), "--out", str(blocker / "sub" / "a.json")])
     assert any(d.glob("*/answer.txt"))
+
+
+def test_trailing_slash_out_is_a_resolved_directory(tmp_path, monkeypatch):
+    d = _copy(tmp_path)
+    seen = []
+    monkeypatch.setattr(tasks_mod, "set_answer_sink", lambda p: seen.append(p))
+    monkeypatch.chdir(tmp_path)
+    _run(["--tasks-dir", str(d), "--out", "outdir/"])
+    p = str(seen[0]).replace("\\", "/")
+    assert p.endswith("/outdir/") and Path(p).is_absolute()
