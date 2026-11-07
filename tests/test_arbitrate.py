@@ -66,15 +66,57 @@ def test_picks_current_choice_leaves_file_untouched(tmp_path):
     assert (task.workspace / "mylib.py").read_bytes() == before
 
 
-def test_400_falls_back_without_structured_output(tmp_path):
+def test_garbage_under_regex_retries_without_it(tmp_path):
     task, extra = _solved(tmp_path)
     want = _opt_with(extra, "x % 2 == 0")
-    c = Fake([LLMUnavailable("BadRequestError: Error code: 400 - guided_regex"), f"Answer: {want}"])
+    c = Fake(["zzz", f"Answer: {want}"])
     res = run(arbitrate(task, extra, c))
     assert "extra_body" in c.calls[0]["extra"] and c.calls[1]["extra"] == {}
     assert "x % 2 == 0" in (task.workspace / "mylib.py").read_text(encoding="utf-8")
-    assert getattr(c, "structured_output_refused", False)
     assert res.status == "solved"
+
+
+def test_client_without_structured_support_skips_regex(tmp_path):
+    task, extra = _solved(tmp_path)
+    c = Fake([str(extra["ambiguous"][0]["chosen"] + 1)])
+    c.structured_ok = False
+    run(arbitrate(task, extra, c))
+    assert len(c.calls) == 1 and c.calls[0]["extra"] == {}
+
+
+def test_prompt_shows_changed_lines_and_probe_table(tmp_path):
+    task, extra = _solved(tmp_path)
+    c = Fake(["1"])
+    run(arbitrate(task, extra, c))
+    text = c.calls[0]["messages"][1]["content"]
+    assert "count_even([1, 2, 4, 6, 7]) ->" in text and " | " in text
+    assert "Option 1: line" in text and "`" in text
+    assert "Option 1:\n" not in text   # no full sources per option
+
+
+MULTI_LIB = "def a(x):\n    return x + 1\n\n\ndef b(x):\n    return x * 2\n"
+MULTI_TESTS = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
+               "    def test_ab(self):\n        self.assertEqual(mylib.b(mylib.a(1)), 4)\n")
+
+
+def test_multi_function_combination_failing_falls_back_to_single_change(tmp_path):
+    d = tmp_path / "m"
+    (d / "workspace").mkdir(parents=True)
+    (d / "workspace" / "mylib.py").write_text(MULTI_LIB, encoding="utf-8")
+    (d / "workspace" / "test_mylib.py").write_text(MULTI_TESTS, encoding="utf-8")
+    task = Task("m", "coding", "fix", 2.0, "unittest", d, d / "workspace")
+    # both changed: b(a(1)) = (1*2)+2 = 4 would be green, so make the pair red on purpose:
+    # a -> x * 3 gives 3, b -> x + 2 gives 5 (red together); b alone -> x + 2 on a(1)=2 gives 4 (green)
+    extra = {"ambiguous": [
+        {"func": "a", "candidates": ["def a(x):\n    return x + 1", "def a(x):\n    return x * 3"],
+         "chosen": 0},
+        {"func": "b", "candidates": ["def b(x):\n    return x * 2", "def b(x):\n    return x + 2"],
+         "chosen": 0}]}
+    res = run(arbitrate(task, extra, Fake(["2,2"])))
+    text = (task.workspace / "mylib.py").read_text(encoding="utf-8")
+    assert res.status == "solved"
+    assert "return x + 1" in text and "return x + 2" in text   # only b changed
+    assert run_tests(task.workspace).ok
 
 
 def test_garbage_then_garbage_changes_nothing(tmp_path):

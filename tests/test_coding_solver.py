@@ -250,3 +250,13 @@ def test_partial_repair_is_tentative_and_written(tmp_path):
     text = (t.workspace / "mylib.py").read_text(encoding="utf-8")
     assert "x + 1" in text and "x * 3" in text  # a fixed, b untouched
     assert (t.workspace / "test_mylib.py").read_text(encoding="utf-8") == tests
+
+
+def test_partial_repair_leaves_tests_byte_identical(tmp_path):
+    t = _fixture_task("coding_0003", tmp_path)
+    tp = t.workspace / "test_mylib.py"
+    tp.write_text(tp.read_text(encoding="utf-8").replace("m.total([1, 2, 3]), 6", "m.total([1, 2, 3]), 1000"),
+                  encoding="utf-8")
+    before = tp.read_bytes()
+    res = solve(t, time_limit=60)
+    assert res.tentative and tp.read_bytes() == before

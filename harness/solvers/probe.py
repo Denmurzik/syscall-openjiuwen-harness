@@ -3,6 +3,7 @@ import ast
 import copy
 import json
 import random
+import re
 import tempfile
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from harness.proc import run_python
 
 _MARK = "@@PROBE@@"
 _MAX_REPR = 200
+_ADDR = re.compile(r" at 0x[0-9a-fA-F]+")
 
 # Reads {"src", "func", "inputs"} (inputs as repr text) from stdin; prints one marked JSON
 # line per input, so partial results survive a hang or a hard kill.
@@ -58,12 +60,13 @@ def behaviour(mylib_src: str, func: str, inputs: list[tuple], timeout: float = 5
         return []
     req = json.dumps({"src": mylib_src, "func": func, "inputs": repr(list(inputs))})
     with tempfile.TemporaryDirectory(prefix="probe_") as d:
-        res = run_python(["-c", _CHILD], cwd=Path(d), timeout=timeout, stdin=req)
+        res = run_python(["-c", _CHILD], cwd=Path(d), timeout=timeout, stdin=req,
+                         env={"PYTHONHASHSEED": "0"})
     out: list[str] = []
     for line in res.stdout.splitlines():
         if line.startswith(_MARK):
             try:
-                out.append(str(json.loads(line[len(_MARK):])))
+                out.append(_ADDR.sub("", str(json.loads(line[len(_MARK):]))))
             except ValueError:
                 break
     fill = "<exc:Timeout>" if res.timed_out else "<exc:Crash>"

@@ -437,3 +437,37 @@ def test_final_pass_writes_best_guess_only_without_answer(tmp_path, monkeypatch)
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     scheduler.run(tasks, 100000, object())
     assert (d1 / "answer.txt").read_text() == "REAL\n"
+
+
+def infeasible_guess_target(queue, task, solver_name=None):
+    queue.put((task.task_id, SolveResult("unparsed", note="g", extra={"best_guess": "42"})))
+
+
+def test_arbitration_llm_unavailable_keeps_tentative_answer(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _coding(tasks)
+
+    async def fake_arb(task, extra, client):
+        return SolveResult("unparsed", note="llm unavailable: HTTP 503")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_amb_target)
+    monkeypatch.setattr(scheduler, "arbitrate", fake_arb)
+    counts = scheduler.run(tasks, 100000, object())
+    assert (d / "answer.txt").read_text() == "DONE\n" and counts["solved"] == 1
+
+
+def test_phase2_infeasible_withdraws_best_guess(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "s1", "search", "q one?")
+
+    async def grp(ttype, template, members, client):
+        return {t.task_id: SolveResult("unparsed") for t, _ in members}
+
+    async def prog(task, client):
+        return SolveResult("infeasible", note="program printed IMPOSSIBLE")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    counts = scheduler.run(tasks, 100000, object())
+    assert not (d / "answer.txt").exists() and counts["infeasible"] == 1

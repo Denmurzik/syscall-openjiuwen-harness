@@ -233,6 +233,8 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float = config.DEADL
                     tentative.pop(task.task_id, None)
             elif prior_tentative and phase >= 2:
                 st = "solved"   # a failed later attempt never takes back a written answer
+            elif res.status == "infeasible" and phase >= 2:
+                guesses.pop(task.task_id, None)   # a phase-2 verdict withdraws the stored guess
             elif (res.extra or {}).get("best_guess") is not None:
                 guesses[task.task_id] = res
             status[task.task_id] = st

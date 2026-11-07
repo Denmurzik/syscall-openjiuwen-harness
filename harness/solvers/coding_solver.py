@@ -354,6 +354,13 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
     orig_units = {u.qualname: u for u in _units(original)}
     found: list[dict] = []
     asserts: list[str] = []
+
+    def probe_timeout() -> float:
+        left = ctx.deadline - time.monotonic()
+        if left < 10:
+            raise _OutOfTime()
+        return min(5.0, left - 2)
+
     for u in _units(cur):
         old = orig_units.get(u.qualname)
         if old is None or "." in u.qualname or _segment(cur, u) == _segment(original, old):
@@ -364,24 +371,28 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
         args, stmt = call
         inputs = inputs_from_call(args)
         chosen_seg = _segment(cur, u)
-        chosen_key = tuple(behaviour(cur, u.qualname, inputs))
         clusters: dict[tuple, str] = {}
-        seen = {_norm(chosen_seg)}
-        tried = 0
-        for m in tagged_mutants(_segment(original, old)):
-            if tried >= AMBIG_MUTANT_CAP:
-                break
-            seg = _norm(m.source)
-            if seg in seen:
-                continue
-            seen.add(seg)
-            tried += 1
-            cand = _splice(cur, u, m.source)
-            if not ctx.candidate(cand, failing).ok or not ctx.run(cand, None, ctx.verify_timeout).ok:
-                continue
-            key = tuple(behaviour(cand, u.qualname, inputs))
-            if key not in clusters:
-                clusters[key] = textwrap.dedent(m.source).strip("\n")
+        chosen_seg = _segment(cur, u)
+        try:
+            chosen_key = tuple(behaviour(cur, u.qualname, inputs, probe_timeout()))
+            seen = {_norm(chosen_seg)}
+            tried = 0
+            for m in tagged_mutants(_segment(original, old)):
+                if tried >= AMBIG_MUTANT_CAP:
+                    break
+                seg = _norm(m.source)
+                if seg in seen:
+                    continue
+                seen.add(seg)
+                tried += 1
+                cand = _splice(cur, u, m.source)
+                if not ctx.candidate(cand, failing).ok or not ctx.run(cand, None, ctx.verify_timeout).ok:
+                    continue
+                key = tuple(behaviour(cand, u.qualname, inputs, probe_timeout()))
+                if key not in clusters:
+                    clusters[key] = textwrap.dedent(m.source).strip("\n")
+        except _OutOfTime:
+            break   # keep what earlier functions already yielded
         clusters[chosen_key] = textwrap.dedent(chosen_seg).strip("\n")
         if len(clusters) < 2:
             continue
@@ -393,7 +404,9 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
         found.append({"func": u.qualname,
                       "buggy": textwrap.dedent(_segment(original, old)).strip("\n"),
                       "candidates": [s for _k, s in reps],
-                      "chosen": [k for k, _s in reps].index(chosen_key)})
+                      "chosen": [k for k, _s in reps].index(chosen_key),
+                      "calls": [f"{u.qualname}({', '.join(map(repr, a))})" for a in inputs],
+                      "outputs": [list(k) for k, _s in reps]})
         asserts.append(stmt)
     if not found:
         return None

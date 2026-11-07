@@ -60,8 +60,11 @@ def make_limits(timeout: float):
     return limits
 
 
-def run_python(args: list[str], cwd: Path, timeout: float, stdin: str | None = None) -> ProcResult:
+def run_python(args: list[str], cwd: Path, timeout: float, stdin: str | None = None,
+               env: dict | None = None) -> ProcResult:
     kwargs: dict = {}
+    if env is not None:
+        kwargs["env"] = {**os.environ, **env}
     if os.name == "posix":
         import resource
 

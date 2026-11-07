@@ -4,9 +4,12 @@ One call per task, all ambiguous functions in one prompt, the answer is option n
 The deterministic choice is already on disk; it is replaced only after the chosen variant
 passes the full visible test run (tests are never touched).
 """
+import ast
 import asyncio
+import difflib
 import re
 import shutil
+import textwrap
 from pathlib import Path
 
 from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
@@ -21,12 +24,44 @@ SYSTEM = ("Pick, for each function, the option that implements what the function
           "Reply with the option numbers only, comma-separated, in the order of the functions.")
 
 
+def _unparse(src: str) -> str:
+    """Same formatting on both sides, so only real edits show up in the diff."""
+    try:
+        return ast.unparse(ast.parse(textwrap.dedent(src)))
+    except SyntaxError:
+        return src
+
+
+def _changes(buggy: str, cand: str) -> str:
+    """Changed lines of a candidate against the buggy function, one short line per edit."""
+    old, new = _unparse(buggy).splitlines(), _unparse(cand).splitlines()
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        was = " / ".join(x.strip() for x in old[i1:i2]) or "(nothing)"
+        now = " / ".join(x.strip() for x in new[j1:j2]) or "(removed)"
+        out.append(f"line {i1 + 1}: `{was}` -> `{now}`")
+    return "; ".join(out) or "(same as the buggy version)"
+
+
+def _short(v: str, n: int = 24) -> str:
+    return v if len(v) <= n else v[:n - 1] + "…"
+
+
 def _prompt(items: list[dict], asserts: list[str]) -> str:
     parts = []
     for it in items:
-        opts = "\n".join(f"Option {i + 1}:\n{c.strip()}" for i, c in enumerate(it["candidates"]))
-        parts.append(f"Function `{it['func']}`, buggy version:\n{it.get('buggy', '').strip()}\n\n"
-                     f"Candidate fixes (all pass the visible tests):\n{opts}")
+        opts = "\n".join(f"Option {i + 1}: {_changes(it.get('buggy', ''), c)}"
+                         for i, c in enumerate(it["candidates"]))
+        block = (f"Function `{it['func']}`, buggy version:\n{it.get('buggy', '').strip()}\n\n"
+                 f"Candidate fixes (all pass the visible tests), as edits of the buggy version:\n{opts}")
+        calls, outs = it.get("calls") or [], it.get("outputs") or []
+        if calls and outs:
+            rows = [f"{c} -> " + " | ".join(_short(o[k]) if k < len(o) else "?" for o in outs)
+                    for k, c in enumerate(calls[:5])]
+            block += f"\n\nResults of options 1..{len(outs)} on sample calls:\n" + "\n".join(rows)
+        parts.append(block)
     tests = "\n".join(a for a in asserts if a)
     if tests:
         parts.append(f"Visible tests:\n{tests}")
@@ -49,22 +84,17 @@ def parse_choice(text: str, items: list[dict]) -> list[int] | None:
 
 
 async def _ask(client, items: list[dict], asserts: list[str]) -> list[int] | None:
+    """Structured output and its 400 fallback live in LLMClient; here only a garbage reply
+    under the regex gets one more try without it."""
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": _prompt(items, asserts)}]
-    if not getattr(client, "structured_output_refused", False):
-        try:
-            r = await client.chat(MODEL_FAST, messages, MAX_TOKENS,
-                                  extra_body={"guided_regex": _regex(items)})
-            picks = parse_choice(r.text, items)
-            if picks is not None:
-                return picks   # garbage under guided_regex: ask once more without it
-        except LLMUnavailable as e:
-            if "400" not in str(e):
-                raise
-            try:
-                client.structured_output_refused = True
-            except Exception:
-                pass
+    structured = getattr(client, "structured_ok", True)
+    if structured:
+        r = await client.chat(MODEL_FAST, messages, MAX_TOKENS,
+                              extra_body={"guided_regex": _regex(items)})
+        picks = parse_choice(r.text, items)
+        if picks is not None or not getattr(client, "structured_ok", True):
+            return picks
     r = await client.chat(MODEL_FAST, messages, MAX_TOKENS)
     return parse_choice(r.text, items)
 
