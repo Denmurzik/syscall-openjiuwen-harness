@@ -356,7 +356,7 @@ def test_bench_smoke(tmp_path):
     r = bench.bench(tmp_path / "b", 40, 1, "mixed", workers=4)
     o = r["summary"]["overall"]
     assert o["total"] == 40
-    assert o["correct"] + o["wrong"] + o["unparsed"] + o["infeasible_ok"] == 40
+    assert o["correct"] + o["wrong"] + o["unparsed"] + o["infeasible_ok"] + o["infeasible_answered"] == 40
     j = json.loads((tmp_path / "b" / "bench.json").read_text(encoding="utf-8"))
     assert {"summary", "failure_groups", "failures", "meta"} <= set(j)
     assert set(j["summary"]["by_type"]) == {"math", "search", "data_analysis", "coding"}
@@ -370,3 +370,24 @@ def test_bench_smoke(tmp_path):
     # easy-only bench: the generator's own easy templates are solved by phase 1
     r = bench.bench(tmp_path / "e", 24, 1, "easy", workers=4, novel=0.0)
     assert r["summary"]["overall"]["accuracy_feasible"] >= 0.9
+
+
+@pytest.mark.parametrize("diff,seed", [("medium", 77), ("hard", 77), ("hard", 5), ("medium", 6), ("mixed", 8)])
+def test_every_feasible_coding_task_is_really_buggy(tmp_path, diff, seed):
+    gen_tasks.main(["--out", str(tmp_path / "s"), "--n", "120", "--seed", str(seed), "--difficulty", diff,
+                    "--infeasible", "0.1"])
+    n = 0
+    for d, meta in _tasks(tmp_path / "s"):
+        if meta["task_type"] != "coding" or meta["expected"] is None:
+            continue
+        hid = tmp_path / "s" / "hidden" / meta["task_id"] / "test_hidden.py"
+        w = tmp_path / "w" / meta["task_id"]
+        w.mkdir(parents=True)
+        (w / "test_hidden.py").write_text(hid.read_text(encoding="utf-8"), encoding="utf-8")
+        (w / "mylib.py").write_text((d / "workspace" / "mylib.py").read_text(encoding="utf-8"), encoding="utf-8")
+        assert not _run(w, "test_hidden.py"), meta["task_id"]
+        (w / "test_mylib.py").write_text((d / "workspace" / "test_mylib.py").read_text(encoding="utf-8"),
+                                         encoding="utf-8")
+        assert not _run(w, "test_mylib.py"), meta["task_id"]
+        n += 1
+    assert n >= 20

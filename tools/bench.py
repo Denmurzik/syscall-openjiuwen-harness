@@ -74,9 +74,10 @@ def score(set_dir: Path, results: dict) -> dict:
             outcome = "unparsed"
         elif status == "infeasible":
             outcome = "infeasible_ok" if not feasible else "wrong"
+        elif not feasible:  # an answer on an infeasible task: unscored, neither right nor wrong
+            outcome = "infeasible_answered"
         else:  # solved
-            ok = evaluate.check(tdir, set_dir / "hidden" / tid)
-            outcome = "correct" if (feasible and ok) else "wrong"
+            outcome = "correct" if evaluate.check(tdir, set_dir / "hidden" / tid) else "wrong"
         rows.append({"task_id": tid, "type": meta["task_type"], "difficulty": diffs.get(tid, "easy"),
                      "feasible": feasible, "reward": meta["reward"], "status": status, "outcome": outcome,
                      "expected": meta["expected"], "got": answer, "note": note, "elapsed": round(elapsed, 3),
@@ -91,7 +92,8 @@ def summarize(rows: list) -> dict:
         c = Counter(r["outcome"] for r in sub)
         return {
             "total": len(sub), "feasible": len(feas), "infeasible": len(inf),
-            "correct": c["correct"], "infeasible_ok": c["infeasible_ok"], "wrong": c["wrong"],
+            "correct": c["correct"], "infeasible_ok": c["infeasible_ok"],
+            "infeasible_answered": c["infeasible_answered"], "wrong": c["wrong"],
             "unparsed": c["unparsed"],
             "accuracy_feasible": round(sum(r["outcome"] == "correct" for r in feas) / len(feas), 4) if feas else None,
             "accuracy_infeasible": round(sum(r["outcome"] == "infeasible_ok" for r in inf) / len(inf), 4) if inf else None,
@@ -145,11 +147,11 @@ def write_reports(out: Path, meta: dict, total_s: float, summary: dict, groups: 
         return "n/a" if x is None else f"{100 * x:.1f}%"
 
     def table(d, label):
-        lines = [f"| {label} | total | feasible | correct | wrong | unparsed | infeasible ok | acc feasible | acc infeasible | acc all |",
-                 "|---|---|---|---|---|---|---|---|---|---|"]
+        lines = [f"| {label} | total | feasible | correct | wrong | unparsed | infeasible ok | infeasible answered | acc feasible | acc infeasible | acc all |",
+                 "|---|---|---|---|---|---|---|---|---|---|---|"]
         for k, a in d.items():
             lines.append(f"| {k} | {a['total']} | {a['feasible']} | {a['correct']} | {a['wrong']} | {a['unparsed']} | "
-                         f"{a['infeasible_ok']}/{a['infeasible']} | {pct(a['accuracy_feasible'])} | "
+                         f"{a['infeasible_ok']}/{a['infeasible']} | {a['infeasible_answered']} | {pct(a['accuracy_feasible'])} | "
                          f"{pct(a['accuracy_infeasible'])} | {pct(a['accuracy_all'])} |")
         return lines
 
@@ -158,7 +160,7 @@ def write_reports(out: Path, meta: dict, total_s: float, summary: dict, groups: 
           f"n={meta['n']} seed={meta['seed']} difficulty={meta['difficulty']} workers={meta['workers']}; "
           f"total {total_s:.1f}s", "",
           f"Overall: feasible accuracy {pct(o['accuracy_feasible'])} ({o['correct']}/{o['feasible']}), "
-          f"infeasible recognised {o['infeasible_ok']}/{o['infeasible']}, wrong {o['wrong']}, unparsed {o['unparsed']}.", "",
+          f"infeasible recognised {o['infeasible_ok']}/{o['infeasible']}, wrong {o['wrong']}, infeasible-but-answered {o['infeasible_answered']} (unscored), unparsed {o['unparsed']}.", "",
           "## By type", *table(summary["by_type"], "type"), "",
           "## By difficulty", *table(summary["by_difficulty"], "difficulty"), "",
           "## By type and difficulty", *table(summary["by_type_difficulty"], "type/difficulty"), "",

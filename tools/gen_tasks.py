@@ -361,6 +361,8 @@ def gen_coding(rng, novel, infeasible, ws):
 
 
 # ================================================================ v2: medium / hard generators
+# Conventions: "sells half (rounded down)" = the NUMBER SOLD is floor(s/2), so the remaining stock is
+# s - s//2 (the odd box stays). Percent growth/loss: the changed amount is floor(s*p/100).
 # Every v2 generator draws only from the per-task `rng` it is given, so a task never depends on
 # its neighbours and a set of any size is generated with the same per-task content for a seed.
 
@@ -385,8 +387,8 @@ _M_PHRASES = {
     "ruined": ("A leak ruins {n} boxes, which are thrown away.", ["Water damage destroys {n} boxes."]),
     "moved": ("Then one quarter of the stock (rounded down) is moved to another site.",
               ["Then a quarter of the stock, rounded down, is transferred to another site."]),
-    "sell_half": ("Then half of the stock (rounded down) is sold.",
-                  ["It then sells half of what it has, rounded down."]),
+    "sell_half": ("Then it sells half of the boxes, rounding the number sold down.",
+                  ["It then sells half of the stock, with the number of boxes sold rounded down."]),
     "add_pct": ("Then the stock grows by {p} percent (rounded down).",
                 ["A seasonal restock adds {p} percent of the current stock, rounded down."]),
     "lose_pct": ("Then {p} percent of the stock (rounded down) spoils.",
@@ -761,28 +763,29 @@ def _killing_mutant2(rng, name):
                 same = False
             if not same:
                 killed.append(i)
-        if len(killed) >= 2:
+        if len(killed) >= 2:  # visible case + at least one hidden case must catch the bug
             return c, killed
-        if killed and fallback is None:
-            fallback = (c, killed)
-    return fallback
+    return None
 
 
 def gen_coding_v2(rng, diff, novel, infeasible, ws):
     hard = diff == "hard"
     names = rng.sample(sorted(LIB2), rng.randint(10, 22) if hard else rng.randint(6, 12))
     n_bugs = rng.randint(1, 3) if hard else rng.randint(1, 2)
-    buggy = rng.sample(names, min(len(names), n_bugs + 2))
+    buggy = rng.sample(names, len(names))  # try functions in random order until n_bugs are placed
+    bug_set = set()
     sources, visible_idx, nb = {}, {}, 0
-    for n in names:
-        m = None
-        if n in buggy and nb < n_bugs:
-            m = _killing_mutant2(rng, n)
+    for n in buggy:
+        if nb >= n_bugs:
+            break
+        m = _killing_mutant2(rng, n)
         if m:
+            bug_set.add(n)
             sources[n] = m[0]
             visible_idx[n] = rng.choice(m[1])
             nb += 1
-        else:
+    for n in names:
+        if n not in bug_set:
             sources[n] = LIB2[n]["src"]
             visible_idx[n] = rng.randrange(len(LIB2[n]["cases"]))
     helpers = []
