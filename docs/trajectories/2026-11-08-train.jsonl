@@ -1,0 +1,342 @@
+{"phase": 1, "task_id": "coding_0023", "status": "solved", "cost": 0.0, "elapsed": 0.63, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0003", "status": "solved", "cost": 0.0, "elapsed": 0.732, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0035", "status": "solved", "cost": 0.0, "elapsed": 0.743, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0031", "status": "solved", "cost": 0.0, "elapsed": 1.452, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0039", "status": "solved", "cost": 0.0, "elapsed": 1.12, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0051", "status": "solved", "cost": 0.0, "elapsed": 0.995, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0043", "status": "solved", "cost": 0.0, "elapsed": 1.852, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0059", "status": "solved", "cost": 0.0, "elapsed": 0.67, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0007", "status": "unparsed", "cost": 0.0, "elapsed": 4.313, "note": "no repair found for ['test_sort_desc']", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0047", "status": "solved", "cost": 0.0, "elapsed": 3.352, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0063", "status": "solved", "cost": 0.0, "elapsed": 1.718, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0071", "status": "solved", "cost": 0.0, "elapsed": 0.97, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0015", "status": "solved", "cost": 0.0, "elapsed": 6.75, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0079", "status": "solved", "cost": 0.0, "elapsed": 1.345, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0067", "status": "solved", "cost": 0.0, "elapsed": 5.487, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0091", "status": "solved", "cost": 0.0, "elapsed": 0.609, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0075", "status": "solved", "cost": 0.0, "elapsed": 4.866, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0095", "status": "solved", "cost": 0.0, "elapsed": 0.943, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0099", "status": "solved", "cost": 0.0, "elapsed": 0.886, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0002", "status": "solved", "cost": 0.0, "elapsed": 0.224, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0006", "status": "solved", "cost": 0.0, "elapsed": 0.179, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0010", "status": "solved", "cost": 0.0, "elapsed": 0.206, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0014", "status": "solved", "cost": 0.0, "elapsed": 0.219, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0018", "status": "unparsed", "cost": 0.0, "elapsed": 0.176, "note": "unrecognized question: \"What was the total number of 'gizmo' units sold between ", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0022", "status": "solved", "cost": 0.0, "elapsed": 0.188, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0026", "status": "solved", "cost": 0.0, "elapsed": 0.2, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0030", "status": "solved", "cost": 0.0, "elapsed": 0.195, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0019", "status": "unparsed", "cost": 0.0, "elapsed": 12.574, "note": "no repair found for ['test_second_largest']", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0034", "status": "solved", "cost": 0.0, "elapsed": 0.171, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0087", "status": "solved", "cost": 0.0, "elapsed": 5.408, "note": "repaired by mutation", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0038", "status": "solved", "cost": 0.0, "elapsed": 0.189, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0042", "status": "solved", "cost": 0.0, "elapsed": 0.201, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0046", "status": "solved", "cost": 0.0, "elapsed": 0.181, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0055", "status": "unparsed", "cost": 0.0, "elapsed": 9.883, "note": "no repair found for ['test_average']", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0050", "status": "solved", "cost": 0.0, "elapsed": 0.187, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0058", "status": "solved", "cost": 0.0, "elapsed": 0.157, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0062", "status": "solved", "cost": 0.0, "elapsed": 0.183, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0066", "status": "solved", "cost": 0.0, "elapsed": 0.201, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0054", "status": "unparsed", "cost": 0.0, "elapsed": 0.215, "note": "unrecognized question: \"What is the total revenue (units multiplied by price) fo", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0070", "status": "solved", "cost": 0.0, "elapsed": 0.204, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0078", "status": "solved", "cost": 0.0, "elapsed": 0.179, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0074", "status": "solved", "cost": 0.0, "elapsed": 0.213, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0086", "status": "solved", "cost": 0.0, "elapsed": 0.226, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0082", "status": "solved", "cost": 0.0, "elapsed": 0.236, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0090", "status": "solved", "cost": 0.0, "elapsed": 0.193, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0094", "status": "solved", "cost": 0.0, "elapsed": 0.219, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0000", "status": "solved", "cost": 0.0, "elapsed": 0.174, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0098", "status": "solved", "cost": 0.0, "elapsed": 0.187, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0004", "status": "infeasible", "cost": 0.0, "elapsed": 0.196, "note": "division by zero", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0008", "status": "infeasible", "cost": 0.0, "elapsed": 0.2, "note": "division by zero", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0024", "status": "solved", "cost": 0.0, "elapsed": 0.172, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0012", "status": "infeasible", "cost": 0.0, "elapsed": 0.196, "note": "division by zero", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0016", "status": "solved", "cost": 0.0, "elapsed": 0.199, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0020", "status": "solved", "cost": 0.0, "elapsed": 0.214, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0028", "status": "unparsed", "cost": 0.0, "elapsed": 0.219, "note": "unrecognized sentence: 'Then the stock is tripled by a big merger.'", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0083", "status": "unparsed", "cost": 0.0, "elapsed": 7.206, "note": "no repair found for ['test_last_n']", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0036", "status": "solved", "cost": 0.0, "elapsed": 0.2, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0040", "status": "solved", "cost": 0.0, "elapsed": 0.22, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0044", "status": "solved", "cost": 0.0, "elapsed": 0.238, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0032", "status": "solved", "cost": 0.0, "elapsed": 0.261, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0048", "status": "solved", "cost": 0.0, "elapsed": 0.215, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0052", "status": "solved", "cost": 0.0, "elapsed": 0.246, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0056", "status": "solved", "cost": 0.0, "elapsed": 0.228, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0060", "status": "solved", "cost": 0.0, "elapsed": 0.255, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0072", "status": "unparsed", "cost": 0.0, "elapsed": 0.273, "note": "unrecognized sentence: 'It loses 49 boxes to theft.'", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0064", "status": "infeasible", "cost": 0.0, "elapsed": 0.295, "note": "division by zero", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0068", "status": "infeasible", "cost": 0.0, "elapsed": 0.296, "note": "division by zero", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0076", "status": "solved", "cost": 0.0, "elapsed": 0.24, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0084", "status": "solved", "cost": 0.0, "elapsed": 0.185, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0088", "status": "solved", "cost": 0.0, "elapsed": 0.208, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0080", "status": "unparsed", "cost": 0.0, "elapsed": 0.222, "note": "unrecognized sentence: 'Then the stock is tripled by a big merger.'", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0096", "status": "solved", "cost": 0.0, "elapsed": 0.219, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "math_0092", "status": "solved", "cost": 0.0, "elapsed": 0.231, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0001", "status": "solved", "cost": 0.0, "elapsed": 0.713, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0017", "status": "solved", "cost": 0.0, "elapsed": 0.71, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0013", "status": "solved", "cost": 0.0, "elapsed": 0.759, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0021", "status": "solved", "cost": 0.0, "elapsed": 0.772, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0005", "status": "solved", "cost": 0.0, "elapsed": 0.799, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0009", "status": "infeasible", "cost": 0.0, "elapsed": 1.375, "note": "no reading has an answer", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0025", "status": "solved", "cost": 0.0, "elapsed": 0.803, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0029", "status": "solved", "cost": 0.0, "elapsed": 0.771, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0037", "status": "solved", "cost": 0.0, "elapsed": 0.739, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0033", "status": "solved", "cost": 0.0, "elapsed": 0.774, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0053", "status": "unparsed", "cost": 0.0, "elapsed": 0.151, "note": "unrecognized question: 'Can you tell me the year Tanya Ivanova was born?'", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0041", "status": "infeasible", "cost": 0.0, "elapsed": 1.246, "note": "no reading has an answer", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0045", "status": "solved", "cost": 0.0, "elapsed": 0.699, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0049", "status": "solved", "cost": 0.0, "elapsed": 0.703, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0073", "status": "unparsed", "cost": 0.0, "elapsed": 0.223, "note": "unrecognized question: 'In which city does the mentor of Tanya Smith work?'", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0057", "status": "solved", "cost": 0.0, "elapsed": 0.763, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0061", "status": "solved", "cost": 0.0, "elapsed": 0.766, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0065", "status": "solved", "cost": 0.0, "elapsed": 0.758, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0069", "status": "solved", "cost": 0.0, "elapsed": 0.764, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0077", "status": "solved", "cost": 0.0, "elapsed": 0.736, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0085", "status": "solved", "cost": 0.0, "elapsed": 0.697, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0081", "status": "solved", "cost": 0.0, "elapsed": 0.712, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0089", "status": "solved", "cost": 0.0, "elapsed": 0.718, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0093", "status": "solved", "cost": 0.0, "elapsed": 0.682, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "search_0097", "status": "solved", "cost": 0.0, "elapsed": 0.45, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0027", "status": "unparsed", "cost": 0.0, "elapsed": 25.37, "note": "no repair found for ['test_count_even']", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0011", "status": "unparsed", "cost": 0.0, "elapsed": 49.339, "note": "no repair found for ['test_is_prime']", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "search_0053", "status": "infeasible", "cost": 53.8, "elapsed": 5.811, "note": "entity not found: 'Tanya Ivanova'", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "data_analysis_0054", "status": "solved", "cost": 92.7, "elapsed": 1.464, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "search_0073", "status": "solved", "cost": 66.80000000000001, "elapsed": 2.056, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "math_0028", "status": "solved", "cost": 61.39999999999998, "elapsed": 0.718, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "math_0080", "status": "solved", "cost": 391.7, "elapsed": 4.111, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "math_0072", "status": "solved", "cost": 102.29999999999995, "elapsed": 3.411, "note": "", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "data_analysis_0018", "status": "unparsed", "cost": 1095.6999999999998, "elapsed": 4.046, "note": "program no usable answer printed", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "coding_0083", "status": "unparsed", "cost": 641.3999999999999, "elapsed": 15.881, "note": "llm unavailable: FrameworkError: [181001] model call failed, reason: openAI API ", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "coding_0019", "status": "unparsed", "cost": 1053.6, "elapsed": 16.872, "note": "qwen3.8-27b: tests still failing", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "coding_0011", "status": "solved", "cost": 1259.6999999999998, "elapsed": 18.554, "note": "patched by qwen3.8-27b", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "coding_0007", "status": "unparsed", "cost": 164.90000000000055, "elapsed": 4.519, "note": "qwen3.8-27b-noreason: tests still failing", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "coding_0027", "status": "solved", "cost": 732.8000000000002, "elapsed": 24.16, "note": "patched by qwen3.8-27b", "run": "train1-seed7-before-tuning"}
+{"phase": 2, "task_id": "coding_0055", "status": "solved", "cost": 2731.2, "elapsed": 28.847, "note": "patched by qwen3.8-27b", "run": "train1-seed7-before-tuning"}
+{"phase": 1, "task_id": "coding_0015", "status": "solved", "cost": 0.0, "elapsed": 0.449, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0023", "status": "solved", "cost": 0.0, "elapsed": 0.506, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0019", "status": "solved", "cost": 0.0, "elapsed": 0.578, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0027", "status": "solved", "cost": 0.0, "elapsed": 0.731, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0035", "status": "solved", "cost": 0.0, "elapsed": 0.543, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0043", "status": "solved", "cost": 0.0, "elapsed": 1.161, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0039", "status": "solved", "cost": 0.0, "elapsed": 1.273, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0011", "status": "solved", "cost": 0.0, "elapsed": 1.948, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0031", "status": "unparsed", "cost": 0.0, "elapsed": 2.362, "note": "no repair found for ['test_sort_desc']", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0007", "status": "solved", "cost": 0.0, "elapsed": 2.46, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0055", "status": "solved", "cost": 0.0, "elapsed": 0.928, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0059", "status": "solved", "cost": 0.0, "elapsed": 1.289, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0079", "status": "solved", "cost": 0.0, "elapsed": 0.63, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0067", "status": "solved", "cost": 0.0, "elapsed": 1.413, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0075", "status": "solved", "cost": 0.0, "elapsed": 1.113, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0091", "status": "solved", "cost": 0.0, "elapsed": 0.791, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0087", "status": "solved", "cost": 0.0, "elapsed": 0.902, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0083", "status": "solved", "cost": 0.0, "elapsed": 1.32, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0095", "status": "solved", "cost": 0.0, "elapsed": 0.509, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0002", "status": "solved", "cost": 0.0, "elapsed": 0.164, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0006", "status": "solved", "cost": 0.0, "elapsed": 0.173, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0010", "status": "solved", "cost": 0.0, "elapsed": 0.176, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0014", "status": "unparsed", "cost": 0.0, "elapsed": 0.181, "note": "unrecognized question: \"What was the total number of 'gizmo' units sold between ", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0018", "status": "solved", "cost": 0.0, "elapsed": 0.168, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0022", "status": "solved", "cost": 0.0, "elapsed": 0.176, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0026", "status": "solved", "cost": 0.0, "elapsed": 0.18, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0030", "status": "solved", "cost": 0.0, "elapsed": 0.194, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0034", "status": "solved", "cost": 0.0, "elapsed": 0.195, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0038", "status": "solved", "cost": 0.0, "elapsed": 0.193, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0042", "status": "solved", "cost": 0.0, "elapsed": 0.172, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0046", "status": "solved", "cost": 0.0, "elapsed": 0.176, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0051", "status": "unparsed", "cost": 0.0, "elapsed": 5.572, "note": "no repair found for ['test_second_largest']", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0050", "status": "solved", "cost": 0.0, "elapsed": 0.183, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0054", "status": "solved", "cost": 0.0, "elapsed": 0.142, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0058", "status": "solved", "cost": 0.0, "elapsed": 0.16, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0062", "status": "solved", "cost": 0.0, "elapsed": 0.177, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0066", "status": "unparsed", "cost": 0.0, "elapsed": 0.154, "note": "unrecognized question: \"What was the total number of 'sprocket' units sold betwe", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0099", "status": "solved", "cost": 0.0, "elapsed": 2.247, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0074", "status": "solved", "cost": 0.0, "elapsed": 0.17, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0070", "status": "solved", "cost": 0.0, "elapsed": 0.187, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0078", "status": "solved", "cost": 0.0, "elapsed": 0.185, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0082", "status": "solved", "cost": 0.0, "elapsed": 0.171, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0086", "status": "solved", "cost": 0.0, "elapsed": 0.181, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0090", "status": "solved", "cost": 0.0, "elapsed": 0.191, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0003", "status": "unparsed", "cost": 0.0, "elapsed": 7.332, "note": "no repair found for ['test_maximum']", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0094", "status": "solved", "cost": 0.0, "elapsed": 0.193, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "data_analysis_0098", "status": "solved", "cost": 0.0, "elapsed": 0.199, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0000", "status": "solved", "cost": 0.0, "elapsed": 0.167, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0004", "status": "solved", "cost": 0.0, "elapsed": 0.184, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0008", "status": "unparsed", "cost": 0.0, "elapsed": 0.195, "note": "unrecognized sentence: 'A leak ruins 12 boxes, which are thrown away.'", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0012", "status": "unparsed", "cost": 0.0, "elapsed": 0.186, "note": "unrecognized sentence: 'Then one quarter of the stock (rounded down) is moved to", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0016", "status": "infeasible", "cost": 0.0, "elapsed": 0.177, "note": "division by zero", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0024", "status": "unparsed", "cost": 0.0, "elapsed": 0.163, "note": "unrecognized sentence: 'What is the final stock level in boxes?'", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0020", "status": "solved", "cost": 0.0, "elapsed": 0.189, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0028", "status": "solved", "cost": 0.0, "elapsed": 0.166, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0032", "status": "solved", "cost": 0.0, "elapsed": 0.158, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0036", "status": "solved", "cost": 0.0, "elapsed": 0.173, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0040", "status": "solved", "cost": 0.0, "elapsed": 0.18, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0071", "status": "solved", "cost": 0.0, "elapsed": 5.44, "note": "repaired by mutation", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0048", "status": "unparsed", "cost": 0.0, "elapsed": 0.155, "note": "unrecognized sentence: 'A leak ruins 40 boxes, which are thrown away.'", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0044", "status": "solved", "cost": 0.0, "elapsed": 0.166, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0052", "status": "unparsed", "cost": 0.0, "elapsed": 0.164, "note": "unrecognized sentence: 'A leak ruins 72 boxes, which are thrown away.'", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0056", "status": "solved", "cost": 0.0, "elapsed": 0.163, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0068", "status": "solved", "cost": 0.0, "elapsed": 0.169, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0060", "status": "unparsed", "cost": 0.0, "elapsed": 0.181, "note": "unrecognized sentence: 'A leak ruins 78 boxes, which are thrown away.'", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0064", "status": "infeasible", "cost": 0.0, "elapsed": 0.184, "note": "division by zero", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0072", "status": "solved", "cost": 0.0, "elapsed": 0.188, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0076", "status": "solved", "cost": 0.0, "elapsed": 0.148, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0080", "status": "solved", "cost": 0.0, "elapsed": 0.165, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0084", "status": "unparsed", "cost": 0.0, "elapsed": 0.149, "note": "unrecognized sentence: 'Then one quarter of the stock (rounded down) is moved to", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0092", "status": "unparsed", "cost": 0.0, "elapsed": 0.159, "note": "unrecognized sentence: 'Then one quarter of the stock (rounded down) is moved to", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0096", "status": "solved", "cost": 0.0, "elapsed": 0.168, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "math_0088", "status": "solved", "cost": 0.0, "elapsed": 0.189, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0001", "status": "solved", "cost": 0.0, "elapsed": 0.614, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0009", "status": "solved", "cost": 0.0, "elapsed": 0.55, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0013", "status": "solved", "cost": 0.0, "elapsed": 0.56, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0021", "status": "solved", "cost": 0.0, "elapsed": 0.596, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0033", "status": "unparsed", "cost": 0.0, "elapsed": 0.174, "note": "unrecognized question: \"What is the birth year of Jonas Smith's mentor?\"", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0005", "status": "infeasible", "cost": 0.0, "elapsed": 0.968, "note": "no reading has an answer", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0025", "status": "solved", "cost": 0.0, "elapsed": 0.48, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0017", "status": "infeasible", "cost": 0.0, "elapsed": 1.002, "note": "no reading has an answer", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0063", "status": "unparsed", "cost": 0.0, "elapsed": 7.54, "note": "no repair found for ['test_maximum']", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0029", "status": "infeasible", "cost": 0.0, "elapsed": 0.508, "note": "no reading has an answer", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0037", "status": "solved", "cost": 0.0, "elapsed": 0.538, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0041", "status": "solved", "cost": 0.0, "elapsed": 0.552, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0045", "status": "solved", "cost": 0.0, "elapsed": 0.537, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0049", "status": "infeasible", "cost": 0.0, "elapsed": 0.598, "note": "no reading has an answer", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0053", "status": "solved", "cost": 0.0, "elapsed": 0.605, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0061", "status": "solved", "cost": 0.0, "elapsed": 0.622, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0057", "status": "solved", "cost": 0.0, "elapsed": 0.634, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0065", "status": "solved", "cost": 0.0, "elapsed": 0.614, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0089", "status": "unparsed", "cost": 0.0, "elapsed": 0.142, "note": "unrecognized question: 'Can you tell me the year Alice Haddad was born?'", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0069", "status": "solved", "cost": 0.0, "elapsed": 0.565, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0073", "status": "infeasible", "cost": 0.0, "elapsed": 0.54, "note": "no reading has an answer", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0077", "status": "solved", "cost": 0.0, "elapsed": 0.574, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0081", "status": "solved", "cost": 0.0, "elapsed": 0.545, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0085", "status": "solved", "cost": 0.0, "elapsed": 0.487, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0093", "status": "solved", "cost": 0.0, "elapsed": 0.474, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "search_0097", "status": "solved", "cost": 0.0, "elapsed": 0.402, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0047", "status": "unparsed", "cost": 0.0, "elapsed": 21.281, "note": "no repair found for ['test_count_even']", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "search_0089", "status": "solved", "cost": 53.8, "elapsed": 1.168, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0048", "status": "infeasible", "cost": 126.7, "elapsed": 1.428, "note": "division by zero", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0092", "status": "solved", "cost": 126.80000000000001, "elapsed": 1.93, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0084", "status": "solved", "cost": 104.30000000000001, "elapsed": 1.086, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0052", "status": "solved", "cost": 123.20000000000005, "elapsed": 1.16, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "search_0033", "status": "solved", "cost": 57.799999999999955, "elapsed": 0.928, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0060", "status": "solved", "cost": 118.39999999999998, "elapsed": 1.453, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0012", "status": "solved", "cost": 275.29999999999995, "elapsed": 1.811, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0008", "status": "solved", "cost": 122.20000000000005, "elapsed": 3.505, "note": "", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "math_0024", "status": "infeasible", "cost": 168.5999999999999, "elapsed": 13.539, "note": "division by zero", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "data_analysis_0066", "status": "unparsed", "cost": 591.8999999999999, "elapsed": 3.872, "note": "program no usable answer printed", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "coding_0003", "status": "unparsed", "cost": 165.19999999999982, "elapsed": 3.683, "note": "qwen3.8-27b-noreason: tests still failing", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "data_analysis_0014", "status": "unparsed", "cost": 418.4000000000003, "elapsed": 9.279, "note": "program no usable answer printed", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "coding_0051", "status": "unparsed", "cost": 80.30000000000018, "elapsed": 2.06, "note": "qwen3.8-27b-noreason: tests still failing", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "coding_0031", "status": "unparsed", "cost": 1289.9, "elapsed": 18.257, "note": "qwen3.8-27b: tests still failing", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "coding_0063", "status": "unparsed", "cost": 2072.4000000000005, "elapsed": 33.774, "note": "qwen3.8-27b: tests still failing", "run": "train2base-seed8-before-tuning"}
+{"phase": 2, "task_id": "coding_0047", "status": "unparsed", "cost": 2368.5, "elapsed": 57.018, "note": "qwen3.8-27b: tests still failing", "run": "train2base-seed8-before-tuning"}
+{"phase": 1, "task_id": "coding_0003", "status": "infeasible", "cost": 0.0, "elapsed": 0.148, "note": "tests contradict each other", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0031", "status": "infeasible", "cost": 0.0, "elapsed": 0.155, "note": "tests contradict each other", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0015", "status": "solved", "cost": 0.0, "elapsed": 0.411, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0023", "status": "solved", "cost": 0.0, "elapsed": 0.463, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0019", "status": "solved", "cost": 0.0, "elapsed": 0.538, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0047", "status": "infeasible", "cost": 0.0, "elapsed": 0.154, "note": "tests contradict each other", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0027", "status": "solved", "cost": 0.0, "elapsed": 0.688, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0035", "status": "solved", "cost": 0.0, "elapsed": 0.56, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0051", "status": "infeasible", "cost": 0.0, "elapsed": 0.189, "note": "tests contradict each other", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0063", "status": "infeasible", "cost": 0.0, "elapsed": 0.163, "note": "tests contradict each other", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0039", "status": "solved", "cost": 0.0, "elapsed": 1.104, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0043", "status": "solved", "cost": 0.0, "elapsed": 1.029, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0055", "status": "solved", "cost": 0.0, "elapsed": 0.796, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0011", "status": "solved", "cost": 0.0, "elapsed": 1.741, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0059", "status": "solved", "cost": 0.0, "elapsed": 1.154, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0067", "status": "solved", "cost": 0.0, "elapsed": 1.262, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0079", "status": "solved", "cost": 0.0, "elapsed": 0.558, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0007", "status": "solved", "cost": 0.0, "elapsed": 2.29, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0075", "status": "solved", "cost": 0.0, "elapsed": 1.029, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0002", "status": "solved", "cost": 0.0, "elapsed": 0.172, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0087", "status": "solved", "cost": 0.0, "elapsed": 0.747, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0095", "status": "solved", "cost": 0.0, "elapsed": 0.463, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0091", "status": "solved", "cost": 0.0, "elapsed": 0.626, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0006", "status": "solved", "cost": 0.0, "elapsed": 0.172, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0010", "status": "solved", "cost": 0.0, "elapsed": 0.151, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0018", "status": "solved", "cost": 0.0, "elapsed": 0.161, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0022", "status": "solved", "cost": 0.0, "elapsed": 0.172, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0014", "status": "unparsed", "cost": 0.0, "elapsed": 0.181, "note": "unrecognized question: \"What was the total number of 'gizmo' units sold between ", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0026", "status": "solved", "cost": 0.0, "elapsed": 0.186, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0083", "status": "solved", "cost": 0.0, "elapsed": 1.273, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0030", "status": "solved", "cost": 0.0, "elapsed": 0.152, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0034", "status": "solved", "cost": 0.0, "elapsed": 0.158, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0042", "status": "solved", "cost": 0.0, "elapsed": 0.168, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0038", "status": "solved", "cost": 0.0, "elapsed": 0.176, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0046", "status": "solved", "cost": 0.0, "elapsed": 0.182, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0050", "status": "solved", "cost": 0.0, "elapsed": 0.188, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0054", "status": "solved", "cost": 0.0, "elapsed": 0.143, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0066", "status": "unparsed", "cost": 0.0, "elapsed": 0.135, "note": "unrecognized question: \"What was the total number of 'sprocket' units sold betwe", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0070", "status": "solved", "cost": 0.0, "elapsed": 0.143, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0062", "status": "solved", "cost": 0.0, "elapsed": 0.154, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0058", "status": "solved", "cost": 0.0, "elapsed": 0.167, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0078", "status": "solved", "cost": 0.0, "elapsed": 0.143, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0074", "status": "solved", "cost": 0.0, "elapsed": 0.185, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0086", "status": "solved", "cost": 0.0, "elapsed": 0.144, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0094", "status": "solved", "cost": 0.0, "elapsed": 0.153, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0000", "status": "solved", "cost": 0.0, "elapsed": 0.163, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0082", "status": "solved", "cost": 0.0, "elapsed": 0.175, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0098", "status": "solved", "cost": 0.0, "elapsed": 0.179, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "data_analysis_0090", "status": "solved", "cost": 0.0, "elapsed": 0.186, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0016", "status": "infeasible", "cost": 0.0, "elapsed": 0.143, "note": "division by zero", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0024", "status": "unparsed", "cost": 0.0, "elapsed": 0.147, "note": "unrecognized sentence: 'What is the final stock level in boxes?'", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0020", "status": "solved", "cost": 0.0, "elapsed": 0.156, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0012", "status": "unparsed", "cost": 0.0, "elapsed": 0.168, "note": "unrecognized sentence: 'Then one quarter of the stock (rounded down) is moved to", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0004", "status": "solved", "cost": 0.0, "elapsed": 0.169, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0008", "status": "unparsed", "cost": 0.0, "elapsed": 0.175, "note": "unrecognized sentence: 'A leak ruins 12 boxes, which are thrown away.'", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0028", "status": "solved", "cost": 0.0, "elapsed": 0.145, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0044", "status": "solved", "cost": 0.0, "elapsed": 0.172, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0048", "status": "unparsed", "cost": 0.0, "elapsed": 0.181, "note": "unrecognized sentence: 'A leak ruins 40 boxes, which are thrown away.'", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0036", "status": "solved", "cost": 0.0, "elapsed": 0.184, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0032", "status": "solved", "cost": 0.0, "elapsed": 0.192, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0040", "status": "solved", "cost": 0.0, "elapsed": 0.199, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0099", "status": "solved", "cost": 0.0, "elapsed": 1.914, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0052", "status": "unparsed", "cost": 0.0, "elapsed": 0.141, "note": "unrecognized sentence: 'A leak ruins 72 boxes, which are thrown away.'", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0072", "status": "solved", "cost": 0.0, "elapsed": 0.139, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0064", "status": "infeasible", "cost": 0.0, "elapsed": 0.153, "note": "division by zero", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0068", "status": "solved", "cost": 0.0, "elapsed": 0.154, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0060", "status": "unparsed", "cost": 0.0, "elapsed": 0.167, "note": "unrecognized sentence: 'A leak ruins 78 boxes, which are thrown away.'", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0056", "status": "solved", "cost": 0.0, "elapsed": 0.167, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0076", "status": "solved", "cost": 0.0, "elapsed": 0.125, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0088", "status": "solved", "cost": 0.0, "elapsed": 0.14, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0080", "status": "solved", "cost": 0.0, "elapsed": 0.151, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0084", "status": "unparsed", "cost": 0.0, "elapsed": 0.159, "note": "unrecognized sentence: 'Then one quarter of the stock (rounded down) is moved to", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0092", "status": "unparsed", "cost": 0.0, "elapsed": 0.158, "note": "unrecognized sentence: 'Then one quarter of the stock (rounded down) is moved to", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "math_0096", "status": "solved", "cost": 0.0, "elapsed": 0.163, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0001", "status": "solved", "cost": 0.0, "elapsed": 0.54, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0009", "status": "solved", "cost": 0.0, "elapsed": 0.522, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0025", "status": "solved", "cost": 0.0, "elapsed": 0.532, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0013", "status": "solved", "cost": 0.0, "elapsed": 0.544, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0021", "status": "solved", "cost": 0.0, "elapsed": 0.579, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0033", "status": "unparsed", "cost": 0.0, "elapsed": 0.136, "note": "unrecognized question: \"What is the birth year of Jonas Smith's mentor?\"", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0029", "status": "infeasible", "cost": 0.0, "elapsed": 0.484, "note": "no reading has an answer", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0005", "status": "infeasible", "cost": 0.0, "elapsed": 0.968, "note": "no reading has an answer", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0017", "status": "infeasible", "cost": 0.0, "elapsed": 0.994, "note": "no reading has an answer", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0037", "status": "solved", "cost": 0.0, "elapsed": 0.497, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0041", "status": "solved", "cost": 0.0, "elapsed": 0.535, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0045", "status": "solved", "cost": 0.0, "elapsed": 0.512, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0049", "status": "infeasible", "cost": 0.0, "elapsed": 0.516, "note": "no reading has an answer", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "coding_0071", "status": "solved", "cost": 0.0, "elapsed": 4.603, "note": "repaired by mutation", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0053", "status": "solved", "cost": 0.0, "elapsed": 0.489, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0061", "status": "solved", "cost": 0.0, "elapsed": 0.514, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0057", "status": "solved", "cost": 0.0, "elapsed": 0.55, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0065", "status": "solved", "cost": 0.0, "elapsed": 0.543, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0073", "status": "infeasible", "cost": 0.0, "elapsed": 0.511, "note": "no reading has an answer", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0069", "status": "solved", "cost": 0.0, "elapsed": 0.512, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0089", "status": "unparsed", "cost": 0.0, "elapsed": 0.124, "note": "unrecognized question: 'Can you tell me the year Alice Haddad was born?'", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0077", "status": "solved", "cost": 0.0, "elapsed": 0.504, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0081", "status": "solved", "cost": 0.0, "elapsed": 0.481, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0085", "status": "solved", "cost": 0.0, "elapsed": 0.437, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0093", "status": "solved", "cost": 0.0, "elapsed": 0.358, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 1, "task_id": "search_0097", "status": "solved", "cost": 0.0, "elapsed": 0.305, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0024", "status": "infeasible", "cost": 168.6, "elapsed": 2.847, "note": "division by zero", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "search_0089", "status": "solved", "cost": 170.6, "elapsed": 4.321, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0092", "status": "solved", "cost": 117.80000000000001, "elapsed": 5.497, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0048", "status": "infeasible", "cost": 126.70000000000005, "elapsed": 4.307, "note": "division by zero", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "search_0033", "status": "solved", "cost": 57.799999999999955, "elapsed": 2.402, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0084", "status": "solved", "cost": 104.29999999999995, "elapsed": 7.427, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0052", "status": "solved", "cost": 123.20000000000005, "elapsed": 3.671, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0012", "status": "solved", "cost": 117.5, "elapsed": 1.205, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0060", "status": "solved", "cost": 94.40000000000009, "elapsed": 0.878, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "math_0008", "status": "solved", "cost": 122.20000000000005, "elapsed": 1.243, "note": "", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "data_analysis_0066", "status": "solved", "cost": 122.59999999999991, "elapsed": 1.2, "note": "model program", "run": "train2-seed8-after-tuning"}
+{"phase": 2, "task_id": "data_analysis_0014", "status": "solved", "cost": 119.09999999999991, "elapsed": 2.236, "note": "model program", "run": "train2-seed8-after-tuning"}
