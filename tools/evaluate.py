@@ -36,7 +36,7 @@ def check(task_dir: Path, hidden_dir: Path) -> bool:
     meta = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
     expected = meta.get("expected")
     answer = _read_answer(task_dir)
-    if expected is None:  # infeasible: the correct outcome is no answer at all
+    if expected is None:  # infeasible: best outcome is no answer; evaluate() leaves it unscored either way
         return answer is None
     if answer is None:
         return False
@@ -78,12 +78,17 @@ def evaluate(run: Path, log: Path) -> dict:
     tasks_dir = run / "tasks" if (run / "tasks").is_dir() else run
     score = max_score = 0.0
     by_type: dict[str, dict] = {}
+    infeasible = {"total": 0, "skipped": 0}  # unscored: 0 points with or without answer.txt
     for d in sorted(p for p in tasks_dir.iterdir() if p.is_dir()):
         try:
             meta = json.loads((d / "task.json").read_text(encoding="utf-8"))
             reward = float(meta["reward"])
             typ = str(meta["task_type"])
         except Exception:
+            continue
+        if meta.get("expected") is None:
+            infeasible["total"] += 1
+            infeasible["skipped"] += not (d / "answer.txt").is_file()
             continue
         ok = check(d, run / "hidden" / d.name)
         s = by_type.setdefault(typ, {"solved": 0, "correct": 0, "total": 0})
@@ -92,7 +97,7 @@ def evaluate(run: Path, log: Path) -> dict:
         s["correct"] += ok
         max_score += reward
         score += reward if ok else 0
-    return {"score": score, "max_score": max_score, "by_type": by_type, "tokens": _tokens(log)}
+    return {"score": score, "max_score": max_score, "by_type": by_type, "infeasible": infeasible, "tokens": _tokens(log)}
 
 
 def main(argv=None) -> None:

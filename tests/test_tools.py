@@ -140,3 +140,18 @@ def test_coding_visible_tests_fail_before_fix(tmp_path):
         assert r.returncode != 0, t.task_id  # buggy library or contradictory tests: never green at start
         seen += 1
     assert seen == 30
+
+
+def test_evaluate_infeasible_unscored(tmp_path):
+    gen_tasks.main(["--out", str(tmp_path), "--n", "40", "--seed", "6", "--infeasible", "0.25"])
+    log = tmp_path / "none.jsonl"
+    r = evaluate.evaluate(tmp_path, log)
+    inf = [t for t in load_tasks(tmp_path / "tasks") if _read(t)["expected"] is None]
+    feas_reward = sum(_read(t)["reward"] for t in load_tasks(tmp_path / "tasks") if _read(t)["expected"])
+    assert r["infeasible"] == {"total": 10, "skipped": 10}
+    assert r["max_score"] == feas_reward and r["score"] == 0
+    assert sum(v["total"] for v in r["by_type"].values()) == 30
+    (inf[0].dir / "answer.txt").write_text("0" + chr(10))
+    r2 = evaluate.evaluate(tmp_path, log)
+    assert r2["infeasible"] == {"total": 10, "skipped": 9}
+    assert r2["score"] == 0 and r2["max_score"] == feas_reward
