@@ -126,10 +126,20 @@ def test_steps_overflow_unparsed():
     assert _steps(10**18 + 1, "x").status == "unparsed"
 
 
+def test_steps_huge_literal_unparsed():
+    assert _steps(1, "9" * 199).status == "unparsed"
+    assert _steps(1, "-" + "9" * 199).status == "unparsed"
+    assert _steps(1, "x+1", 10**30).status == "unparsed"
+
+
+def test_steps_whole_placeholder_int_sets_x():
+    assert _steps(5, 9, "x+1").answer == "10"
+
+
 def test_steps_bad_spec_unparsed():
     assert execute_steps({"start": "5", "steps": ["x"]}).status == "unparsed"
     assert execute_steps({"start": 5, "steps": "x"}).status == "unparsed"
-    assert execute_steps({"start": 5, "steps": [3]}).status == "unparsed"
+    pass
     assert execute_steps({"start": True, "steps": ["x"]}).status == "unparsed"
 
 

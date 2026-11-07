@@ -215,7 +215,7 @@ def test_data_top_metric_via_2a():
     spec = {"file": "sales.csv", "metric": "top_product_sum_units", "product": None, "region": None,
             "month_from": None, "month_to": None}
     out = asyncio.run(solve_group("data_analysis", templatize(ins)[0], [(t, {})], FakeClient(json.dumps(spec))))
-    assert out["d1"].status == "solved", out
+    assert out["d1"].status == "solved" and out["d1"].answer == "widget", out
 
 
 def test_model_names_come_from_config():
@@ -223,3 +223,14 @@ def test_model_names_come_from_config():
     assert json_route.MODEL == config.MODEL_FAST
     assert llm_routes.MODEL_FAST == config.MODEL_FAST
     assert config.MODEL_ALT and config.MODEL_REASON
+
+
+def test_fill_leading_zero_slot_in_expression():
+    assert fill("x-{N1}*2", {"N1": "007"}) == "x-7*2"
+    assert fill("{N1}", {"N1": "007"}) == 7
+
+
+def test_rules_allow_placeholders_in_expressions_and_unknown_metric_impossible():
+    from harness.json_route import _system_prompt
+    assert "inside the expression" in _system_prompt("math")
+    assert "impossible" in _system_prompt("data_analysis").split("one of:")[1]

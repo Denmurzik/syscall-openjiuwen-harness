@@ -122,13 +122,18 @@ def execute_steps(spec: dict) -> SolveResult:
         if not _is_int(x) or abs(x) > _LIMIT or not isinstance(steps, list):
             return _unparsed("bad spec")
         for step in steps:
-            if not isinstance(step, str) or len(step) > 200:
+            if _is_int(step):  # a whole-placeholder step ("{N2}") arrives as an int: set x to it
+                x = step
+            elif isinstance(step, str) and len(step) <= 200:
+                try:
+                    tree = ast.parse(step.strip(), mode="eval")
+                except (SyntaxError, ValueError, RecursionError):
+                    return _unparsed(f"bad step syntax: {step!r}")
+                x = _eval(tree, x)
+            else:
                 return _unparsed("bad step")
-            try:
-                tree = ast.parse(step.strip(), mode="eval")
-            except (SyntaxError, ValueError, RecursionError):
-                return _unparsed(f"bad step syntax: {step!r}")
-            x = _eval(tree, x)
+            if abs(x) > _LIMIT:
+                return _unparsed("value too large")
         return SolveResult("solved", str(x))
     except _Infeasible as e:
         return SolveResult("infeasible", note=str(e))

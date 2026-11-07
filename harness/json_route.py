@@ -17,10 +17,10 @@ _ANY = re.compile(r"\{([A-Za-z]+\d+)\}")
 _RULES = (
     "Use placeholders {N1}, {S1}, {E1} (exactly as they appear in the task text) instead of concrete values: "
     "{N#} stands for a whole number, {S#} for a quoted string, {E#} for a person or company name. "
-    "A placeholder is a JSON string such as \"{N1}\", used as the whole value. "
+    "A placeholder is a JSON string such as \"{N1}\", used as the whole value (in a math step it may also stand inside the expression). "
     "If the task text does not contain enough data to build the specification, return {\"impossible\": true}. "
     "String-valued fields (product, region, entity, file) take {S#} or {E#} placeholders or literal text, never {N#}. "
-    "Write the JSON object on one line without spaces or line breaks. "
+    "Write the JSON object compactly: no line breaks or indentation (keep spaces inside string values). "
     "Output only the JSON object, nothing else."
 )
 
@@ -48,6 +48,8 @@ _SCHEMAS = {
         "\"top_product_sum_units\", \"top_product_sum_revenue\", \"top_product_count_orders\", "
         "\"top_region_sum_units\", \"top_region_sum_revenue\", \"top_region_count_orders\" "
         "(the answer is the winning product or region name; product/region filters stay null). "
+        "If the question asks for any other metric (for example the largest or smallest single order, or a "
+        "column that is not listed), return {\"impossible\": true}. "
         "product and region filter rows by exact value (case-insensitive); null means no filter. "
         "month_from and month_to are an inclusive month range; give both or set both to null (a single month m "
         "is month_from = month_to = m). file is the literal file name from the text.\n"
@@ -71,6 +73,16 @@ def _system_prompt(task_type: str) -> str | None:
     return None if schema is None else schema + _RULES
 
 
+def _slot_text(name: str, slots: dict[str, str]) -> str:
+    value = slots[name]
+    if name[0] == "N":
+        try:
+            return str(int(value))  # "007" must not become an invalid literal inside an expression
+        except ValueError:
+            pass
+    return value
+
+
 def fill(spec: object, slots: dict[str, str]) -> object:
     if isinstance(spec, dict):
         return {k: fill(v, slots) for k, v in spec.items()}
@@ -81,7 +93,7 @@ def fill(spec: object, slots: dict[str, str]) -> object:
         if m:
             value = slots[m.group(1)]
             return int(value) if m.group(1)[0] == "N" else value
-        return _ANY.sub(lambda mm: slots[mm.group(1)], spec)
+        return _ANY.sub(lambda mm: _slot_text(mm.group(1), slots), spec)
     return spec
 
 

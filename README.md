@@ -45,13 +45,13 @@ timeout -k 1000s 1h docker run --rm --name "run-${TEAM}" \
 ### Фаза 2: LLM (через `Model.invoke` из openJiuwen)
 
 Для задач, которые не разобрала фаза 1.
-
 - 2a. Нераспознанные math/data/search задачи группируются по шаблону (`harness/templates.py`). Модель один раз на группу выдаёт JSON-спецификацию, которую исполняют те же исполнители, что и в фазе 1 (`harness/json_route.py`). Один вызов покрывает всю группу. Для math спецификация — `{"start": N, "steps": ["x-{N2}*{N3}", "x-x//4"]}`: шаги-выражения над `x` вычисляет безопасный AST-вычислитель (`math_solver.execute_steps`: только `x`, целые, `+ - * //`, унарный минус, скобки; `//0` — infeasible, |значение| > 10^18 — unparsed); старый формат `ops` тоже принимается. Модель просят отвечать JSON в одну строку.
+
+- 2b. Запасной путь для остальных: синтез программы моделью (`harness/llm_routes.py::solve_with_program`), программа исполняется в песочнице. Для coding: лестница патчей `fix_coding` — `MODEL_FAST` (qwen3.8-27b-noreason), затем `MODEL_ALT` (qwen3.6-35b-a3b-noreason), затем `MODEL_REASON` (qwen3.8-27b) с низким reasoning (последний шаг только если награда задачи ≥ 3).
 
 ### Выбор модели
 
-Имена моделей лежат в `harness/config.py` (`MODEL_FAST`, `MODEL_ALT`, `MODEL_REASON`). `MODEL_FAST` выбран замером на нераспознанных фазой 1 задачах из `gen_tasks --novel 1.0 --seed 31` (по 15 math/data/search, 2a затем 2b, потолок 30 вызовов на модель): на math qwen3.8-27b-noreason решила 12 из 12 достигнутых задач с ответом, qwen3.6-35b-a3b-noreason только 2 из 12; расход по счётчику бюджета 2575 против 3691 токена. На data/search выборка слишком мала для вывода. Подробности: `.superpowers/sdd/2026-11-08-round2/task-15-report.md`.
-- 2b. Запасной путь для остальных: синтез программы моделью (`harness/llm_routes.py::solve_with_program`), программа исполняется в песочнице. Для coding: лестница патчей `fix_coding` — `MODEL_FAST` (qwen3.8-27b-noreason), затем `MODEL_ALT` (qwen3.6-35b-a3b-noreason), затем `MODEL_REASON` (qwen3.8-27b) с низким reasoning (последний шаг только если награда задачи ≥ 3).
+Имена моделей лежат в `harness/config.py` (`MODEL_FAST`, `MODEL_ALT`, `MODEL_REASON`). `MODEL_FAST` выбран замером на нераспознанных фазой 1 задачах из `gen_tasks --novel 1.0 --seed 31` (по 15 math/data/search, потолок 30 вызовов на модель): на math qwen3.8-27b-noreason решила 12 из 12 достигнутых задач с ответом, qwen3.6-35b-a3b-noreason только 2 из 12; расход по счётчику бюджета 2575 против 3691 токена. Измерялся только math и только фаза 2a: лимит вызовов закончился внутри 2a, до 2b дело не дошло. На data/search выборка слишком мала для вывода; coding (`fix_coding`) и 2b (`solve_with_program`) на qwen3.8-27b-noreason не измерялись. Подробности: `.superpowers/sdd/2026-11-08-round2/task-15-report.md`.
 
 Задачи в фазе 2 упорядочиваются по отношению «награда / оценка стоимости» (`harness/estimator.py`): сначала самые выгодные.
 
