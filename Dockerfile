@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY harness/ harness/
 COPY run_agent.py .
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Запуск задаётся командой жюри (--entrypoint python); CMD только для ручного запуска.
 CMD ["python", "/app/run_agent.py", "--tasks-dir", "/data/tasks"]
