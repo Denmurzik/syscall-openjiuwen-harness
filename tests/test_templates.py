@@ -38,7 +38,7 @@ def test_names_and_quotes_become_slots():
 
 def test_repeated_value_shares_slot_and_decimals_stay():
     t, slots = templatize("Ann Lee meets Ann Lee and 5 of 5 at 3.5 percent in sales2.csv.")
-    assert slots == {"E1": "Ann Lee", "N1": "5"}
+    assert slots == {"E1": "Ann Lee", "N1": "5", "N2": "5"}
     assert "3.5" in t and "sales2.csv" in t
 
 
@@ -62,3 +62,9 @@ def test_group_keys_by_type_and_template():
     assert len(g) == 2
     math_key = next(k for k in g if k[0] == "math")
     assert [t.task_id for t, _ in g[math_key]] == ["a", "b"]
+
+
+def test_equal_numbers_share_template_with_different_numbers():
+    t1, s1 = templatize("A warehouse starts with 3 boxes. It ships 3 boxes per day for 3 days.")
+    t2, _ = templatize("A warehouse starts with 9 boxes. It ships 7 boxes per day for 3 days.")
+    assert t1 == t2 and s1 == {"N1": "3", "N2": "3", "N3": "3"}

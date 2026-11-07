@@ -18,6 +18,7 @@ _RULES = (
     "{N#} stands for a whole number, {S#} for a quoted string, {E#} for a person or company name. "
     "A placeholder is a JSON string such as \"{N1}\", used as the whole value. "
     "If the task text does not contain enough data to build the specification, return {\"impossible\": true}. "
+    "String-valued fields (product, region, entity, file) take {S#} or {E#} placeholders or literal text, never {N#}. "
     "Output only the JSON object, nothing else."
 )
 
@@ -29,8 +30,8 @@ _SCHEMAS = {
         "\"+\", \"-\", \"*\", \"//\" (integer division rounding down). Each operand is one integer "
         "(or one placeholder), or a list of integers/placeholders meaning their product; no other expressions. Examples: 'it loses N boxes' is [\"-\", N]; 'receives N boxes' is "
         "[\"+\", N]; 'doubled' is [\"*\", 2]; 'split equally into N parts, keeps one share rounded down' is "
-        "[\"//\", N]. If a step needs a product of two numbers from the text (like 'N per day for M days'), "
-        "it cannot be expressed: return {\"impossible\": true}.\n"
+        "[\"//\", N]. 'ships N per day for M days' is [\"-\", [\"{N2}\", \"{N3}\"]] (a list operand is a product); "
+        "'receives N deliveries of M boxes each' is [\"+\", [N, M]].\n"
     ),
     "data_analysis": (
         "You turn a question about a CSV file into a JSON specification.\n"
