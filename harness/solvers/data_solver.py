@@ -35,7 +35,16 @@ _METRICS = [
     ("avg_price", re.compile(r"what (?:is|was) the average price\?", _FLAGS)),
     ("avg_units", re.compile(r"what (?:is|was) the average units(?: per order)?\?", _FLAGS)),
 ]
-_METRIC_NAMES = {name for name, _ in _METRICS}
+_TOP_COLUMNS = ("product", "region")
+_TOP_BASES = ("sum_units", "sum_revenue", "count_orders")
+_TOP_NAMES = {f"top_{c}_{b}" for c in _TOP_COLUMNS for b in _TOP_BASES}
+_TOP_MEASURE = {"units": "sum_units", "revenue": "sum_revenue", "orders": "count_orders",
+                "number of orders": "count_orders"}
+_TOP_Q = re.compile(
+    r"which (product|region) (?:sold the most (units)|(?:had|has|generated|made|recorded) the "
+    r"(?:most|highest|greatest) (?:total )?(units|revenue|orders|number of orders)(?: sold)?)(?: overall)?\?",
+    _FLAGS)
+_METRIC_NAMES = {name for name, _ in _METRICS} | _TOP_NAMES
 _REQUIRED = {
     "sum_units": ("units",),
     "sum_revenue": ("units", "price"),
@@ -125,9 +134,144 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
 
     text = " ".join(text.split())
     metrics = [name for name, rx in _METRICS if rx.fullmatch(text)]
+    top = _TOP_Q.fullmatch(text)
+    if top is not None:
+        metrics.append(f"top_{top.group(1).lower()}_{_TOP_MEASURE[(top.group(2) or top.group(3)).lower()]}")
     if len(metrics) != 1:
         return _unparsed(f"unrecognized question: {sentences[1]!r}")
     return {"file": file, "metric": metrics[0], "product": product, "region": region,
+            "month_from": month_from, "month_to": month_to}
+
+
+def _split_metric(metric: str) -> tuple[str | None, str]:
+    """(group column or None, base metric)."""
+    if metric in _TOP_NAMES:
+        _, col, base = metric.split("_", 2)
+        return col, base
+    return None, metric
+
+# ------------------------------------------------------------------ loose parser
+
+_LOOSE_STOP = {
+    "what", "is", "was", "are", "were", "the", "a", "an", "of", "in", "for", "total", "number", "how", "many",
+    "sold", "placed", "made", "recorded", "overall", "all", "both", "included", "inclusive", "between", "from",
+    "to", "through", "and", "s", "which", "did", "there", "had", "has", "have", "been", "we", "by", "that",
+}
+_LOOSE_MONTHS = re.compile(
+    r"\bmonths?\s+(\d+)(?:\s*(?:through|to|and|-)\s*(?:months?\s+)?(\d+))?(?!\d)", _FLAGS)
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _csv_header_and_values(path: Path) -> tuple[list[str], dict[str, set[str]]] | None:
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            cols = [(c or "").strip().casefold() for c in (reader.fieldnames or [])]
+            reader.fieldnames = cols
+            vals = {c: set() for c in _TOP_COLUMNS if c in cols}
+            for row in reader:
+                for c in vals:
+                    vals[c].add((row[c] or "").strip().casefold())
+            return cols, vals
+    except (OSError, ValueError, csv.Error):
+        return None
+
+
+def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
+    """Fallback after the strict `parse`: closed keyword vocabulary plus product/region values that really
+    occur in the CSV. Any word outside the vocabulary, or any ambiguity, gives `unparsed`."""
+    if workspace is None:
+        return _unparsed("loose parse needs a workspace")
+    sentences = [" ".join(s.split()) for s in split_sentences(strip_boilerplate(instruction))]
+    if len(sentences) != 2:
+        return _unparsed("loose: expected file sentence and question")
+    m = _FILE.fullmatch(sentences[0])
+    if not m:
+        return _unparsed("loose: unrecognized file sentence")
+    file = m.group(1)
+    data = _csv_header_and_values(Path(workspace) / file)
+    if data is None:
+        return _unparsed("loose: cannot read the file")
+    _, values = data
+    text = sentences[1].casefold()
+
+    ranges = list(_LOOSE_MONTHS.finditer(text))
+    if len(ranges) > 1:
+        return _unparsed("loose: several month expressions")
+    month_from = month_to = None
+    if ranges:
+        month_from = int(ranges[0].group(1))
+        month_to = int(ranges[0].group(2) or ranges[0].group(1))
+        text = text[:ranges[0].start()] + " " + text[ranges[0].end():]
+
+    words = _WORD.findall(text)
+    found = {c: set() for c in _TOP_COLUMNS}
+    rest = []
+    for w in words:
+        owners = [c for c in _TOP_COLUMNS if w in values.get(c, ())]
+        if len(owners) > 1:
+            return _unparsed(f"loose: {w!r} is both a product and a region")
+        if owners:
+            found[owners[0]].add(w)
+        else:
+            rest.append(w)
+    if any(len(v) > 1 for v in found.values()):
+        return _unparsed("loose: several values for one column")
+    product = next(iter(found["product"]), None)
+    region = next(iter(found["region"]), None)
+
+    kw = set(rest)
+    topic = {"product", "region"} & kw
+    kw -= {"product", "region"}
+    top_col = None
+    if "which" in kw:
+        if len(topic) != 1:
+            return _unparsed("loose: cannot tell what to rank")
+        top_col = next(iter(topic))
+        if (product if top_col == "product" else region) is not None:
+            return _unparsed("loose: ranked column is also filtered")
+    elif (("product" in topic and product is None) or ("region" in topic and region is None)):
+        return _unparsed("loose: column word without a value")
+    kw -= _LOOSE_STOP
+    kw -= {"most", "highest", "greatest", "generated"} if top_col else set()
+
+    has_orders = bool(kw & {"order", "orders"})
+    kw -= {"order", "orders"}
+    has_revenue = "revenue" in kw
+    has_avg = bool(kw & {"average", "avg", "mean"})
+    if has_revenue:
+        kw -= {"revenue", "units", "unit", "price", "multiplied", "times"}
+    if has_avg:
+        kw -= {"average", "avg", "mean"}
+    has_units = bool(kw & {"units", "unit"})
+    has_price = "price" in kw
+    kw -= {"units", "unit", "price"}
+    if kw:
+        return _unparsed(f"loose: unknown words {sorted(kw)!r}")
+
+    if top_col is not None:
+        measure = [x for x, ok in (("sum_units", has_units), ("sum_revenue", has_revenue),
+                                   ("count_orders", has_orders)) if ok]
+        if len(measure) != 1 or has_avg or has_price:
+            return _unparsed("loose: unclear ranking measure")
+        metric = f"top_{top_col}_{measure[0]}"
+    elif has_avg:
+        if has_revenue or has_orders or has_units == has_price:
+            return _unparsed("loose: unclear average")
+        metric = "avg_price" if has_price else "avg_units"
+    elif has_revenue:
+        if has_orders:
+            return _unparsed("loose: revenue and orders")
+        metric = "sum_revenue"
+    elif has_orders:
+        if has_units or has_price:
+            return _unparsed("loose: orders and units")
+        metric = "count_orders"
+    elif has_units and not has_price:
+        metric = "sum_units"
+    else:
+        return _unparsed("loose: no metric")
+    return {"file": file, "metric": metric, "product": product, "region": region,
             "month_from": month_from, "month_to": month_to}
 
 
@@ -180,7 +324,10 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             reader = csv.DictReader(fh)
             columns = [c.strip().casefold() for c in (reader.fieldnames or [])]
             reader.fieldnames = columns
-            needed = list(_REQUIRED[metric])
+            top_col, base = _split_metric(metric)
+            needed = list(_REQUIRED[base])
+            if top_col is not None:
+                needed.append(top_col)
             if spec["product"] is not None:
                 needed.append("product")
             if spec["region"] is not None:
@@ -195,6 +342,7 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             lo, hi = spec["month_from"], spec["month_to"]
             total = Decimal(0)
             count = 0
+            groups: dict[str, list] = {}
             for row in reader:
                 if product is not None and (row["product"] or "").strip().casefold() != product:
                     continue
@@ -205,12 +353,27 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
                     if not lo <= month <= hi:
                         continue
                 count += 1
+                if top_col is not None:
+                    raw = (row[top_col] or "").strip()
+                    share = (Decimal(1) if base == "count_orders" else Decimal(row["units"].strip())
+                             if base == "sum_units" else
+                             Decimal(row["units"].strip()) * Decimal(row["price"].strip()))
+                    entry = groups.setdefault(raw.casefold(), [raw, Decimal(0)])
+                    entry[1] += share
+                    continue
                 if metric in ("sum_units", "avg_units"):
                     total += Decimal(row["units"].strip())
                 elif metric == "avg_price":
                     total += Decimal(row["price"].strip())
                 elif metric == "sum_revenue":
                     total += Decimal(row["units"].strip()) * Decimal(row["price"].strip())
+        if top_col is not None:
+            if not groups:
+                return _unparsed("no rows to rank")
+            ranked = sorted(groups.values(), key=lambda e: e[1], reverse=True)
+            if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+                return _unparsed("tie for the top value")
+            return SolveResult("solved", ranked[0][0])
         if metric == "count_orders":
             return SolveResult("solved", str(count))
         if metric in ("avg_price", "avg_units"):
@@ -230,7 +393,11 @@ def solve(task: Task) -> SolveResult:
     try:
         spec = parse(task.instruction, task.workspace)
         if isinstance(spec, SolveResult):
-            return spec
+            loose = parse_loose(task.instruction, task.workspace)
+            if isinstance(loose, SolveResult):
+                return spec
+            result = execute(loose, task.workspace, task.check)
+            return result if result.status == "solved" else spec
         return execute(spec, task.workspace, task.check)
     except Exception as e:
         return _unparsed(f"unexpected error: {e!r}")

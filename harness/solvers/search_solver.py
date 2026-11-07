@@ -144,6 +144,74 @@ def parse(instruction: str) -> dict | SolveResult:
     return specs[0] if len(specs) == 1 else {"alternatives": specs}
 
 
+# ------------------------------------------------------------------ loose parser
+
+_COMPANY_ONLY = {"headquarters", "founded"}
+_STOP_WORDS = {"the", "of", "in", "is", "was", "a", "an", "does", "do", "did", "which", "what", "who", "whom",
+               "can", "could", "you", "tell", "me", "to", "year", "s", "please", "where", "when"}
+_FIELD_CUES = {
+    "born": "Born", "birth": "Born",
+    "founded": "Founded", "established": "Founded",
+    "city": "Headquarters", "headquarter": "Headquarters", "headquarters": "Headquarters",
+    "headquartered": "Headquarters", "based": "Headquarters", "located": "Headquarters",
+}
+_EMPLOYER_CUES = {"employer", "employs", "employed", "company"}
+_WORK_CUES = {"work", "works", "working"}
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _mentioned_names(question: str, kb: dict) -> list[tuple[int, int, str]]:
+    """Occurrences of kb names in the question; a name inside a longer matched name is dropped."""
+    hits = []
+    for name in kb:
+        pattern = r"(?<!\w)" + r"\s+".join(re.escape(w) for w in name.split()) + r"(?!\w)"
+        for m in re.finditer(pattern, question, _FLAGS):
+            hits.append((m.start(), m.end(), name))
+    hits = [h for h in hits if not any(o is not h and o[0] <= h[0] and h[1] <= o[1] and (o[1] - o[0]) > (h[1] - h[0])
+                                      for o in hits)]
+    return hits
+
+
+def parse_loose(instruction: str, kb: dict) -> dict | SolveResult:
+    """Fallback after the strict `parse`: exactly one kb name in the question, k = number of "mentor" words,
+    field from a closed keyword vocabulary. Any other significant word -> unparsed."""
+    question = _question(instruction)
+    if isinstance(question, SolveResult):
+        return question
+    hits = _mentioned_names(question, kb)
+    if len(hits) != 1:
+        return _unparsed(f"loose: expected exactly one known name, found {len(hits)}")
+    start, end, entity = hits[0]
+    words = _WORD.findall((question[:start] + " " + question[end:]).casefold())
+    k = 0
+    cues, employer, work, for_ = set(), False, False, False
+    for w in words:
+        if w in ("mentor", "mentors"):
+            k += 1
+        elif w in _FIELD_CUES:
+            cues.add(_FIELD_CUES[w])
+        elif w in _EMPLOYER_CUES:
+            employer = True
+        elif w in _WORK_CUES:
+            work = True
+        elif w == "for":
+            for_ = True
+        elif w not in _STOP_WORDS:
+            return _unparsed(f"loose: unknown word {w!r}")
+    if len(cues) > 1:
+        return _unparsed("loose: conflicting field words")
+    if cues:
+        field = cues.pop()
+        path = ["Mentor"] * k + (["Employer"] if (employer or work) and field in ("Headquarters", "Founded") else [])
+    elif employer or (work and for_):
+        field, path = "Employer", ["Mentor"] * k
+    elif k and not work:
+        field, path = "Mentor", ["Mentor"] * (k - 1)
+    else:
+        return _unparsed("loose: no field word")
+    return {"entity": entity, "path": path, "field": field}
+
+
 # -------------------------------------------------------------------- execution
 
 def execute(spec: dict, workspace: Path) -> SolveResult:
@@ -180,12 +248,24 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
             if _norm(nxt) not in index:
                 return SolveResult("infeasible", note=f"entity not found: {nxt!r}")
             current = nxt
+        if _norm(field) in _COMPANY_ONLY and _company_only(index, field):
+            employer = lookup(current, "Employer")  # a person asked for a company field: go through the employer
+            if employer is not None and _norm(employer) in index:
+                current = employer
         value = lookup(current, field)
         if value is None:
             return SolveResult("infeasible", note=f"{current!r} has no {field!r}")
         return SolveResult("solved", value)
     except Exception as e:
         return _unparsed(f"bad spec: {e!r}")
+
+
+def _company_only(index: dict, field: str) -> bool:
+    """True if some entity has `field` and none of the entities that have an Employer field does."""
+    owners = [fields for fields in index.values() if any(_norm(k) == _norm(field) for k in fields)]
+    if not owners:
+        return False
+    return not any(any(_norm(k) == "employer" for k in f) for f in owners)
 
 
 def _run(specs: list[dict], workspace: Path) -> SolveResult:
@@ -204,6 +284,13 @@ def solve(task: Task) -> SolveResult:
     try:
         spec = parse(task.instruction)
         if isinstance(spec, SolveResult):
+            kb_dir = Path(task.workspace) / "kb"
+            if kb_dir.is_dir():
+                loose = parse_loose(task.instruction, load_kb(kb_dir))
+                if isinstance(loose, dict):
+                    result = execute(loose, task.workspace)
+                    if result.status == "solved":
+                        return result
             return spec
         result = _run(spec.get("alternatives", [spec]), task.workspace)
         if result.status == "infeasible":

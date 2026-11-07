@@ -228,3 +228,97 @@ def test_negative_zero_normalized(tmp_path):
     ws = _ws(tmp_path, "1,w,a,1,1,-0.001\n")
     res = solve(_task(_q("What is the average price?"), ws, check="exact_str"))
     assert res.answer == "0"
+
+
+# ------------------------------------------------------- round 2: top metrics and loose parsing
+
+from harness.solvers.data_solver import parse_loose  # noqa: E402
+
+TOP_ROWS = ("1,west,widget,1,10,2\n2,west,widget,2,5,3\n3,east,gizmo,6,12,1\n4,east,gizmo,6,1,40\n")
+
+
+def _spec(metric, **kw):
+    base = {"file": "sales.csv", "metric": metric, "product": None, "region": None,
+            "month_from": None, "month_to": None}
+    return {**base, **kw}
+
+
+@pytest.mark.parametrize("metric,expected", [
+    ("top_product_sum_units", "widget"),      # widget 15 vs gizmo 13
+    ("top_product_sum_revenue", "gizmo"),     # gizmo 12+40 vs widget 20+15
+    ("top_region_count_orders", None),        # 2 vs 2: tie
+    ("top_region_sum_units", "west"),
+])
+def test_execute_top(tmp_path, metric, expected):
+    ws = _ws(tmp_path, TOP_ROWS)
+    res = execute(_spec(metric), ws, "exact_str")
+    if expected is None:
+        assert res.status == "unparsed"
+    else:
+        assert res == SolveResult("solved", expected)
+
+
+def test_execute_top_respects_filter_and_keeps_csv_case(tmp_path):
+    ws = _ws(tmp_path, "1,West,Widget,1,10,2\n2,East,Gizmo,1,3,2\n3,East,Widget,2,4,2\n")
+    assert execute(_spec("top_product_sum_units", month_from=1, month_to=1), ws, "exact_str") \
+        == SolveResult("solved", "Widget")
+
+
+def test_execute_rejects_unknown_top_metric(tmp_path):
+    ws = _ws(tmp_path, TOP_ROWS)
+    assert execute(_spec("top_month_sum_units"), ws, "exact_str").status == "unparsed"
+    assert execute(_spec("top_product_avg_price"), ws, "exact_str").status == "unparsed"
+
+
+@pytest.mark.parametrize("question,metric", [
+    ("Which product sold the most units overall?", "top_product_sum_units"),
+    ("Which product had the highest revenue?", "top_product_sum_revenue"),
+    ("Which region had the most orders?", "top_region_count_orders"),
+])
+def test_parse_top_strict(question, metric):
+    assert parse(_q(question))["metric"] == metric
+
+
+LOOSE_CASES = [
+    ("What was the total number of 'widget' units sold between month 1 and month 2 (both included)?",
+     _spec("sum_units", product="widget", month_from=1, month_to=2)),
+    ("What is the total revenue (units multiplied by price) for region 'east'?",
+     _spec("sum_revenue", region="east")),
+    ("How many orders were placed in month 6?", _spec("count_orders", month_from=6, month_to=6)),
+    ("Which product sold the most units overall?", _spec("top_product_sum_units")),
+    ("Which region generated the highest revenue?", _spec("top_region_sum_revenue")),
+]
+
+
+@pytest.mark.parametrize("question,spec", LOOSE_CASES)
+def test_parse_loose(tmp_path, question, spec):
+    ws = _ws(tmp_path, TOP_ROWS)
+    assert parse_loose(_q(question), ws) == spec
+
+
+@pytest.mark.parametrize("question", [
+    "How many units of product 'doohickey' were sold?",                  # value not in the CSV
+    "How many units of 'widget' were sold in 'east' to 'gizmo' fans?",   # stray words
+    "How many units of 'widget' and 'gizmo' were sold?",                 # two values, one column
+    "What is the revenue and the number of orders?",                     # two metrics
+    "How many units were sold in month 1 and also in month 3?",                  # two month expressions
+    "Which product in region 'east' sold the most units per capita?",    # stray word
+    "Which product was sold?",                                           # no measure
+])
+def test_parse_loose_fails_closed(tmp_path, question):
+    ws = _ws(tmp_path, TOP_ROWS)
+    assert isinstance(parse_loose(_q(question), ws), SolveResult)
+
+
+def test_solve_loose_end_to_end(tmp_path):
+    ws = _ws(tmp_path, ROWS)
+    res = solve(_task(_q("What was the total number of 'widget' units sold between month 1 and "
+                         "month 6 (both included)?"), ws))
+    assert res == SolveResult("solved", "110")
+    top = solve(_task(_q("Which product sold the most units overall?"), ws, "exact_str"))
+    assert top == SolveResult("solved", "widget")
+
+
+def test_solve_top_tie_is_unparsed(tmp_path):
+    ws = _ws(tmp_path, "1,west,widget,1,5,2\n2,east,gizmo,1,5,2\n")
+    assert solve(_task(_q("Which product sold the most units overall?"), ws, "exact_str")).status == "unparsed"

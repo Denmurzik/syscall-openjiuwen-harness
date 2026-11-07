@@ -2,6 +2,8 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from harness.result import SolveResult
 from harness.solvers.search_solver import execute, load_kb, parse, solve
 from harness.tasks import Task
@@ -195,3 +197,84 @@ def test_names_with_the_period_and_possessive(tmp_path):
                                                                          "b.md": "# Acme Inc." + chr(10) + "Employer: X" + chr(10)}))) == SolveResult("solved", "X")
     assert solve(_task(_q("In which year was Macy's founded?"), ws)) == SolveResult("solved", "1858")
     assert solve(_task(_q("In which year was Acme Inc founded?"), ws)).status == "infeasible"
+
+
+# ------------------------------------------------------- round 2: coercion and loose parsing
+
+from harness.solvers.search_solver import parse_loose  # noqa: E402
+
+_KB = {
+    "person_a.md": "# Alice Novak\n\nBorn: 1980\nEmployer: Arktika Labs\nMentor: Boris Petrov\n",
+    "person_b.md": "# Boris Petrov\n\nBorn: 1970\nEmployer: Bluefin Systems\nMentor: Chen Wang\n",
+    "person_c.md": "# Chen Wang\n\nBorn: 1960\nEmployer: Arktika Labs\nMentor: Alice Novak\n",
+    "co_a.md": "# Arktika Labs\n\nHeadquarters: Medan\nFounded: 1999\n",
+    "co_b.md": "# Bluefin Systems\n\nHeadquarters: Osaka\nFounded: 2005\n",
+}
+
+
+def _spec(entity, path, field):
+    return {"entity": entity, "path": path, "field": field}
+
+
+def test_execute_inserts_employer_for_company_field(tmp_path):
+    ws = _kb(tmp_path, _KB)
+    assert execute(_spec("Alice Novak", [], "Headquarters"), ws) == SolveResult("solved", "Medan")
+    assert execute(_spec("Alice Novak", ["Mentor"], "Founded"), ws) == SolveResult("solved", "2005")
+
+
+def test_execute_no_coercion_when_already_company_or_other_field(tmp_path):
+    ws = _kb(tmp_path, _KB)
+    assert execute(_spec("Alice Novak", ["Employer"], "Headquarters"), ws) == SolveResult("solved", "Medan")
+    assert execute(_spec("Alice Novak", [], "Born"), ws) == SolveResult("solved", "1980")
+    assert execute(_spec("Arktika Labs", [], "Founded"), ws) == SolveResult("solved", "1999")
+
+
+def test_execute_no_coercion_when_field_also_on_people(tmp_path):
+    files = dict(_KB, **{"person_d.md": "# Dan Roe\n\nBorn: 1990\nEmployer: Arktika Labs\nFounded: 2001\n"})
+    ws = _kb(tmp_path, files)
+    assert execute(_spec("Alice Novak", [], "Founded"), ws).status == "infeasible"
+
+
+LOOSE = {
+    "In which city does the mentor of Alice Novak work?": ("Alice Novak", ["Mentor", "Employer"], "Headquarters"),
+    "What is the birth year of Alice Novak's mentor?": ("Alice Novak", ["Mentor"], "Born"),
+    "Can you tell me the year Alice Novak was born?": ("Alice Novak", [], "Born"),
+    "Who is the mentor of Alice Novak?": ("Alice Novak", [], "Mentor"),
+    "Who is the mentor of the mentor of Alice Novak?": ("Alice Novak", ["Mentor"], "Mentor"),
+    "In which year was Alice Novak's employer founded?": ("Alice Novak", ["Employer"], "Founded"),
+    "Who is the employer of Alice Novak's mentor?": ("Alice Novak", ["Mentor"], "Employer"),
+    "Where is the city of Alice Novak's employer based?": ("Alice Novak", ["Employer"], "Headquarters"),
+}
+
+
+@pytest.mark.parametrize("question", list(LOOSE))
+def test_parse_loose_specs(tmp_path, question):
+    kb = load_kb(_kb(tmp_path, _KB) / "kb")
+    entity, path, field = LOOSE[question]
+    assert parse_loose(_q(question), kb) == _spec(entity, path, field)
+
+
+@pytest.mark.parametrize("question", [
+    "Which of Alice Novak and Boris Petrov is older?",          # two names
+    "How tall is Alice Novak?",                                  # unknown word
+    "In which city does the cousin of Alice Novak work?",        # unknown word
+    "Where does Alice Novak work?",                              # no field cue
+    "What do we know about Zed Nobody?",                         # no known name
+    "Tell me the year in which Alice Novak was born twice.",     # stray word
+])
+def test_parse_loose_fails_closed(tmp_path, question):
+    kb = load_kb(_kb(tmp_path, _KB) / "kb")
+    assert isinstance(parse_loose(_q(question), kb), SolveResult)
+
+
+def test_solve_uses_loose_fallback(tmp_path):
+    ws = _kb(tmp_path, _KB)
+    task = _task(_q("In which city does the mentor of Alice Novak work?"), ws)
+    assert solve(task) == SolveResult("solved", "Osaka")
+    assert solve(_task(_q("Can you tell me the year Alice Novak was born?"), ws)) == SolveResult("solved", "1980")
+
+
+def test_solve_loose_does_not_guess_when_chain_missing(tmp_path):
+    ws = _kb(tmp_path, _KB)
+    task = _task(_q("What is the birth year of Arktika Labs' employer?"), ws)
+    assert solve(task).status == "unparsed"
