@@ -21,7 +21,12 @@ def _cut(b: bytes | str | None) -> str:
         return ""
     if isinstance(b, bytes):
         b = b.decode("utf-8", errors="replace")
-    return b[:MAX_OUT]
+    if len(b) <= MAX_OUT:
+        return b
+    mark = "
+...[truncated]...
+"
+    return b[:2048] + mark + b[-(MAX_OUT - 2048 - len(mark)):]
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -58,6 +63,15 @@ def run_python(args: list[str], cwd: Path, timeout: float, stdin: str | None = N
         return ProcResult(proc.returncode, _cut(out), _cut(err), False)
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
-        out, err = proc.communicate()
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired as e:
+            out, err = e.stdout, e.stderr
+            for pipe in (proc.stdout, proc.stderr, proc.stdin):
+                try:
+                    if pipe:
+                        pipe.close()
+                except Exception:
+                    pass
         rc = proc.returncode if proc.returncode not in (0, None) else -9
         return ProcResult(rc, _cut(out), _cut(err), True)
