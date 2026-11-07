@@ -99,11 +99,11 @@ def test_fenced_json_accepted():
     assert asyncio.run(request_spec("math", "t", client)) == {"start": 2, "ops": []}
 
 
-def test_impossible_is_infeasible():
+def test_impossible_is_unparsed():
     tasks = [_math_task("m1", _theft(1, 2))]
     template = templatize(tasks[0].instruction)[0]
     out = asyncio.run(solve_group("math", template, _members(tasks), FakeClient('{"impossible": true}')))
-    assert out["m1"].status == "infeasible"
+    assert out["m1"].status == "unparsed"
 
 
 def test_unavailable_makes_group_unparsed_and_budget_propagates():
@@ -167,3 +167,15 @@ def test_data_group():
     client = FakeClient(json.dumps(spec))
     out = asyncio.run(solve_group("data_analysis", template, [(t, slots)], client))
     assert out["d1"].answer == "158", (out, slots)
+
+
+def test_product_operand_list_collapsed():
+    def ship(start, n, d):
+        return (f"A warehouse starts with {start} boxes. It ships {n} boxes per day for {d} days. "
+                "How many boxes does it have at the end? Work only inside the current directory.")
+    tasks = [_math_task("m1", ship(1000, 7, 3)), _math_task("m2", ship(500, 20, 4))]
+    template = templatize(tasks[0].instruction)[0]
+    assert "{N2}" in template and "{N3}" in template
+    spec = {"start": "{N1}", "ops": [["-", ["{N2}", "{N3}"]]]}
+    out = asyncio.run(solve_group("math", template, _members(tasks), FakeClient(json.dumps(spec))))
+    assert [out[k].answer for k in ("m1", "m2")] == ["979", "420"]

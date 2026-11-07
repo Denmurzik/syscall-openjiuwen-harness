@@ -26,8 +26,8 @@ _SCHEMAS = {
         "You turn a short arithmetic word problem into a JSON specification.\n"
         "Schema: {\"start\": <integer>, \"ops\": [[<op>, <integer>], ...]}\n"
         "start is the initial quantity. ops are applied in order to the running value; op is one of "
-        "\"+\", \"-\", \"*\", \"//\" (integer division rounding down). Each operand is exactly one integer "
-        "(or one placeholder); no expressions. Examples: 'it loses N boxes' is [\"-\", N]; 'receives N boxes' is "
+        "\"+\", \"-\", \"*\", \"//\" (integer division rounding down). Each operand is one integer "
+        "(or one placeholder), or a list of integers/placeholders meaning their product; no other expressions. Examples: 'it loses N boxes' is [\"-\", N]; 'receives N boxes' is "
         "[\"+\", N]; 'doubled' is [\"*\", 2]; 'split equally into N parts, keeps one share rounded down' is "
         "[\"//\", N]. If a step needs a product of two numbers from the text (like 'N per day for M days'), "
         "it cannot be expressed: return {\"impossible\": true}.\n"
@@ -107,9 +107,27 @@ async def request_spec(task_type: str, template: str, client: LLMClient) -> dict
     return None
 
 
+def _collapse_products(spec: object) -> object:
+    """Math ops may carry a list operand meaning a product; the executor wants one integer."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("ops"), list):
+        return spec
+    ops = []
+    for item in spec["ops"]:
+        if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[1], (list, tuple)):
+            factors = item[1]
+            if not factors or not all(isinstance(f, int) and not isinstance(f, bool) for f in factors):
+                return spec  # leave malformed; the executor reports unparsed
+            prod = 1
+            for f in factors:
+                prod *= f
+            item = [item[0], prod]
+        ops.append(item)
+    return {**spec, "ops": ops}
+
+
 def _execute(task: Task, spec: object) -> SolveResult:
     if task.task_type == "math":
-        return math_solver.execute(spec)
+        return math_solver.execute(_collapse_products(spec))
     if task.task_type == "data_analysis":
         return data_solver.execute(spec, task.workspace, task.check)
     if task.task_type == "search":
@@ -133,7 +151,7 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
     if spec is None:
         return all_members(SolveResult("unparsed", note="model returned no valid JSON spec"))
     if spec.get("impossible") is True:
-        return all_members(SolveResult("infeasible", note="model: spec impossible"))
+        return all_members(SolveResult("unparsed", note="model: spec impossible"))
     out: dict[str, SolveResult] = {}
     for task, slots in members:
         try:
