@@ -14,7 +14,10 @@ def run_program(code: str, workspace: Path, timeout: float = 20) -> ProcResult:
     tmp = Path(tempfile.mkdtemp(prefix="prog_run_"))
     try:
         ws = tmp / "ws"
-        shutil.copytree(workspace, ws, ignore=shutil.ignore_patterns("__pycache__"))
+        if Path(workspace).is_dir():
+            shutil.copytree(workspace, ws, ignore=shutil.ignore_patterns("__pycache__"))
+        else:  # tasks without files (e.g. math) have no workspace directory
+            ws.mkdir()
         prog = tmp / "prog.py"
         prog.write_text(code, encoding="utf-8")
         return run_python([str(prog)], cwd=ws, timeout=timeout)
