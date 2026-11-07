@@ -214,18 +214,18 @@ def test_single_event_loop_across_2a_and_2b(tmp_path, monkeypatch):
     loops = []
 
     async def grp(ttype, template, members, client):
-        loops.append(id(asyncio.get_running_loop()))
+        loops.append(asyncio.get_running_loop())
         return {t.task_id: SolveResult("unparsed") for t, _ in members}
 
     async def prog(task, client):
-        loops.append(id(asyncio.get_running_loop()))
+        loops.append(asyncio.get_running_loop())
         return SolveResult("unparsed")
 
     monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
     monkeypatch.setattr(scheduler, "solve_group", grp)
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     scheduler.run(tasks, 100000, object())
-    assert len(loops) == 2 and loops[0] == loops[1]
+    assert len(loops) == 2 and loops[0] is loops[1]
 
 
 def test_phase1_does_not_import_openjiuwen(tmp_path):

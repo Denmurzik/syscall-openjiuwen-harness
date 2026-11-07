@@ -43,15 +43,29 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         pass
 
 
+def make_limits(timeout: float):
+    """preexec_fn that sets RLIMIT_AS / RLIMIT_CPU; never raises (a failing preexec breaks every Popen)."""
+    import resource
+
+    def limits():
+        for res, wanted in ((resource.RLIMIT_AS, _RLIMIT_AS),
+                            (resource.RLIMIT_CPU, int(timeout) * 4 + 5)):
+            try:
+                _, hard = resource.getrlimit(res)
+                if hard != resource.RLIM_INFINITY:
+                    wanted = min(wanted, hard)
+                resource.setrlimit(res, (wanted, wanted))
+            except Exception:
+                pass
+    return limits
+
+
 def run_python(args: list[str], cwd: Path, timeout: float, stdin: str | None = None) -> ProcResult:
     kwargs: dict = {}
     if os.name == "posix":
         import resource
 
-        def limits():
-            resource.setrlimit(resource.RLIMIT_AS, (_RLIMIT_AS, _RLIMIT_AS))
-            cpu = int(timeout) + 5
-            resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+        limits = make_limits(timeout)
 
         kwargs.update(start_new_session=True, preexec_fn=limits)
     proc = subprocess.Popen(
