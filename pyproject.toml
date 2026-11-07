@@ -1,0 +1,11 @@
+[project]
+name = "harness"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+norecursedirs = ["fixtures"]
+markers = ["live: tests that call the real LLM endpoint"]
+addopts = '-m "not live"'
