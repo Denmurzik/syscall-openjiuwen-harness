@@ -351,3 +351,14 @@ def test_bench_grammar_missing_entity_is_infeasible(tmp_path):
     assert solve(_task(_q("Which company is the employer of Zed Nobody?"), ws)).status == "infeasible"
     assert solve(_task(_q("For which company does Chen Wang work?"), _kb(tmp_path / "x", {
         "p.md": "# Chen Wang\n\nBorn: 1960\n"}))).status == "infeasible"
+
+
+@pytest.mark.parametrize("q", [
+    "Who is the former mentor of Alice Novak?",
+    "Who is the mentee of Alice Novak?",
+    "Which company does Alice Novak not work for?",
+    "In which year were Alice Novak and Boris Petrov born?",
+    "Who mentors Alice Novak and Boris Petrov?",
+])
+def test_qualified_entity_is_unparsed_not_infeasible(q):
+    assert solve(_task(_q(q))).status != "infeasible"

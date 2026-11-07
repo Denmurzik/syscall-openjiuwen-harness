@@ -53,6 +53,19 @@ def _norm(s: str) -> str:
     return " ".join(s.split()).casefold()
 
 
+_QUALIFIERS = {"former", "current", "not", "and", "or", "mentee", "ex", "previous", "new", "old", "of", "the",
+               "who", "whose", "that", "his", "her", "their", "its", "an", "a", "as", "by", "at", "to"}
+_NAME_TOKEN = re.compile(r"[A-Z][\w'’-]*\.?$")
+
+
+def _clean_name(entity: str) -> bool:
+    """Capitalised tokens only (initials and hyphens allowed), no qualifier words."""
+    tokens = entity.split()
+    if not tokens or len(tokens) > 5:
+        return False
+    return all(t.casefold() not in _QUALIFIERS and _NAME_TOKEN.match(t) for t in tokens)
+
+
 def _is_str(v) -> bool:
     return isinstance(v, str) and bool(v.strip())
 
@@ -281,6 +294,8 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
             return None
 
         if _norm(entity) not in index:
+            if not _clean_name(entity):
+                return _unparsed(f"start entity not a clean name: {entity!r}")
             return SolveResult("infeasible", note=f"start entity not found: {entity!r}")
         current = entity
         for key in path:

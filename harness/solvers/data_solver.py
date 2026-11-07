@@ -463,7 +463,8 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             return SolveResult("solved", str(count))
         if metric in ("max_units", "min_units"):
             if best is None:
-                if (product is not None and product not in seen_products) or                         (region is not None and region not in seen_regions):
+                if ((product is not None and product not in seen_products)
+                        or (region is not None and region not in seen_regions)):
                     return SolveResult("infeasible", note="the product/region does not occur in the file")
                 return _unparsed("no rows for the extreme value")
             return SolveResult("solved", _fmt(best, check))
