@@ -11,7 +11,7 @@ _FLAGS = re.IGNORECASE
 _FILE = re.compile(r"The file (\S+\.csv) has columns ([\w,]+)(?: \(\d+ rows\))?\.", _FLAGS)
 
 # Filter fragments, removed from the question text before the metric is matched.
-_PRODUCT = re.compile(r"\s+of product '(\w+)'", _FLAGS)
+_PRODUCT = re.compile(r"\s+(?:of|for) product '(\w+)'", _FLAGS)
 # (pattern, value is quoted); an unquoted region must be confirmed against the CSV.
 _REGIONS = [
     (re.compile(r"\s+in region '(\w+)'", _FLAGS), True),
@@ -30,11 +30,27 @@ _MONTH = re.compile(r"\s+in month (\d+)(?!\d)", _FLAGS)
 _METRICS = [
     ("sum_units", re.compile(
         r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total units(?: sold)?)\?", _FLAGS)),
-    ("sum_revenue", re.compile(r"what (?:is|was) (?:the )?(?:total )?revenue\?", _FLAGS)),
+    ("sum_revenue", re.compile(
+        r"what (?:is|was) (?:the )?(?:total )?revenue(?: \(units multiplied by price\))?\?", _FLAGS)),
     ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)\?", _FLAGS)),
     ("avg_price", re.compile(r"what (?:is|was) the average price\?", _FLAGS)),
-    ("avg_units", re.compile(r"what (?:is|was) the average units(?: per order)?\?", _FLAGS)),
+    ("avg_units", re.compile(
+        r"what (?:is|was) the average (?:number of )?units(?: per order| in an order)?\?", _FLAGS)),
+    ("max_units", re.compile(
+        r"what (?:is|was) the (?:largest|biggest|highest|maximum) (?:number of )?units?"
+        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\?", _FLAGS)),
+    ("min_units", re.compile(
+        r"what (?:is|was) the (?:smallest|lowest|minimum) (?:number of )?units?"
+        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\?", _FLAGS)),
 ]
+# ", rounded to N decimal places" (only for averages and revenue); N=2 is the default.
+_ROUND = re.compile(r",?\s+rounded to (\d+) decimal places?(?=\s*\?)", _FLAGS)
+# "What is the total discount given?": a quantity no sales column can provide.
+_ABSENT = re.compile(
+    r"what (?:is|was) the total (discount|tax|shipping|profit|cost|margin|commission|rebate|refund|tip)s?"
+    r"(?: given| charged| paid| applied| collected| amount)?\?", _FLAGS)
+_ROUNDABLE = {"sum_revenue", "avg_price", "avg_units"}
+_MAX_DECIMALS = 6
 _TOP_COLUMNS = ("product", "region")
 _TOP_BASES = ("sum_units", "sum_revenue", "count_orders")
 _TOP_NAMES = {f"top_{c}_{b}" for c in _TOP_COLUMNS for b in _TOP_BASES}
@@ -51,8 +67,11 @@ _REQUIRED = {
     "count_orders": (),
     "avg_price": ("price",),
     "avg_units": ("units",),
+    "max_units": ("units",),
+    "min_units": ("units",),
 }
 _KEYS = {"file", "metric", "product", "region", "month_from", "month_to"}
+_OPTIONAL_KEYS = {"decimals"}
 
 
 def _unparsed(note: str) -> SolveResult:
@@ -132,15 +151,32 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
     if ranges:
         month_from, month_to = ranges[0]
 
+    found, text = _take(_ROUND, text)
+    if found is False:
+        return _unparsed("repeated rounding clause")
+    decimals = int(found.group(1)) if found else None
     text = " ".join(text.split())
     metrics = [name for name, rx in _METRICS if rx.fullmatch(text)]
     top = _TOP_Q.fullmatch(text)
     if top is not None:
         metrics.append(f"top_{top.group(1).lower()}_{_TOP_MEASURE[(top.group(2) or top.group(3)).lower()]}")
     if len(metrics) != 1:
+        absent = _ABSENT.fullmatch(text)
+        if absent is not None and workspace is not None:
+            cols = _csv_header_and_values(Path(workspace) / file)
+            if cols is not None and absent.group(1).casefold() not in cols[0]:
+                return SolveResult("infeasible", note=f"the file has no {absent.group(1).casefold()} column")
         return _unparsed(f"unrecognized question: {sentences[1]!r}")
-    return {"file": file, "metric": metrics[0], "product": product, "region": region,
-            "month_from": month_from, "month_to": month_to}
+    return _with_decimals({"file": file, "metric": metrics[0], "product": product, "region": region,
+                           "month_from": month_from, "month_to": month_to}, decimals)
+
+
+def _with_decimals(spec: dict, decimals: int | None) -> dict | SolveResult:
+    if decimals is None:
+        return spec
+    if spec["metric"] not in _ROUNDABLE or decimals > _MAX_DECIMALS:
+        return _unparsed(f"unsupported rounding to {decimals} places for {spec['metric']}")
+    return {**spec, "decimals": decimals}
 
 
 def _split_metric(metric: str) -> tuple[str | None, str]:
@@ -161,6 +197,8 @@ _LOOSE_MONTHS = re.compile(
     r"(?:\b(between|from)\s+)?\bmonths?\s+(\d+)"
     r"(?:\s*(?:through|to|-)\s*(?:months?\s+)?(\d+)|\s+and\s+(?:months?\s+)?(\d+))?(?!\d)", _FLAGS)
 _WORD = re.compile(r"[a-z0-9]+")
+_MAX_WORDS = {"largest", "biggest", "maximum", "max", "highest"}
+_MIN_WORDS = {"smallest", "lowest", "minimum", "min"}
 
 
 def _csv_header_and_values(path: Path) -> tuple[list[str], dict[str, set[str]]] | None:
@@ -195,6 +233,10 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
         return _unparsed("loose: cannot read the file")
     _, values = data
     text = sentences[1].casefold()
+    found, text = _take(_ROUND, text)
+    if found is False:
+        return _unparsed("loose: repeated rounding clause")
+    decimals = int(found.group(1)) if found else None
 
     ranges = list(_LOOSE_MONTHS.finditer(text))
     if len(ranges) > 1:
@@ -241,6 +283,16 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
 
     has_orders = bool(kw & {"order", "orders"})
     kw -= {"order", "orders"}
+    extreme = None
+    if kw & _MAX_WORDS:
+        extreme = "max_units"
+    if kw & _MIN_WORDS:
+        if extreme:
+            return _unparsed("loose: both largest and smallest")
+        extreme = "min_units"
+    kw -= _MAX_WORDS | _MIN_WORDS
+    single = bool(kw & {"single", "one"})
+    kw -= {"single", "one", "per"} if extreme else set()
     has_revenue = "revenue" in kw
     has_avg = bool(kw & {"average", "avg", "mean"})
     if has_revenue:
@@ -253,7 +305,12 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
     if kw:
         return _unparsed(f"loose: unknown words {sorted(kw)!r}")
 
-    if top_col is not None:
+    if extreme is not None:
+        if (top_col is not None or has_avg or has_revenue or has_price or not has_units
+                or not has_orders or not single):
+            return _unparsed("loose: unclear largest/smallest order")
+        metric = extreme
+    elif top_col is not None:
         measure = [x for x, ok in (("sum_units", has_units), ("sum_revenue", has_revenue),
                                    ("count_orders", has_orders)) if ok]
         if len(measure) != 1 or has_avg or has_price:
@@ -275,8 +332,8 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
         metric = "sum_units"
     else:
         return _unparsed("loose: no metric")
-    return {"file": file, "metric": metric, "product": product, "region": region,
-            "month_from": month_from, "month_to": month_to}
+    return _with_decimals({"file": file, "metric": metric, "product": product, "region": region,
+                           "month_from": month_from, "month_to": month_to}, decimals)
 
 
 def _is_int(v) -> bool:
@@ -285,8 +342,13 @@ def _is_int(v) -> bool:
 
 def _valid_spec(spec) -> str | None:
     """Return an error description, or None if the spec is well formed."""
-    if not isinstance(spec, dict) or set(spec) != _KEYS:
+    if not isinstance(spec, dict) or not _KEYS <= set(spec) <= _KEYS | _OPTIONAL_KEYS:
         return "bad spec keys"
+    d = spec.get("decimals", 2)
+    if not _is_int(d) or not 0 <= d <= _MAX_DECIMALS:
+        return f"bad decimals: {d!r}"
+    if "decimals" in spec and spec["metric"] not in _ROUNDABLE:
+        return "decimals not applicable to this metric"
     f = spec["file"]
     if (not isinstance(f, str) or not f or f in (".", "..") or "/" in f or "\\" in f
             or ":" in f or "\0" in f):
@@ -305,14 +367,18 @@ def _valid_spec(spec) -> str | None:
     return None
 
 
-def _fmt(value: Decimal, check: str | None) -> str:
+def _fmt(value: Decimal, check: str | None, decimals: int | None = None) -> str:
+    """`decimals=None`: two places with trailing zeros stripped; an explicit "rounded to N decimal places"
+    in the question gives exactly N places ("56.00")."""
     if check == "exact_int":
         return str(int(value.quantize(Decimal(1), rounding=ROUND_HALF_UP)))
-    value = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    value = value.quantize(Decimal(1).scaleb(-(2 if decimals is None else decimals)), rounding=ROUND_HALF_UP)
     text = format(value, "f")
-    if "." in text:
+    if decimals is None and "." in text:
         text = text.rstrip("0").rstrip(".")
-    return "0" if text == "-0" else text
+    if text.startswith("-") and not text.strip("-0."):
+        text = text[1:]
+    return text
 
 
 def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
@@ -346,12 +412,21 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             lo, hi = spec["month_from"], spec["month_to"]
             total = Decimal(0)
             count = 0
+            best: Decimal | None = None
             groups: dict[str, list] = {}
+            seen_products: set[str] = set()
+            seen_regions: set[str] = set()
             for row in reader:
-                if product is not None and (row["product"] or "").strip().casefold() != product:
-                    continue
-                if region is not None and (row["region"] or "").strip().casefold() != region:
-                    continue
+                if product is not None:
+                    value = (row["product"] or "").strip().casefold()
+                    seen_products.add(value)
+                    if value != product:
+                        continue
+                if region is not None:
+                    value = (row["region"] or "").strip().casefold()
+                    seen_regions.add(value)
+                    if value != region:
+                        continue
                 if lo is not None:
                     month = int(row["month"].strip())
                     if not lo <= month <= hi:
@@ -367,7 +442,11 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
                     entry = groups.setdefault(raw.casefold(), [raw, Decimal(0)])
                     entry[1] += share
                     continue
-                if metric in ("sum_units", "avg_units"):
+                if metric in ("max_units", "min_units"):
+                    units = Decimal(row["units"].strip())
+                    if best is None or (units > best if metric == "max_units" else units < best):
+                        best = units
+                elif metric in ("sum_units", "avg_units"):
                     total += Decimal(row["units"].strip())
                 elif metric == "avg_price":
                     total += Decimal(row["price"].strip())
@@ -382,11 +461,17 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             return SolveResult("solved", ranked[0][0])
         if metric == "count_orders":
             return SolveResult("solved", str(count))
+        if metric in ("max_units", "min_units"):
+            if best is None:
+                if (product is not None and product not in seen_products) or                         (region is not None and region not in seen_regions):
+                    return SolveResult("infeasible", note="the product/region does not occur in the file")
+                return _unparsed("no rows for the extreme value")
+            return SolveResult("solved", _fmt(best, check))
         if metric in ("avg_price", "avg_units"):
             if count == 0:
                 return SolveResult("solved", "0", note="average of empty selection")
             total = total / count
-        return SolveResult("solved", _fmt(total, check))
+        return SolveResult("solved", _fmt(total, check, spec.get("decimals")))
     except UnicodeDecodeError as e:
         return SolveResult("infeasible", note=f"cannot decode file: {e!r}")
     except (ValueError, InvalidOperation, AttributeError, KeyError, TypeError, csv.Error) as e:

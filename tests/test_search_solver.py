@@ -308,3 +308,46 @@ def test_parse_loose_canonical_chains(tmp_path, question, spec):
         assert res == _spec("Alice Novak", [], "Mentor")
     else:
         assert res == _spec(*spec)
+
+
+# ---------------------------------------------------------------- bench grammar (task 17)
+
+@pytest.mark.parametrize("question,answer", [
+    ("Which company is the employer of Alice Novak?", "Arktika Labs"),
+    ("Which company is the employer of the mentor of Alice Novak?", "Bluefin Systems"),
+    ("Which company is the employer of the mentor of the mentor of Alice Novak?", "Arktika Labs"),
+    ("For which company does Alice Novak work?", "Arktika Labs"),
+    ("For which company does the mentor of the mentor of Alice Novak work?", "Arktika Labs"),
+    ("Name the mentor of Alice Novak.", "Boris Petrov"),
+    ("Name the mentor of the mentor of the mentor of Alice Novak.", "Alice Novak"),
+    ("In which city does the employer of Alice Novak have its headquarters?", "Medan"),
+    ("In which city does the employer of the mentor of Alice Novak have its headquarters?", "Osaka"),
+    ("What year was the employer of Boris Petrov founded?", "2005"),
+    ("Can you tell me the year Boris Petrov was born?", "1970"),
+    ("Can you tell me the year the mentor of Alice Novak was born?", "1970"),
+])
+def test_bench_grammar(tmp_path, question, answer):
+    res = solve(_task(_q(question), _kb(tmp_path, _KB)))
+    assert (res.status, res.answer) == ("solved", answer)
+
+
+def test_initial_in_name_is_not_a_sentence_end(tmp_path):
+    files = dict(_KB, **{"person_d.md": "# Dan T. Roe\n\nBorn: 1990\nEmployer: Arktika Labs\nMentor: Boris Petrov\n"})
+    ws = _kb(tmp_path, files)
+    res = solve(_task(_q("Who is the mentor of the mentor of Dan T. Roe?"), ws))
+    assert (res.status, res.answer) == ("solved", "Chen Wang")
+    res = solve(_task(_q("For which company does Dan T. Roe work?"), ws))
+    assert (res.status, res.answer) == ("solved", "Arktika Labs")
+
+
+def test_extra_real_sentence_still_rejected(tmp_path):
+    ws = _kb(tmp_path, _KB)
+    res = solve(_task(_q("Who is the mentor of Alice Novak? Also tell me about Chen Wang."), ws))
+    assert res.status == "unparsed"
+
+
+def test_bench_grammar_missing_entity_is_infeasible(tmp_path):
+    ws = _kb(tmp_path, _KB)
+    assert solve(_task(_q("Which company is the employer of Zed Nobody?"), ws)).status == "infeasible"
+    assert solve(_task(_q("For which company does Chen Wang work?"), _kb(tmp_path / "x", {
+        "p.md": "# Chen Wang\n\nBorn: 1960\n"}))).status == "infeasible"

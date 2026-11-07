@@ -342,3 +342,112 @@ def test_parse_loose_between_and_is_a_range(tmp_path):
 def test_top_ignores_rows_with_empty_key(tmp_path):
     ws = _ws(tmp_path, "1,west,widget,1,5,2\n2,west,,1,50,2\n3,east,gizmo,1,3,2\n")
     assert execute(_spec("top_product_sum_units"), ws, "exact_str") == SolveResult("solved", "widget")
+
+
+# ---------------------------------------------------------------- bench grammar (task 17)
+
+def _solve_q(tmp_path, question, check=None):
+    return solve(_task(_q(question), _ws(tmp_path, ROWS), check))
+
+
+@pytest.mark.parametrize("question,answer", [
+    ("What is the largest number of units in a single order?", "100"),
+    ("What is the smallest number of units in a single order?", "5"),
+    ("What is the largest number of units in a single order in region 'west'?", "10"),
+    ("What is the smallest number of units in a single order for product 'widget' in region 'west'?", "5"),
+    ("What is the largest number of units in a single order in months 6 through 6 inclusive?", "100"),
+    ("What is the smallest number of units in a single order in month 6 for product 'gizmo'?", "7"),
+    ("What is the average price, rounded to 2 decimal places?", "2.50"),
+    ("What is the average number of units per order, rounded to 2 decimal places?", "30.50"),
+    ("What is the average price in region 'west' in months 1 through 12 inclusive, rounded to 2 decimal places?",
+     "3.00"),
+    ("What is the average price in region 'west', rounded to 3 decimal places?", "3.000"),
+    ("What is the average number of units per order for product 'widget', rounded to 1 decimal places?", "38.3"),
+    ("What is the average number of units per order for product 'widget', rounded to 0 decimal places?", "38"),
+])
+def test_bench_grammar(tmp_path, question, answer):
+    res = _solve_q(tmp_path, question)
+    assert (res.status, res.answer) == ("solved", answer)
+
+
+def test_rounding_places_other_than_two(tmp_path):
+    ws = _ws(tmp_path, "1,west,widget,1,1,1\n2,west,widget,1,2,1\n3,west,widget,1,2,1\n")
+    res = solve(_task(_q("What is the average number of units per order, rounded to 3 decimal places?"),
+                      ws, None))
+    assert res.answer == "1.667"
+
+
+@pytest.mark.parametrize("question", [
+    "What is the total units sold, rounded to 1 decimal places?",        # rounding a count/sum of units
+    "How many orders were placed, rounded to 2 decimal places?",
+    "What is the average price, rounded to 9 decimal places?",           # absurd precision
+    "What is the average price, rounded to 2 decimal places, rounded to 3 decimal places?",
+    "What is the largest number of units in a single order, rounded to 3 decimal places?",
+])
+def test_rounding_fails_closed(tmp_path, question):
+    assert _solve_q(tmp_path, question).status == "unparsed"
+
+
+def test_extreme_over_empty_month_selection_is_unparsed(tmp_path):
+    res = _solve_q(tmp_path, "What is the largest number of units in a single order in month 11?")
+    assert res.status == "unparsed"
+
+
+def test_execute_rejects_bad_decimals(tmp_path):
+    ws = _ws(tmp_path, ROWS)
+    base = {"file": "sales.csv", "metric": "avg_price", "product": None, "region": None,
+            "month_from": None, "month_to": None}
+    assert execute({**base, "decimals": 3}, ws, None).status == "solved"
+    for bad in (-1, 7, True, "2", 2.0):
+        assert execute({**base, "decimals": bad}, ws, None).status == "unparsed"
+    assert execute({**base, "metric": "sum_units", "decimals": 3}, ws, None).status == "unparsed"
+    assert execute({**base, "metric": "max_units"}, ws, None).answer == "100"
+
+
+@pytest.mark.parametrize("question", [
+    "What is the largest and smallest number of units in a single order?",
+    "What is the largest number of units in orders?",                     # no 'single'
+    "Which product had the largest number of units in a single order?",
+])
+def test_extreme_loose_fails_closed(tmp_path, question):
+    assert _solve_q(tmp_path, question).status == "unparsed"
+
+
+def test_extreme_loose_paraphrase(tmp_path):
+    res = _solve_q(tmp_path, "What was the maximum number of units in one single order for widget?")
+    assert (res.status, res.answer) == ("solved", "100")
+
+
+def test_explicit_rounding_keeps_trailing_zeros_but_plain_question_does_not(tmp_path):
+    ws = _ws(tmp_path, "1,w,a,1,2,56\n2,w,a,1,2,56\n")
+    assert solve(_task(_q("What is the average price, rounded to 2 decimal places?"), ws, "exact_str")).answer == "56.00"
+    assert solve(_task(_q("What is the average price?"), ws, "exact_str")).answer == "56"
+    assert solve(_task(_q("What is the average price, rounded to 2 decimal places?"), ws, "exact_int")).answer == "56"
+
+
+@pytest.mark.parametrize("i,q", enumerate([
+    "What is the total discount given?", "What is the total discount given in region 'west'?",
+    "What is the total tax in months 1 through 3 inclusive for product 'widget'?"]))
+def test_absent_column_is_infeasible(tmp_path, i, q):
+    assert _solve_q(tmp_path, q).status == "infeasible"
+
+
+def test_present_column_is_not_declared_absent(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "sales.csv").write_text("order_id,region,product,month,units,price,discount\n1,w,a,1,2,3,1\n")
+    assert solve(_task(_q("What is the total discount given?"), ws)).status == "unparsed"
+
+
+def test_revenue_parenthetical(tmp_path):
+    res = _solve_q(tmp_path, "What is the total revenue (units multiplied by price) in region 'west'?")
+    assert (res.status, res.answer) == ("solved", "63")
+
+
+def test_extreme_of_unknown_product_is_infeasible_but_empty_month_is_not_declared_so(tmp_path):
+    assert _solve_q(tmp_path, "What is the largest number of units in a single order for product 'doohickey'?"
+                    ).status == "infeasible"
+    ws = tmp_path / "w2"
+    ws.mkdir()
+    res = _solve_q(ws, "What is the largest number of units in a single order in month 11?")
+    assert res.status == "unparsed"

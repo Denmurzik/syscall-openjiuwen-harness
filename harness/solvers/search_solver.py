@@ -27,9 +27,20 @@ _QUESTIONS = [
     (re.compile(r"who is (.+)['\u2019]s mentor", _FLAGS), "Mentor"),
     (re.compile(r"which company does (.+) work for", _FLAGS), "Employer"),
     (re.compile(r"who employs (.+)", _FLAGS), "Employer"),
+    (re.compile(r"which company is the employer of (.+)", _FLAGS), "Employer"),
+    (re.compile(r"which company employs (.+)", _FLAGS), "Employer"),
+    (re.compile(r"for which company does (.+) work", _FLAGS), "Employer"),
+    (re.compile(r"name the mentor of (.+)", _FLAGS), "Mentor"),
+    (re.compile(r"name the employer of (.+)", _FLAGS), "Employer"),
+    (re.compile(r"in which city does (the employer of .+) have its headquarters", _FLAGS), "Headquarters"),
+    (re.compile(r"in which city does (the employer of .+) have its head office", _FLAGS), "Headquarters"),
+    (re.compile(r"what year was (.+) founded", _FLAGS), "Founded"),
+    (re.compile(r"(?:can you tell me|tell me) the year (.+) was born", _FLAGS), "Born"),
+    (re.compile(r"(?:can you tell me|tell me) the year (.+) was founded", _FLAGS), "Founded"),
     (re.compile(r"who is (.+)['\u2019]s employer", _FLAGS), "Employer"),
 ]
 
+_INITIAL_END = re.compile(r"\s[A-Z]\.$")
 _POSSESSIVE = re.compile(r"(.+)['\u2019]s (employer|mentor)", _FLAGS)
 _THE_OF = re.compile(r"the (employer|mentor) of (.+)", _FLAGS)
 
@@ -102,8 +113,14 @@ def _parse_entity(expr: str, bare: bool = False) -> list[tuple[str, list[str]]]:
 
 def _question(instruction: str) -> str | SolveResult:
     question = None
-    for sentence in split_sentences(strip_boilerplate(instruction)):
-        sentence = " ".join(sentence.split())
+    parts = [" ".join(p.split()) for p in split_sentences(strip_boilerplate(instruction))]
+    sentences: list[str] = []
+    for part in parts:  # "Jonas T. Dubois": a single-letter initial does not end a sentence
+        if sentences and _INITIAL_END.search(sentences[-1]):
+            sentences[-1] += " " + part
+        else:
+            sentences.append(part)
+    for sentence in sentences:
         if _INTRO.fullmatch(sentence):
             continue
         if question is not None:
