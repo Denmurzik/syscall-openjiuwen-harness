@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import httpx
+import openai
 import pytest
 
 from harness import llm as llm_mod
@@ -97,13 +99,151 @@ def test_429_retried_then_succeeds(monkeypatch):
     assert sleeps == [2, 4] and fake.calls == 3
 
 
-def test_three_consecutive_failures_exhaust():
+def _wrapped(exc):
+    """Mimic openjiuwen: ModelError raised `from` the provider exception."""
+    try:
+        raise exc
+    except Exception as e:
+        try:
+            raise RuntimeError("openAI API async invoke error") from e
+        except RuntimeError as w:
+            return w
+
+
+def _raiser(exc_factory):
     async def bad():
-        raise HTTPErr(500)
-    c, fake, ledger = make(bad)
-    for _ in range(2):
+        raise _wrapped(exc_factory())
+    return bad
+
+
+def _no_sleep(monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+    monkeypatch.setattr(llm_mod.asyncio, "sleep", fake_sleep)
+    return sleeps
+
+
+def test_5xx_not_retried_charged_and_three_exhaust():
+    c, fake, ledger = make(_raiser(lambda: HTTPErr(500)))
+    for i in range(2):
         with pytest.raises(LLMUnavailable):
             run(c)
+        assert fake.calls == i + 1 and ledger.spent == (i + 1) * TIMEOUT_CHARGE
+    with pytest.raises(BudgetExhausted):
+        run(c)
+    assert fake.calls == 3 and ledger.spent == 3 * TIMEOUT_CHARGE and ledger.exhausted
+
+
+def test_403_marks_exhausted():
+    c, fake, ledger = make(_raiser(lambda: HTTPErr(403)))
+    with pytest.raises(BudgetExhausted):
+        run(c)
+    assert ledger.exhausted and fake.calls == 1
+
+
+@pytest.mark.parametrize("status", [400, 404, 422])
+def test_4xx_never_exhausts(status):
+    c, fake, ledger = make(_raiser(lambda: HTTPErr(status)))
+    for _ in range(5):
+        with pytest.raises(LLMUnavailable):
+            run(c)
+    assert not ledger.exhausted and ledger.spent == 0 and fake.calls == 5
+
+
+def _req():
+    return httpx.Request("POST", "http://x/v1/chat/completions")
+
+
+def test_real_httpx_connect_error_retried(monkeypatch):
+    sleeps = _no_sleep(monkeypatch)
+    c, fake, ledger = make(_raiser(lambda: openai.APIConnectionError(
+        request=_req())))
+    # openai wraps httpx.ConnectError as the cause
+    async def bad():
+        try:
+            raise httpx.ConnectError("refused")
+        except httpx.ConnectError as ce:
+            try:
+                raise openai.APIConnectionError(request=_req()) from ce
+            except openai.APIConnectionError as ae:
+                raise _wrapped(ae)
+    fake.behavior = bad
+    with pytest.raises(LLMUnavailable):
+        run(c)
+    assert fake.calls == 4 and sleeps == [2, 4, 8] and ledger.spent == 0
+    assert c._failures == 1
+
+
+def test_real_remote_protocol_error_not_retried_but_charged():
+    async def bad():
+        try:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+        except httpx.RemoteProtocolError as pe:
+            try:
+                raise openai.APIConnectionError(request=_req()) from pe
+            except openai.APIConnectionError as ae:
+                raise _wrapped(ae)
+    c, fake, ledger = make(bad)
+    with pytest.raises(LLMUnavailable):
+        run(c)
+    assert fake.calls == 1 and ledger.spent == TIMEOUT_CHARGE
+
+
+def test_real_openai_api_timeout_charged_not_retried():
+    c, fake, ledger = make(_raiser(lambda: openai.APITimeoutError(request=_req())))
+    with pytest.raises(LLMUnavailable):
+        run(c)
+    assert fake.calls == 1 and ledger.spent == TIMEOUT_CHARGE
+
+
+def test_real_openai_status_errors():
+    resp = httpx.Response(402, request=_req())
+    c, fake, ledger = make(_raiser(lambda: openai.APIStatusError("pay", response=resp, body=None)))
     with pytest.raises(BudgetExhausted):
         run(c)
     assert ledger.exhausted
+
+
+def test_success_resets_failure_counter():
+    seq = iter([HTTPErr(500), HTTPErr(500), None, HTTPErr(500)])
+
+    async def beh():
+        e = next(seq)
+        if e is not None:
+            raise _wrapped(e)
+        return SimpleNamespace(content="ok", usage_metadata=SimpleNamespace(input_tokens=1, output_tokens=1))
+    c, fake, ledger = make(beh)
+    for expect in (LLMUnavailable, LLMUnavailable):
+        with pytest.raises(expect):
+            run(c)
+    assert run(c).text == "ok"
+    with pytest.raises(LLMUnavailable):
+        run(c)
+    assert not ledger.exhausted
+
+
+def test_missing_usage_charges_estimate():
+    async def ok():
+        return SimpleNamespace(content="x", usage_metadata=None)
+    c, fake, ledger = make(ok)
+    r = run(c)
+    assert r.completion_tokens == 16 and ledger.spent > 0
+
+
+def test_status_regex_needs_word_boundary():
+    assert llm_mod._status_of(RuntimeError("error 4000 tokens")) is None
+    assert llm_mod._status_of(RuntimeError("Error code: 429 - slow down")) == 429
+
+
+def test_openjiuwen_logs_silent_on_stdout(capfd):
+    from openjiuwen.core.common.logging import llm_logger
+    async def ok():
+        llm_logger.info("PROBE-INFO full prompt")
+        llm_logger.error("PROBE-ERROR")
+        return SimpleNamespace(content="x", usage_metadata=SimpleNamespace(input_tokens=1, output_tokens=1))
+    c, fake, ledger = make(ok)
+    run(c)
+    out = capfd.readouterr()
+    assert "PROBE" not in out.out and "PROBE" not in out.err
