@@ -1,6 +1,6 @@
 """Run a task's unittest file in a throw-away copy of the workspace."""
 import ast
-import re
+import json
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -8,7 +8,23 @@ from pathlib import Path
 
 from harness.proc import run_python
 
-_FAIL_LINE = re.compile(r"^(?:FAIL|ERROR): (\w+) \(", re.MULTILINE)
+_MARK = "@@HARNESS_RESULT@@"
+
+# Runs the given unittest targets and prints one compact JSON line with the failed method
+# names, so the verdict never depends on (8 KB-truncated) traceback output.
+_RUNNER = r'''
+import json, sys, unittest
+suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[1:])
+res = unittest.TextTestRunner(stream=sys.stderr, verbosity=0).run(suite)
+names = []
+for t, _ in list(res.failures) + list(res.errors):
+    t = getattr(t, "test_case", t)
+    n = getattr(t, "_testMethodName", None) or t.id().rsplit(".", 1)[-1]
+    if n not in names:
+        names.append(n)
+sys.stdout.flush()
+print("%s" + json.dumps({"ok": res.wasSuccessful() and res.testsRun > 0, "failed": names}), flush=True)
+''' % _MARK
 
 
 @dataclass(frozen=True)
@@ -38,6 +54,16 @@ def _test_ids(test_path: Path, names: list[str]) -> list[str] | None:
     return ids
 
 
+def _parse(stdout: str) -> dict | None:
+    for line in reversed(stdout.splitlines()):
+        if line.startswith(_MARK):
+            try:
+                return json.loads(line[len(_MARK):])
+            except ValueError:
+                return None
+    return None
+
+
 def run_in_dir(directory: Path, test_file: str = "test_mylib.py", timeout: float = 20,
                only: list[str] | None = None) -> TestReport:
     """Run the tests in `directory` itself (callers pass a disposable directory)."""
@@ -45,14 +71,16 @@ def run_in_dir(directory: Path, test_file: str = "test_mylib.py", timeout: float
     targets = [module]
     if only:
         targets = _test_ids(directory / test_file, only) or [module]
-    res = run_python(["-m", "unittest", *targets], cwd=directory, timeout=timeout)
-    output = (res.stderr + res.stdout)
+    res = run_python(["-c", _RUNNER, *targets], cwd=directory, timeout=timeout)
+    output = res.stderr + res.stdout
     if res.timed_out:
         return TestReport(False, ["<timeout>"], output)
-    if res.returncode == 0:
+    verdict = _parse(res.stdout)
+    if verdict is None or res.returncode != 0:
+        return TestReport(False, ["<unknown>"], output)
+    if verdict["ok"]:
         return TestReport(True, [], output)
-    failed = list(dict.fromkeys(_FAIL_LINE.findall(output)))
-    return TestReport(False, failed or ["<unknown>"], output)
+    return TestReport(False, list(verdict["failed"]) or ["<unknown>"], output)
 
 
 def run_tests(workspace: Path, test_file: str = "test_mylib.py", timeout: float = 20,

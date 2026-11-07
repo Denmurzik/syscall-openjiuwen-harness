@@ -4,7 +4,6 @@
 is evaluated in a temporary copy of the workspace, never in the real one.
 """
 import ast
-import itertools
 import os
 import shutil
 import tempfile
@@ -108,6 +107,7 @@ class _Run:
         self.test_file = test_file
         self.deadline = deadline
         self.cand_timeout = CAND_TIMEOUT_MAX
+        self.verify_timeout = BASE_TIMEOUT
         self.count = 0
 
     def _remaining(self) -> float:
@@ -127,7 +127,7 @@ class _Run:
 
     def verify(self, src: str, failing: list[str]) -> TestReport | None:
         """Full run; accept only when failures shrink to a proper subset of `failing`."""
-        rep = self.run(src, None, BASE_TIMEOUT)
+        rep = self.run(src, None, self.verify_timeout)
         if rep.ok:
             return rep
         if any(f.startswith("<") for f in rep.failed):
@@ -143,30 +143,50 @@ def _single(src: str, units: list[_Unit]) -> Iterator[tuple[str, Mutant]]:
 
 def _pairs(src: str, units: list[_Unit]) -> Iterator[tuple[str, Mutant]]:
     for u in units:
-        for m1 in tagged_mutants(_segment(src, u)):
+        seg = _segment(src, u)
+        original = ast.unparse(ast.parse(textwrap.dedent(seg)))
+        for m1 in tagged_mutants(seg):
             for m2 in tagged_mutants(m1.source):
+                if m2.source == original:
+                    continue
                 yield _splice(src, u, m2.source), Mutant(
                     m2.source, "pair", m1.inverse and m2.inverse, max(m1.prio, m2.prio))
 
 
 def _search(ctx: _Run, gen: Iterator[tuple[str, Mutant]], failing: list[str],
-            only: list[str], capped: bool) -> tuple[str, TestReport, bool] | None:
-    """Evaluate candidates; return (src, report, partial). Inverse candidates win at once."""
-    fallback = None
+            only: list[str], capped: bool) -> tuple[str, TestReport] | None:
+    """Evaluate candidates. Ranking: green+inverse (returned at once) > green > partial
+    inverse > partial (a partial fix leaves other tests red)."""
+    slots: dict[tuple[bool, bool], tuple[str, TestReport]] = {}
     for cand, mut in gen:
         if capped and ctx.count >= CANDIDATE_CAP:
             break
-        rep = ctx.candidate(cand, only)
-        if not rep.ok:
+        if not ctx.candidate(cand, only).ok:
             continue
         full = ctx.verify(cand, failing)
         if full is None:
             continue
-        if mut.inverse:
-            return cand, full, False
-        if fallback is None:
-            fallback = (cand, full, False)
-    return fallback
+        if full.ok and mut.inverse:
+            return cand, full
+        slots.setdefault((full.ok, mut.inverse), (cand, full))
+    for key in ((True, False), (False, True), (False, False)):
+        if key in slots:
+            return slots[key]
+    return None
+
+
+def _callees(src: str, units: list[_Unit], owner: str) -> list[str]:
+    """Owners (mylib functions/classes) referenced by name inside `owner`'s code."""
+    owners = {u.owner for u in units}
+    names: list[str] = []
+    for u in units:
+        if u.owner != owner:
+            continue
+        for n in ast.walk(ast.parse(textwrap.dedent(_segment(src, u)))):
+            ident = n.id if isinstance(n, ast.Name) else None
+            if ident in owners and ident != owner and ident not in names:
+                names.append(ident)
+    return names
 
 
 def _repair_round(ctx: _Run, cur: str, report: TestReport, refs: dict[str, set[str]]
@@ -176,38 +196,54 @@ def _repair_round(ctx: _Run, cur: str, report: TestReport, refs: dict[str, set[s
     all_owners = [u.owner for u in units]
     if any(f not in refs for f in failing):
         return None
-    called: list[str] = []
+    scope: dict[str, list[str]] = {}   # owner -> failing tests to satisfy
     for f in failing:
         for name in sorted(refs[f]):
-            if name in all_owners and name not in called:
-                called.append(name)
+            if name in all_owners:
+                scope.setdefault(name, [])
+                if f not in scope[name]:
+                    scope[name].append(f)
+    called = list(scope)
+    # Helpers called by those functions are tried too (breadth first), against the same tests.
+    queue = list(called)
+    while queue:
+        name = queue.pop(0)
+        for callee in _callees(cur, units, name):
+            if callee not in scope:
+                scope[callee] = list(scope[name])
+                queue.append(callee)
     ctx.count = 0
 
-    # Phase A: functions called by failing tests, each against its own failing tests.
-    for name in called:
-        mine = [f for f in failing if not refs[f] or name in refs[f]]
+    # Phase A: functions called by failing tests, then their helpers, each against its own
+    # failing tests. A green candidate wins at once; a partial fix is committed only after
+    # every helper has been tried.
+    partial = None
+    for name, mine in scope.items():
         found = _search(ctx, _single(cur, [u for u in units if u.owner == name]),
                         failing, mine, capped=False)
-        if found:
-            return found[0], found[1]
+        if found and found[1].ok:
+            return found
+        if found and partial is None:
+            partial = found
+    if partial:
+        return partial
 
     # Phase B: every function of mylib.
-    rest = [u for u in units if u.owner not in called]
-    for scope in (rest, [u for u in units if u.owner in called]):
-        found = _search(ctx, _single(cur, scope), failing, failing, capped=True)
+    rest = [u for u in units if u.owner not in scope]
+    for group in (rest, [u for u in units if u.owner in scope]):
+        found = _search(ctx, _single(cur, group), failing, failing, capped=True)
         if found:
-            return found[0], found[1]
+            return found
 
     # Phase C: pairs of mutations inside the called functions.
-    found = _search(ctx, _pairs(cur, [u for u in units if u.owner in called] or units),
+    found = _search(ctx, _pairs(cur, [u for u in units if u.owner in scope] or units),
                     failing, failing, capped=True)
     if found:
-        return found[0], found[1]
+        return found
 
     # Phase D: the best partial fix (fewest remaining failures) among single mutants.
     best = None
-    for name in called:
-        mine = [f for f in failing if not refs[f] or name in refs[f]]
+    for name, mine in scope.items():
         for cand, _m in _single(cur, [u for u in units if u.owner == name]):
             rep = ctx.candidate(cand, mine)
             if rep.ok or any(f.startswith("<") for f in rep.failed):
@@ -262,7 +298,9 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         ctx = _Run(sandbox, test_file, deadline)
         t0 = time.monotonic()
         report = ctx.run(original, None, BASE_TIMEOUT)
-        ctx.cand_timeout = min(CAND_TIMEOUT_MAX, max(1.5, 4 * (time.monotonic() - t0)))
+        base_time = time.monotonic() - t0
+        ctx.cand_timeout = min(CAND_TIMEOUT_MAX, max(1.5, 4 * base_time))
+        ctx.verify_timeout = min(BASE_TIMEOUT, max(ctx.cand_timeout, 2 * base_time))
         if report.ok:
             return SolveResult("solved", answer="DONE", note="tests already pass")
         if any(f.startswith("<") for f in report.failed):

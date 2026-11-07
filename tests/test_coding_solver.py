@@ -113,3 +113,31 @@ def test_missing_mylib_is_unparsed(tmp_path):
     t = _custom(tmp_path, "", "")
     (t.workspace / "mylib.py").unlink()
     assert solve(t).status == "unparsed"
+
+
+def _hidden_check(tmp_path, mylib, name, visible, hidden):
+    head = "import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n    def test_%s(self):\n" % name
+    line = "        self.assertEqual(m.%s(%s), %r)\n"
+    t = _custom(tmp_path, mylib, head + line % ((name,) + visible))
+    assert solve(t).status == "solved"
+    (t.workspace / "test_mylib.py").write_text(
+        head + "".join(line % ((name, a, e)) for a, e in [visible] + hidden), encoding="utf-8")
+    assert run_tests(t.workspace).ok
+
+
+def test_regression_gcd_remainder_constant(tmp_path):
+    bug = ("def gcd(a, b):\n    d = min(a, b)\n    while d > 1:\n"
+           "        if a % d == 0 and b % d == 1:\n            return d\n        d -= 1\n    return 1\n")
+    _hidden_check(tmp_path, bug, "gcd", ("20, 5", 5),
+                  [("12, 18", 6), ("7, 13", 1), ("9, 27", 9)])
+
+
+def test_regression_total_initial_value(tmp_path):
+    bug = "def total(xs):\n    s = 1\n    for x in xs:\n        s += x\n    return s\n"
+    _hidden_check(tmp_path, bug, "total", ("[1, 2, 3]", 6), [("[]", 0), ("[5]", 5), ("[2, 2]", 4)])
+
+
+def test_regression_first_n_slice_bound(tmp_path):
+    bug = "def first_n(xs, n):\n    return xs[:n - 1]\n"
+    _hidden_check(tmp_path, bug, "first_n", ("[4, 3, 2, 1], 4", [4, 3, 2, 1]),
+                  [("[1, 2, 3], 2", [1, 2]), ("[], 3", []), ("[7, 8], 1", [7])])

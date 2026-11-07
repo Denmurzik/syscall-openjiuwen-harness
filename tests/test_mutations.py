@@ -30,10 +30,24 @@ def test_slice_bool_and_minmax_mutants():
     assert any(" or " in m for m in _all("def f(a, b):\n    return a and b\n"))
 
 
+
+
+def test_inverse_flags_and_order():
+    from harness.solvers.mutations import tagged_mutants
+    src = "def f(xs):\n    s = 0\n    for x in xs:\n        s -= x\n    return s\n"
+    tm = list(tagged_mutants(src))
+    assert tm[0].kind == "const"
+    assert [m.kind for m in tm if m.inverse] == ["augassign"]
+    cmp = list(tagged_mutants("def f(a, b):\n    return a == b and a < b and sorted(a)\n"))
+    assert {m.kind for m in cmp if m.inverse} == {"compare", "call"}
+    assert not any(m.inverse for m in tagged_mutants("def f(a, b):\n    return a + b\n"))
+    assert [m.inverse for m in tagged_mutants("def f(a):\n    return a == 1\n")
+            if "a == 0" in m.source] == [True]
+
+
 def test_operators_come_first_and_no_duplicates_or_identity():
     src = "def f(xs):\n    s = 0\n    for x in xs:\n        s -= x\n    return s\n"
     ms = _all(src)
-    assert ms[0].count("+=") == 1
     assert len(ms) == len(set(ms))
     import ast
     assert ast.unparse(ast.parse(src)) not in ms

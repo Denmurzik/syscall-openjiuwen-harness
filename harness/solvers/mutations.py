@@ -11,17 +11,17 @@ _EQ = (ast.Eq, ast.NotEq)
 _IN = (ast.In, ast.NotIn)
 _IS = (ast.Is, ast.IsNot)
 
-# Pairs that are plain single-token inversions of each other. ==/!=, in/not in and is/is not
-# are deliberately absent: `x % 2 == 1` -> `!= 1` is a different fix than `== 0`.
+# Preferred inverses (the brief's list): += <-> -=, < <-> >, <= <-> >=, 0 <-> 1 inside a
+# comparison, sorted <-> reversed. Everything else is a plain fallback mutation.
 _INVERSE = {
-    (ast.Add, ast.Sub), (ast.Sub, ast.Add), (ast.Mult, ast.Div), (ast.Div, ast.Mult),
+    (ast.Add, ast.Sub), (ast.Sub, ast.Add),
     (ast.Lt, ast.Gt), (ast.Gt, ast.Lt), (ast.LtE, ast.GtE), (ast.GtE, ast.LtE),
 }
 _CALL_SWAP = {"min": "max", "max": "min", "sorted": "reversed", "reversed": "sorted",
               "any": "all", "all": "any"}
 
-# Priority groups: operators first, then calls, constants, slices.
-P_OP, P_CALL, P_CONST, P_SLICE = 0, 1, 2, 3
+# Fallback order among non-inverse mutants: integer constants, binary operators, the rest.
+P_CONST, P_BINOP, P_OP, P_CALL, P_SLICE = 0, 1, 2, 3, 4
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,8 @@ def _op_swaps(cur: type, group: tuple, setter, kind: str) -> list[_Alt]:
     for new in group:
         if new is cur:
             continue
-        alts.append(_Alt(kind, (cur, new) in _INVERSE, P_OP,
+        inverse = kind in ("augassign", "compare") and (cur, new) in _INVERSE
+        alts.append(_Alt(kind, inverse, P_BINOP if kind in ("binop", "augassign") else P_OP,
                          lambda node, parent, new=new, setter=setter: setter(node, new)))
     return alts
 
@@ -97,7 +98,7 @@ def _alts(node: ast.AST, parent: "ast.AST | None") -> list[_Alt]:
             alts.append(_Alt("add-not", False, P_OP, lambda n, p: _replace(p, n, _not(n))))
     elif isinstance(node, ast.BoolOp):
         new = ast.Or if isinstance(node.op, ast.And) else ast.And
-        alts.append(_Alt("boolop", True, P_OP, lambda n, p, new=new: setattr(n, "op", new())))
+        alts.append(_Alt("boolop", False, P_OP, lambda n, p, new=new: setattr(n, "op", new())))
     elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         alts.append(_Alt("del-not", False, P_OP, lambda n, p: _replace(p, n, n.operand)))
     elif isinstance(node, (ast.If, ast.While, ast.IfExp)):
@@ -109,7 +110,7 @@ def _alts(node: ast.AST, parent: "ast.AST | None") -> list[_Alt]:
     elif isinstance(node, ast.Constant):
         v = node.value
         if isinstance(v, bool):
-            alts.append(_Alt("bool", True, P_CONST,
+            alts.append(_Alt("bool", False, P_OP,
                              lambda n, p: setattr(n, "value", not n.value)))
         elif isinstance(v, int):
             in_cmp = isinstance(parent, ast.Compare)
@@ -124,11 +125,12 @@ def _alts(node: ast.AST, parent: "ast.AST | None") -> list[_Alt]:
                                  lambda n, p, new=new: setattr(n, "value", new)))
     elif isinstance(node, ast.Call):
         if isinstance(node.func, ast.Name) and node.func.id in _CALL_SWAP:
-            alts.append(_Alt("call", True, P_CALL, lambda n, p: setattr(
+            alts.append(_Alt("call", node.func.id in ("sorted", "reversed"), P_CALL,
+                             lambda n, p: setattr(
                 n.func, "id", _CALL_SWAP[n.func.id])))
         if any(kw.arg == "reverse" and isinstance(kw.value, ast.Constant)
                and isinstance(kw.value.value, bool) for kw in node.keywords):
-            alts.append(_Alt("reverse", True, P_CALL, _flip_reverse))
+            alts.append(_Alt("reverse", False, P_CALL, _flip_reverse))
         fname = node.func.id if isinstance(node.func, ast.Name) else (
             node.func.attr if isinstance(node.func, ast.Attribute) else "")
         if fname in ("sorted", "sort") and not any(k.arg == "reverse" for k in node.keywords):
@@ -137,7 +139,7 @@ def _alts(node: ast.AST, parent: "ast.AST | None") -> list[_Alt]:
     elif isinstance(node, ast.Subscript):
         s = node.slice
         if isinstance(s, ast.Slice) and s.lower is None and s.upper is None and _is_neg_one(s.step):
-            alts.append(_Alt("del-rev-slice", True, P_SLICE,
+            alts.append(_Alt("del-rev-slice", False, P_SLICE,
                              lambda n, p: _replace(p, n, n.value)))
     elif isinstance(node, ast.Return) and node.value is not None:
         v = node.value
