@@ -314,6 +314,8 @@ def _killing_mutant(rng, name):
 
 
 def _contradict(v):
+    if v is None:  # e.g. max_key({}) legitimately returns None
+        return 0
     if isinstance(v, bool):
         return not v
     if isinstance(v, (int, float)):

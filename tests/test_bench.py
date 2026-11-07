@@ -391,3 +391,18 @@ def test_every_feasible_coding_task_is_really_buggy(tmp_path, diff, seed):
         assert not _run(w, "test_mylib.py"), meta["task_id"]
         n += 1
     assert n >= 20
+
+
+def test_contradict_handles_every_value_type():
+    for v in (None, True, 3, 2.5, "s", [1], (1, 2), {"a": 1}):
+        assert gen_tasks._contradict(v) != v
+    for name in gen_tasks.LIB2:  # all library results must be contradictable
+        for v in gen_tasks._expected2(name):
+            assert gen_tasks._contradict(v) != v
+
+
+@pytest.mark.parametrize("diff", ["easy", "medium", "hard", "mixed"])
+def test_generation_never_crashes_over_seeds(tmp_path, diff):
+    # infeasible=1 forces the contradictory-test branch on every coding task
+    for seed in range(61):
+        gen_tasks.generate(tmp_path / "o", 8, seed, infeasible=0.5, novel=0.5, difficulty=diff)
