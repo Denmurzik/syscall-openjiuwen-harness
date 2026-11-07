@@ -275,6 +275,32 @@ def _write_mylib(path: Path, text: str) -> None:
         os.fsync(f.fileno())
 
 
+def contradictory_tests(test_src: str) -> bool:
+    """True if one test asserts the same call equal to two different literals (unsatisfiable)."""
+    try:
+        tree = ast.parse(test_src)
+    except SyntaxError:
+        return False
+    seen: dict[tuple[str, str], str] = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        for node in ast.walk(fn):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "assertEqual" and len(node.args) == 2
+                    and isinstance(node.args[0], ast.Call)):
+                continue
+            try:
+                expected = ast.literal_eval(node.args[1])
+            except ValueError:
+                continue
+            key = (fn.name, ast.dump(node.args[0]))
+            exp = repr(expected)
+            if seen.setdefault(key, exp) != exp:
+                return True
+    return False
+
+
 def _solve(task: Task, time_limit: float) -> SolveResult:
     deadline = time.monotonic() + time_limit
     ws = Path(task.workspace)
@@ -288,7 +314,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             return SolveResult("unparsed", note="no test file")
         test_file = cands[0]
     original = mylib.read_text(encoding="utf-8")
-    refs = _test_refs((ws / test_file).read_text(encoding="utf-8"))
+    test_src = (ws / test_file).read_text(encoding="utf-8")
+    if contradictory_tests(test_src):
+        return SolveResult("infeasible", note="tests contradict each other")
+    refs = _test_refs(test_src)
     ast.parse(original)
 
     tmp = Path(tempfile.mkdtemp(prefix="coding_fix_"))

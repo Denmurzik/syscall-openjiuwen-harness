@@ -6,7 +6,7 @@ PROMPT_WEIGHT = 10  # prompt tokens count 1/10
 
 JSON_BASE = 80
 PROGRAM_BASE = 120
-CODING_BASE = 200
+CODING_BASE = 400  # observed 165-2731 per coding task incl. escalation (train1, seed 7)
 CODING_EXTRA_CHARS = 2000
 
 

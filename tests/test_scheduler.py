@@ -205,7 +205,7 @@ def test_estimator_constants(tmp_path):
     (d / "workspace" / "mylib.py").write_text("a" * 300, encoding="utf-8")
     (d / "workspace" / "test_mylib.py").write_text("b" * 300, encoding="utf-8")
     t = Task("c", "coding", "fix", 1.0, "unittest", d, d / "workspace")
-    assert estimate_tokens(t) == pytest.approx((600 + 2000) / 3 / 10 + 200)
+    assert estimate_tokens(t) == pytest.approx((600 + 2000) / 3 / 10 + 400)
 
 
 def test_single_event_loop_across_2a_and_2b(tmp_path, monkeypatch):

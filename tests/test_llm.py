@@ -99,6 +99,21 @@ def test_429_retried_then_succeeds(monkeypatch):
     assert sleeps == [2, 4] and fake.calls == 3
 
 
+def test_429_waits_long_enough_for_account_ceiling(monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+    monkeypatch.setattr(llm_mod.asyncio, "sleep", fake_sleep)
+
+    async def always():
+        raise HTTPErr(429)
+    c, fake, ledger = make(always)
+    with pytest.raises(llm_mod.LLMUnavailable):
+        run(c)
+    assert sleeps == [2, 4, 8, 16, 30] and sum(sleeps) >= 40
+
+
 def _wrapped(exc):
     """Mimic openjiuwen: ModelError raised `from` the provider exception."""
     try:
@@ -172,7 +187,7 @@ def test_real_httpx_connect_error_retried(monkeypatch):
     fake.behavior = bad
     with pytest.raises(LLMUnavailable):
         run(c)
-    assert fake.calls == 4 and sleeps == [2, 4, 8] and ledger.spent == 0
+    assert fake.calls == 6 and sleeps == [2, 4, 8, 16, 30] and ledger.spent == 0
     assert c._failures == 1
 
 

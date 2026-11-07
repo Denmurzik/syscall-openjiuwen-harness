@@ -20,7 +20,9 @@ MODEL_FAST = "qwen3.6-35b-a3b-noreason"
 MODEL_MID = "qwen3.8-27b-noreason"
 MODEL_REASON = "qwen3.8-27b"
 
-PROGRAM_SYSTEM = ("Write a Python 3 program that prints only the final answer. "
+PROGRAM_SYSTEM = ("Write a Python 3 program that prints only the final answer to stdout. "
+                  "Never write answer.txt or any file: the task text mentions answer.txt, ignore that, "
+                  "the answer is read from the program's output. "
                   "Files are in the current directory. "
                   "If the task cannot be answered from the given data, print IMPOSSIBLE. "
                   "Output only code, no explanations, no markdown.")
@@ -145,7 +147,8 @@ async def solve_with_program(task: Task, client) -> SolveResult:
         feedback = (f"Your program failed ({why}).\nstderr:\n{res.stderr[-FEEDBACK_LIMIT // 2:]}\n"
                     f"stdout:\n{res.stdout[-FEEDBACK_LIMIT // 2:]}")
         messages = messages + [{"role": "assistant", "content": r.text},
-                               {"role": "user", "content": feedback + "\nFix it. Output only code."}]
+                               {"role": "user", "content": feedback + "\nFix it. Print the final answer with print(); "
+                                           "do not write it to a file. Output only code."}]
     return SolveResult("unparsed", note=note)
 
 

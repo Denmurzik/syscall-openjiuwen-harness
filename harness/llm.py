@@ -37,7 +37,7 @@ def _quiet_openjiuwen_logs() -> None:
 
 _logs_quieted = False
 
-RETRY_DELAYS = (2, 4, 8)
+RETRY_DELAYS = (2, 4, 8, 16, 30)  # the shared account ceiling resets within ~40 s
 MAX_CONSECUTIVE_FAILURES = 3
 
 

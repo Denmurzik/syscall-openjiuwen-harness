@@ -230,3 +230,8 @@ def test_program_route_uses_only_first_block(tmp_path):
     r = run(solve_with_program(_task(tmp_path), FakeClient([reply])))
     assert r.status == "solved" and r.answer == "42"
     assert extract_code(reply, join_all=False) == "print(42)"
+
+
+def test_program_prompt_forbids_answer_file():
+    from harness.llm_routes import PROGRAM_SYSTEM
+    assert "stdout" in PROGRAM_SYSTEM and "Never write answer.txt" in PROGRAM_SYSTEM

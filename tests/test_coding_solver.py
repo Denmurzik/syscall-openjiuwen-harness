@@ -141,3 +141,18 @@ def test_regression_first_n_slice_bound(tmp_path):
     bug = "def first_n(xs, n):\n    return xs[:n - 1]\n"
     _hidden_check(tmp_path, bug, "first_n", ("[4, 3, 2, 1], 4", [4, 3, 2, 1]),
                   [("[1, 2, 3], 2", [1, 2]), ("[], 3", []), ("[7, 8], 1", [7])])
+
+
+def test_contradictory_visible_tests_are_infeasible(tmp_path):
+    lib = "def f(x):\n    return x\n"
+    tests = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
+             "    def test_f(self):\n        self.assertEqual(m.f(7), 7)\n        self.assertEqual(m.f(7), 8)\n")
+    r = solve(_custom(tmp_path, lib, tests))
+    assert r.status == "infeasible" and r.answer is None
+
+
+def test_same_call_same_value_is_not_contradictory():
+    from harness.solvers.coding_solver import contradictory_tests
+    ok = "class T:\n    def test_a(self):\n        self.assertEqual(m.f(1), 2)\n        self.assertEqual(m.f(1), 2)\n        self.assertEqual(m.f(2), 3)\n"
+    assert not contradictory_tests(ok)
+    assert not contradictory_tests("def broken(:")
