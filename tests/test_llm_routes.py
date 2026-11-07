@@ -153,3 +153,73 @@ def test_llm_unavailable_is_unparsed(tmp_path):
     assert r.status == "unparsed" and "down" in r.note
     r = run(fix_coding(_fixture("coding_0003", tmp_path / "x"), FakeClient([LLMUnavailable("down")])))
     assert r.status == "unparsed" and "down" in r.note
+
+
+def test_blocking_work_does_not_block_event_loop(tmp_path, monkeypatch):
+    import time
+    import harness.llm_routes as lr
+    from harness.proc import ProcResult
+
+    def slow(code, workspace, timeout=20):
+        time.sleep(1.0)
+        return ProcResult(0, "7\n", "", False)
+
+    monkeypatch.setattr(lr, "run_program", slow)
+
+    async def main():
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        tk = asyncio.create_task(ticker())
+        r = await solve_with_program(_task(tmp_path), FakeClient(["print(7)"]))
+        tk.cancel()
+        return r, ticks
+
+    r, ticks = run(main())
+    assert r.answer == "7" and ticks >= 10
+
+
+def test_normalize_answer_edge_cases():
+    assert normalize_answer("2024-03-15", "exact_int") == "15"
+    assert normalize_answer("total -5", "exact_int") == "-5"
+    assert normalize_answer("2.5", "exact_int") == "3"
+    assert normalize_answer("-0.4", "exact_int") == "0"
+    assert normalize_answer("1,234", "exact_int") == "1234"
+    assert normalize_answer("9" * 6000, "exact_int") in (None, "9" * 6000)
+
+
+def test_describe_workspace_limits(tmp_path):
+    from harness.llm_routes import describe_workspace
+    ws = tmp_path / "w"
+    ws.mkdir()
+    (ws / "a.csv").write_text("\n".join(f"line{i}," + "x" * 600 for i in range(20)), encoding="utf-8")
+    (ws / "bin.dat").write_bytes(b"\x00\x01\x02binary")
+    for i in range(40):
+        (ws / f"f{i:02d}.txt").write_text("я" * 300 + "\n" * 10, encoding="utf-8")
+    d = describe_workspace(ws)
+    assert len(d.encode("utf-8")) <= 4096
+    assert "bin.dat" in d and "binary" not in d
+    blk = d.split("--- a.csv (first lines) ---\n")[1].split("\n--- ")[0]
+    assert len(blk.encode()) <= 500 and blk.count("line") <= 5
+    for i in range(300):
+        (ws / ("long_name_" + "z" * 40 + f"{i}.txt")).write_text("x")
+    d = describe_workspace(ws)
+    assert len(d.encode("utf-8")) <= 4096
+    tree = d.splitlines()[1:]
+    assert tree and all(ln.endswith(".txt") or ln.endswith(".csv") or ln.endswith(".dat")
+                        for ln in tree)
+
+
+def test_extract_code_joins_blocks_and_patch_crlf_and_indent():
+    assert extract_code("a\n```python\nx=1\n```\ntext\n```\ny=2\n```") == "x=1\ny=2"
+    src = "class K:\n    def m(self):\n        return 1\n\n    def n(self):\n        return 2\n"
+    p = 'FUNC K.m\r\ndef m(self):\r\n    s = """a\r\nb"""\r\n    return s\r\n'
+    out = apply_patch(src, p)
+    assert out is not None and '        s = """a\nb"""\n        return s\n' in out
+    out2 = apply_patch(src, "FUNC K.n\n    def n(self):\n        return 3\n")
+    assert out2 is not None and "    def n(self):\n        return 3\n" in out2
