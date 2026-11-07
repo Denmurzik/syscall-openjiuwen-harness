@@ -43,11 +43,15 @@ def parse(instruction: str) -> dict | SolveResult:
         if len(matches) != 1:
             return _unparsed(f"unrecognized sentence: {sentence!r}")
         m, kind = matches[0]
+        if asked:
+            return _unparsed(f"sentence after question: {sentence!r}")
         if kind == "start":
             if start is not None:
                 return _unparsed("duplicate start")
             start = int(m.group(1))
         elif kind == "question":
+            if asked:
+                return _unparsed("repeated question")
             asked = True
         else:
             if start is None:
@@ -83,6 +87,7 @@ def execute(spec: dict) -> SolveResult:
             op, n = item
             if op not in _OPS or not _is_int(n):
                 return _unparsed(f"bad op: {item!r}")
+        for op, n in ops:
             if op == "//" and n == 0:
                 return SolveResult("infeasible", note="division by zero")
             x = _OPS[op](x, n)

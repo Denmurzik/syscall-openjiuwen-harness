@@ -66,3 +66,24 @@ def test_strip_boilerplate_all_task_types():
             assert marker not in out, (name, marker)
     assert strip_boilerplate(_fixture("search_0001")["instruction"]) == (
         "The directory kb/ contains a small knowledge base of markdown files. In which year was Irina Smith born?")
+
+
+def test_execute_validates_whole_spec_before_running():
+    assert execute({"start": 5, "ops": [["//", 0], ["foo", 1]]}).status == "unparsed"
+
+
+def test_sentences_after_question_are_unparsed():
+    q = "A warehouse starts with 5 boxes. How many boxes does it have at the end?"
+    assert solve(_task(q + " It ships 5 boxes per day for 1 days.")).status == "unparsed"
+    assert solve(_task(q + " How many boxes does it have at the end?")).status == "unparsed"
+
+
+def test_solve_never_raises(monkeypatch):
+    import harness.solvers.math_solver as ms
+
+    def boom(_):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(ms, "parse", boom)
+    res = ms.solve(_task("anything"))
+    assert res.status == "unparsed" and "kaboom" in res.note

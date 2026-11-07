@@ -1,7 +1,7 @@
 import re
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.?!])\s+")
-_SKIP = re.compile(r"(compute it with|use bash with|use the file tools)\b", re.IGNORECASE)
+_SKIP = re.compile(r"(compute it with|use bash|use the file tools)\b", re.IGNORECASE)
 _STOP = re.compile(r"when you are done\b", re.IGNORECASE)
 _WORK_ONLY = re.compile(r"work only inside\b", re.IGNORECASE)
 
