@@ -35,7 +35,7 @@ def _quiet_openjiuwen_logs() -> None:
     logging.getLogger("openjiuwen").setLevel(logging.WARNING)
 
 
-_quiet_openjiuwen_logs()
+_logs_quieted = False
 
 RETRY_DELAYS = (2, 4, 8)
 MAX_CONSECUTIVE_FAILURES = 3
@@ -128,6 +128,10 @@ class LLMClient:
     def _model(self, name: str):
         m = self._models.get(name)
         if m is None:
+            global _logs_quieted
+            if not _logs_quieted:
+                _logs_quieted = True
+                _quiet_openjiuwen_logs()
             from openjiuwen.core.foundation.llm import Model, ModelClientConfig, ModelRequestConfig
             cc = ModelClientConfig(client_provider="OpenAI", api_key=self.api_key,
                                    api_base=self.base_url, verify_ssl=True)

@@ -76,7 +76,10 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
         while True:
             try:
                 tid, res = out_queue.get(timeout=timeout) if timeout else out_queue.get_nowait()
-            except (queue_mod.Empty, OSError, EOFError):
+            except queue_mod.Empty:
+                return
+            except Exception:
+                log.exception("phase 1: bad queue message")
                 return
             ent = running.pop(tid, None)
             if ent is not None and tid not in done:
@@ -160,8 +163,12 @@ async def _drive(units: list, t0: float, deadline_s: float, ledger: TokenLedger,
                     return
                 continue
             start = time.monotonic()
+            remaining = deadline_s - (time.monotonic() - t0) - 5
             try:
-                await unit["run"]()
+                await asyncio.wait_for(unit["run"](), remaining)
+            except asyncio.TimeoutError:
+                state["traj"].record({"phase": 2, "task_id": unit["name"], "status": "deadline",
+                                      "cost": 0, "elapsed": round(time.monotonic() - start, 3)})
             except BudgetExhausted:
                 state["stop"] = True
                 ledger.mark_exhausted()
@@ -224,7 +231,15 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float = config.DEADL
     return counts
 
 
-def _phase2(left, client, ledger, t0, deadline_s, settle, status, traj) -> None:
+def _phase2(*args) -> None:
+    # one event loop for the whole phase: openjiuwen caches an HTTP pool bound to the first loop
+    try:
+        asyncio.run(_phase2_async(*args))
+    except Exception:
+        log.exception("phase 2 failed")
+
+
+async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, traj) -> None:
     try:
         os.chdir(_log_dir())  # openjiuwen writes ./logs relative to cwd
     except OSError:
@@ -257,7 +272,7 @@ def _phase2(left, client, ledger, t0, deadline_s, settle, status, traj) -> None:
         units.append({"prio": reward / est, "estimate": est, "run": make(),
                       "name": f"group:{ttype}:{len(members)}"})
     units.sort(key=lambda u: -u["prio"])
-    _run_async(_drive(units, t0, deadline_s, ledger, state))
+    await _drive(units, t0, deadline_s, ledger, state)
 
     # 2b: per-task routes for whatever is still unparsed
     units = []
@@ -275,11 +290,4 @@ def _phase2(left, client, ledger, t0, deadline_s, settle, status, traj) -> None:
             return go
         units.append({"prio": task.reward / est, "estimate": est, "run": make(), "name": task.task_id})
     units.sort(key=lambda u: -u["prio"])
-    _run_async(_drive(units, t0, deadline_s, ledger, state))
-
-
-def _run_async(coro) -> None:
-    try:
-        asyncio.run(coro)
-    except Exception:
-        log.exception("phase 2 loop failed")
+    await _drive(units, t0, deadline_s, ledger, state)

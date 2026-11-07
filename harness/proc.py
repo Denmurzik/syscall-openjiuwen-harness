@@ -50,6 +50,8 @@ def run_python(args: list[str], cwd: Path, timeout: float, stdin: str | None = N
 
         def limits():
             resource.setrlimit(resource.RLIMIT_AS, (_RLIMIT_AS, _RLIMIT_AS))
+            cpu = int(timeout) + 5
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
 
         kwargs.update(start_new_session=True, preexec_fn=limits)
     proc = subprocess.Popen(

@@ -243,6 +243,7 @@ def test_openjiuwen_logs_silent_on_stdout(capfd):
         llm_logger.info("PROBE-INFO full prompt")
         llm_logger.error("PROBE-ERROR")
         return SimpleNamespace(content="x", usage_metadata=SimpleNamespace(input_tokens=1, output_tokens=1))
+    llm_mod._quiet_openjiuwen_logs()  # what the first real _model() call does
     c, fake, ledger = make(ok)
     run(c)
     out = capfd.readouterr()
