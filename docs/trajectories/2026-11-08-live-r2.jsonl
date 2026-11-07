@@ -1,0 +1,105 @@
+{"phase": 1, "task_id": "coding_0007", "status": "solved", "cost": 0.0, "elapsed": 0.539, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0031", "status": "solved", "cost": 0.0, "elapsed": 1.558, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0015", "status": "solved", "cost": 0.0, "elapsed": 2.929, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0035", "status": "solved", "cost": 0.0, "elapsed": 3.419, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0043", "status": "solved", "cost": 0.0, "elapsed": 1.521, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0039", "status": "solved", "cost": 0.0, "elapsed": 4.703, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "coding_0019", "status": "solved", "cost": 0.0, "elapsed": 6.9, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0059", "status": "unparsed", "cost": 0.0, "elapsed": 0.162, "note": "mylib.py not found"}
+{"phase": 1, "task_id": "coding_0027", "status": "infeasible", "cost": 0.0, "elapsed": 8.481, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "coding_0055", "status": "solved", "cost": 0.0, "elapsed": 5.943, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0071", "status": "unparsed", "cost": 0.0, "elapsed": 0.142, "note": "mylib.py not found"}
+{"phase": 1, "task_id": "coding_0047", "status": "solved", "cost": 0.0, "elapsed": 9.015, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0067", "status": "solved", "cost": 0.0, "elapsed": 4.954, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0083", "status": "solved", "cost": 0.0, "elapsed": 0.589, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0079", "status": "solved", "cost": 0.0, "elapsed": 1.342, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0087", "status": "solved", "cost": 0.0, "elapsed": 0.64, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0075", "status": "solved", "cost": 0.0, "elapsed": 3.403, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "coding_0095", "status": "solved", "cost": 0.0, "elapsed": 2.985, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "data_analysis_0002", "status": "solved", "cost": 0.0, "elapsed": 0.183, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0006", "status": "solved", "cost": 0.0, "elapsed": 0.162, "note": ""}
+{"phase": 1, "task_id": "coding_0099", "status": "solved", "cost": 0.0, "elapsed": 2.424, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "data_analysis_0010", "status": "solved", "cost": 0.0, "elapsed": 0.196, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0014", "status": "solved", "cost": 0.0, "elapsed": 0.178, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0018", "status": "solved", "cost": 0.0, "elapsed": 0.192, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0022", "status": "solved", "cost": 0.0, "elapsed": 0.194, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0026", "status": "solved", "cost": 0.0, "elapsed": 0.179, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0030", "status": "solved", "cost": 0.0, "elapsed": 0.179, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0034", "status": "solved", "cost": 0.0, "elapsed": 0.176, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0038", "status": "solved", "cost": 0.0, "elapsed": 0.176, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0042", "status": "solved", "cost": 0.0, "elapsed": 0.175, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0046", "status": "solved", "cost": 0.0, "elapsed": 0.193, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0050", "status": "solved", "cost": 0.0, "elapsed": 0.152, "note": ""}
+{"phase": 1, "task_id": "coding_0011", "status": "infeasible", "cost": 0.0, "elapsed": 19.553, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "data_analysis_0054", "status": "solved", "cost": 0.0, "elapsed": 0.181, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0058", "status": "solved", "cost": 0.0, "elapsed": 0.182, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0062", "status": "solved", "cost": 0.0, "elapsed": 0.168, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0066", "status": "solved", "cost": 0.0, "elapsed": 0.161, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0070", "status": "solved", "cost": 0.0, "elapsed": 0.202, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0074", "status": "solved", "cost": 0.0, "elapsed": 0.184, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0078", "status": "solved", "cost": 0.0, "elapsed": 0.166, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0082", "status": "solved", "cost": 0.0, "elapsed": 0.176, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0086", "status": "solved", "cost": 0.0, "elapsed": 0.195, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0090", "status": "solved", "cost": 0.0, "elapsed": 0.187, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0094", "status": "solved", "cost": 0.0, "elapsed": 0.205, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0098", "status": "solved", "cost": 0.0, "elapsed": 0.184, "note": ""}
+{"phase": 1, "task_id": "math_0000", "status": "infeasible", "cost": 0.0, "elapsed": 0.17, "note": "division by zero"}
+{"phase": 1, "task_id": "math_0004", "status": "solved", "cost": 0.0, "elapsed": 0.167, "note": ""}
+{"phase": 1, "task_id": "math_0008", "status": "infeasible", "cost": 0.0, "elapsed": 0.168, "note": "division by zero"}
+{"phase": 1, "task_id": "math_0012", "status": "solved", "cost": 0.0, "elapsed": 0.173, "note": ""}
+{"phase": 1, "task_id": "math_0016", "status": "solved", "cost": 0.0, "elapsed": 0.185, "note": ""}
+{"phase": 1, "task_id": "math_0020", "status": "solved", "cost": 0.0, "elapsed": 0.164, "note": ""}
+{"phase": 1, "task_id": "coding_0091", "status": "solved", "cost": 0.0, "elapsed": 6.417, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "math_0024", "status": "solved", "cost": 0.0, "elapsed": 0.166, "note": ""}
+{"phase": 1, "task_id": "math_0032", "status": "solved", "cost": 0.0, "elapsed": 0.168, "note": ""}
+{"phase": 1, "task_id": "math_0028", "status": "solved", "cost": 0.0, "elapsed": 0.184, "note": ""}
+{"phase": 1, "task_id": "math_0036", "status": "solved", "cost": 0.0, "elapsed": 0.186, "note": ""}
+{"phase": 1, "task_id": "math_0040", "status": "solved", "cost": 0.0, "elapsed": 0.171, "note": ""}
+{"phase": 1, "task_id": "math_0048", "status": "solved", "cost": 0.0, "elapsed": 0.196, "note": ""}
+{"phase": 1, "task_id": "math_0044", "status": "solved", "cost": 0.0, "elapsed": 0.207, "note": ""}
+{"phase": 1, "task_id": "math_0056", "status": "solved", "cost": 0.0, "elapsed": 0.166, "note": ""}
+{"phase": 1, "task_id": "math_0052", "status": "solved", "cost": 0.0, "elapsed": 0.179, "note": ""}
+{"phase": 1, "task_id": "math_0064", "status": "infeasible", "cost": 0.0, "elapsed": 0.163, "note": "division by zero"}
+{"phase": 1, "task_id": "math_0060", "status": "solved", "cost": 0.0, "elapsed": 0.179, "note": ""}
+{"phase": 1, "task_id": "math_0072", "status": "solved", "cost": 0.0, "elapsed": 0.187, "note": ""}
+{"phase": 1, "task_id": "math_0068", "status": "solved", "cost": 0.0, "elapsed": 0.195, "note": ""}
+{"phase": 1, "task_id": "math_0084", "status": "solved", "cost": 0.0, "elapsed": 0.142, "note": ""}
+{"phase": 1, "task_id": "math_0076", "status": "solved", "cost": 0.0, "elapsed": 0.175, "note": ""}
+{"phase": 1, "task_id": "math_0080", "status": "infeasible", "cost": 0.0, "elapsed": 0.185, "note": "division by zero"}
+{"phase": 1, "task_id": "math_0088", "status": "infeasible", "cost": 0.0, "elapsed": 0.185, "note": "division by zero"}
+{"phase": 1, "task_id": "math_0092", "status": "solved", "cost": 0.0, "elapsed": 0.185, "note": ""}
+{"phase": 1, "task_id": "math_0096", "status": "solved", "cost": 0.0, "elapsed": 0.152, "note": ""}
+{"phase": 1, "task_id": "search_0001", "status": "solved", "cost": 0.0, "elapsed": 0.77, "note": ""}
+{"phase": 1, "task_id": "search_0005", "status": "solved", "cost": 0.0, "elapsed": 0.851, "note": ""}
+{"phase": 1, "task_id": "search_0009", "status": "solved", "cost": 0.0, "elapsed": 0.863, "note": ""}
+{"phase": 1, "task_id": "search_0013", "status": "solved", "cost": 0.0, "elapsed": 1.198, "note": ""}
+{"phase": 1, "task_id": "search_0021", "status": "infeasible", "cost": 0.0, "elapsed": 0.509, "note": "no reading has an answer"}
+{"phase": 1, "task_id": "coding_0003", "status": "infeasible", "cost": 0.0, "elapsed": 23.714, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "search_0029", "status": "solved", "cost": 0.0, "elapsed": 0.508, "note": ""}
+{"phase": 1, "task_id": "search_0017", "status": "solved", "cost": 0.0, "elapsed": 1.331, "note": ""}
+{"phase": 1, "task_id": "search_0033", "status": "solved", "cost": 0.0, "elapsed": 0.759, "note": ""}
+{"phase": 1, "task_id": "search_0025", "status": "solved", "cost": 0.0, "elapsed": 1.149, "note": ""}
+{"phase": 1, "task_id": "search_0045", "status": "infeasible", "cost": 0.0, "elapsed": 0.833, "note": "no reading has an answer"}
+{"phase": 1, "task_id": "search_0041", "status": "infeasible", "cost": 0.0, "elapsed": 1.2, "note": "no reading has an answer"}
+{"phase": 1, "task_id": "search_0037", "status": "infeasible", "cost": 0.0, "elapsed": 1.233, "note": "no reading has an answer"}
+{"phase": 1, "task_id": "search_0053", "status": "solved", "cost": 0.0, "elapsed": 1.119, "note": ""}
+{"phase": 1, "task_id": "search_0057", "status": "solved", "cost": 0.0, "elapsed": 0.532, "note": ""}
+{"phase": 1, "task_id": "search_0049", "status": "solved", "cost": 0.0, "elapsed": 1.377, "note": ""}
+{"phase": 1, "task_id": "coding_0051", "status": "infeasible", "cost": 0.0, "elapsed": 21.065, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "search_0065", "status": "solved", "cost": 0.0, "elapsed": 0.849, "note": ""}
+{"phase": 1, "task_id": "search_0069", "status": "solved", "cost": 0.0, "elapsed": 0.73, "note": ""}
+{"phase": 1, "task_id": "search_0077", "status": "solved", "cost": 0.0, "elapsed": 0.573, "note": ""}
+{"phase": 1, "task_id": "search_0061", "status": "solved", "cost": 0.0, "elapsed": 1.231, "note": ""}
+{"phase": 1, "task_id": "search_0073", "status": "solved", "cost": 0.0, "elapsed": 0.841, "note": ""}
+{"phase": 1, "task_id": "search_0089", "status": "solved", "cost": 0.0, "elapsed": 0.563, "note": ""}
+{"phase": 1, "task_id": "search_0081", "status": "infeasible", "cost": 0.0, "elapsed": 0.922, "note": "no reading has an answer"}
+{"phase": 1, "task_id": "search_0093", "status": "solved", "cost": 0.0, "elapsed": 0.522, "note": ""}
+{"phase": 1, "task_id": "search_0085", "status": "solved", "cost": 0.0, "elapsed": 0.738, "note": ""}
+{"phase": 1, "task_id": "search_0097", "status": "solved", "cost": 0.0, "elapsed": 0.426, "note": ""}
+{"phase": 1, "task_id": "coding_0063", "status": "infeasible", "cost": 0.0, "elapsed": 20.363, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "coding_0023", "status": "infeasible", "cost": 0.0, "elapsed": 29.083, "note": "tests contradict each other"}
+{"phase": 2, "task_id": "coding_0075", "status": "solved", "cost": 45.4, "elapsed": 1.041, "note": "arbitration kept the choice"}
+{"phase": 2, "task_id": "coding_0091", "status": "solved", "cost": 41.29999999999999, "elapsed": 1.056, "note": "arbitration kept the choice"}
+{"phase": 2, "task_id": "coding_0039", "status": "solved", "cost": 27.599999999999994, "elapsed": 6.059, "note": "arbitration kept the choice"}
+{"phase": 2, "task_id": "coding_0071", "status": "unparsed", "cost": 0.0, "elapsed": 0.001, "note": "cannot read workspace: [Errno 2] No such file or directory: '/data/tasks/coding_0071/workspace/mylib.py'"}
+{"phase": 2, "task_id": "coding_0059", "status": "unparsed", "cost": 0.0, "elapsed": 0.001, "note": "cannot read workspace: [Errno 2] No such file or directory: '/data/tasks/coding_0059/workspace/mylib.py'"}

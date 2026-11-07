@@ -461,3 +461,19 @@ def test_top_tie_carries_first_in_file_order_as_best_guess(tmp_path):
 
 def test_total_cost_is_not_declared_absent(tmp_path):
     assert _solve_q(tmp_path, "What is the total cost?").status != "infeasible"
+
+
+def test_execute_treats_null_decimals_as_absent(tmp_path):
+    ws = _ws(tmp_path, ROWS)
+    base = {"file": "sales.csv", "metric": "sum_units", "product": None, "region": None,
+            "month_from": None, "month_to": None}
+    assert execute({**base, "decimals": None}, ws, None).status == "solved"
+    assert execute({**base, "decimals": None}, ws, None).answer == execute(base, ws, None).answer
+    avg = {**base, "metric": "avg_price", "decimals": None}
+    assert execute(avg, ws, None).answer == execute({k: v for k, v in avg.items() if k != "decimals"}, ws, None).answer
+
+
+def test_loose_path_tie_keeps_best_guess(tmp_path):
+    ws = _ws(tmp_path, "1,west,widget,1,5,2\n2,east,gizmo,1,5,2\n")
+    r = solve(_task(_q("Which product sold the most units in total?"), ws, "exact_str"))
+    assert r.status == "unparsed" and r.extra == {"best_guess": "widget"}

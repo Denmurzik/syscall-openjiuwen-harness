@@ -344,6 +344,8 @@ def _valid_spec(spec) -> str | None:
     """Return an error description, or None if the spec is well formed."""
     if not isinstance(spec, dict) or not _KEYS <= set(spec) <= _KEYS | _OPTIONAL_KEYS:
         return "bad spec keys"
+    if "decimals" in spec and spec["decimals"] is None:
+        spec = {k: v for k, v in spec.items() if k != "decimals"}
     d = spec.get("decimals", 2)
     if not _is_int(d) or not 0 <= d <= _MAX_DECIMALS:
         return f"bad decimals: {d!r}"
@@ -490,7 +492,9 @@ def solve(task: Task) -> SolveResult:
             if isinstance(loose, SolveResult):
                 return spec
             result = execute(loose, task.workspace, task.check)
-            return result if result.status == "solved" else spec
+            if result.status == "solved":
+                return result
+            return result if result.extra and not spec.extra else spec
         return execute(spec, task.workspace, task.check)
     except Exception as e:
         return _unparsed(f"unexpected error: {e!r}")
