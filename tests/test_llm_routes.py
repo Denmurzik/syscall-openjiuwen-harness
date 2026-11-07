@@ -223,3 +223,10 @@ def test_extract_code_joins_blocks_and_patch_crlf_and_indent():
     assert out is not None and '        s = """a\nb"""\n        return s\n' in out
     out2 = apply_patch(src, "FUNC K.n\n    def n(self):\n        return 3\n")
     assert out2 is not None and "    def n(self):\n        return 3\n" in out2
+
+
+def test_program_route_uses_only_first_block(tmp_path):
+    reply = "```python\nprint(42)\n```\nOutput:\n```text\n42\n```"
+    r = run(solve_with_program(_task(tmp_path), FakeClient([reply])))
+    assert r.status == "solved" and r.answer == "42"
+    assert extract_code(reply, join_all=False) == "print(42)"

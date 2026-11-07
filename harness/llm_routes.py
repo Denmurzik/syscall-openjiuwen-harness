@@ -129,7 +129,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
             r = await client.chat(MODEL_FAST, messages, 400)
         except LLMUnavailable as e:
             return SolveResult("unparsed", note=f"llm unavailable: {e}")
-        code = extract_code(r.text)
+        code = extract_code(r.text, join_all=False)
         # subprocess + copytree block for up to 20 s: keep them off the event loop
         res = await asyncio.to_thread(run_program, code, task.workspace)
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
