@@ -36,7 +36,7 @@ def _members(tasks):
 
 
 def _theft(start, loss):
-    return (f"A warehouse starts with {start} boxes. It loses {loss} boxes to theft. "
+    return (f"A warehouse starts with {start} boxes. It loses {loss} boxes to a flood. "
             "How many boxes does it have at the end? "
             "Compute it with the bash tool (python3 -c). Work only inside the current directory.")
 

@@ -176,7 +176,7 @@ def test_json_group_before_program(tmp_path, monkeypatch):
     tasks = tmp_path / "tasks"
     for i, (a, b) in enumerate([(10, 3), (20, 5), (30, 7)]):
         _make(tasks, f"math_{i}", "math",
-              f"A warehouse starts with {a} boxes. It loses {b} boxes to theft. "
+              f"A warehouse starts with {a} boxes. It loses {b} boxes to a flood. "
               "How many boxes does it have at the end?", check="exact_int")
 
     async def no_program(task, client):

@@ -9,17 +9,50 @@ _FLAGS = re.IGNORECASE
 _THEN = r"(?:then\s+)?"
 
 # Each rule: (regex matched against the whole sentence, kind).
-_START = re.compile(rf"{_THEN}a warehouse starts with (\d+) boxes\.", _FLAGS)
+_FRAC = {"half": 2, "third": 3, "quarter": 4, "fifth": 5, "tenth": 10}
+_FRACS = "|".join(_FRAC)
+_ART = r"(?:one|a|an)"
+_INT = r"(\d+)"
+
+_START = re.compile(rf"{_THEN}a warehouse starts with {_INT} boxes\.", _FLAGS)
 _SPLIT = re.compile(
-    rf"{_THEN}the stock is split equally into (\d+) warehouses and it keeps one share \(rounded down\)\.", _FLAGS)
-_DOUBLE = re.compile(rf"{_THEN}the stock is doubled by merging with a sister warehouse\.", _FLAGS)
-_SHIP = re.compile(rf"{_THEN}it ships (\d+) boxes per day for (\d+) days\.", _FLAGS)
-_RECEIVE = re.compile(rf"{_THEN}it receives (\d+) deliveries of (\d+) boxes each\.", _FLAGS)
-_QUESTION = re.compile(rf"{_THEN}how many boxes does it have at the end\?", _FLAGS)
+    rf"{_THEN}the stock is (?:split equally into|then divided evenly among|divided evenly among) {_INT} "
+    r"warehouses(?: and it keeps one share|,? and this one retains a single share)"
+    r" \(rounded down\)\.", _FLAGS)
+_SCALE = re.compile(
+    rf"{_THEN}(?:the stock is (doubled|tripled)(?: by (?:merging with a sister warehouse|a big merger))?"
+    r"|an? (?:[a-z]+ ){0,4}merger(?: with an? [a-z]+ warehouse)? (?:then )?(doubles|triples) the stock)\.", _FLAGS)
+_SHIP = re.compile(
+    rf"{_THEN}(?:it ships {_INT} boxes per day for {_INT} days"
+    rf"|every day for {_INT} days, {_INT} boxes leave the warehouse"
+    rf"|for {_INT} days in a row, {_INT} boxes are shipped out daily)\.", _FLAGS)
+_RECEIVE = re.compile(
+    rf"{_THEN}(?:it receives {_INT} deliveries of {_INT} boxes each"
+    rf"|{_INT} trucks arrive, each carrying {_INT} boxes"
+    rf"|the warehouse takes in {_INT} shipments of {_INT} boxes apiece)\.", _FLAGS)
+_LOSS = re.compile(
+    rf"{_THEN}(?:it loses {_INT} boxes to theft|thieves take {_INT} boxes"
+    rf"|a leak ruins {_INT} boxes, which are thrown away|water damage destroys {_INT} boxes)\.", _FLAGS)
+_MOVED = re.compile(
+    rf"{_THEN}{_ART} ({_FRACS}) of the stock(?: \(rounded down\)|, rounded down,) "
+    r"is (?:moved|transferred) to another site\.", _FLAGS)
+_SELL = re.compile(
+    rf"{_THEN}(?:it )?(?:then )?sells ({_FRACS}) of the (?:boxes, rounding the number sold down"
+    r"|stock, with the number of boxes sold rounded down)\.", _FLAGS)
+_ADD_PCT = re.compile(
+    rf"{_THEN}(?:the stock grows by {_INT} percent \(rounded down\)"
+    rf"|a seasonal restock adds {_INT} percent of the current stock, rounded down)\.", _FLAGS)
+_LOSE_PCT = re.compile(
+    rf"{_THEN}(?:{_INT} percent of the stock \(rounded down\) spoils"
+    rf"|spoilage removes {_INT} percent of the stock, rounded down)\.", _FLAGS)
+_QUESTION = re.compile(
+    rf"{_THEN}(?:how many boxes does it have at the end|what is the final stock level in boxes"
+    r"|how many boxes remain in the end|how many boxes are left at the end)\?", _FLAGS)
 
 _RULES = [
-    (_START, "start"), (_SPLIT, "split"), (_DOUBLE, "double"),
-    (_SHIP, "ship"), (_RECEIVE, "receive"), (_QUESTION, "question"),
+    (_START, "start"), (_SPLIT, "split"), (_SCALE, "scale"), (_SHIP, "ship"), (_RECEIVE, "receive"),
+    (_LOSS, "loss"), (_MOVED, "moved"), (_SELL, "sell"), (_ADD_PCT, "add_pct"), (_LOSE_PCT, "lose_pct"),
+    (_QUESTION, "question"),
 ]
 
 _OPS = {
@@ -34,9 +67,16 @@ def _unparsed(note: str) -> SolveResult:
     return SolveResult("unparsed", note=note)
 
 
+def _nums(m) -> list[int]:
+    return [int(g) for g in m.groups() if g is not None and g.isdigit()]
+
+
 def parse(instruction: str) -> dict | SolveResult:
     start = None
     ops: list[list] = []
+    steps: list[str] = []  # the same operations as expressions over x
+    complex_op = False  # an operation that `ops` cannot express
+    guard = False  # a loss: stock must not go below zero, else leave it to the model
     asked = False
     for sentence in split_sentences(strip_boilerplate(instruction)):
         sentence = " ".join(sentence.split())
@@ -50,25 +90,48 @@ def parse(instruction: str) -> dict | SolveResult:
             if start is not None:
                 return _unparsed("duplicate start")
             start = int(m.group(1))
-        elif kind == "question":
-            if asked:
-                return _unparsed("repeated question")
+            continue
+        if kind == "question":
             asked = True
+            continue
+        if start is None:
+            return _unparsed(f"operation before start: {sentence!r}")
+        n = _nums(m)
+        if kind == "split":
+            op = ["//", n[0]]
+        elif kind == "scale":
+            word = (m.group(1) or m.group(2)).lower()
+            op = ["*", 2 if word in ("doubled", "doubles") else 3]
+        elif kind == "ship":
+            op = ["-", n[0] * n[1]]
+        elif kind == "receive":
+            op = ["+", n[0] * n[1]]
+        elif kind == "loss":
+            op = ["-", n[0]]
+            guard = True
         else:
-            if start is None:
-                return _unparsed(f"operation before start: {sentence!r}")
-            if kind == "split":
-                ops.append(["//", int(m.group(1))])
-            elif kind == "double":
-                ops.append(["*", 2])
-            elif kind == "ship":
-                ops.append(["-", int(m.group(1)) * int(m.group(2))])
+            guard = True
+            complex_op = True
+            if kind in ("moved", "sell"):
+                d = _FRAC[m.group(1).lower()]
+                steps.append(f"x-x//{d}")
+            elif kind == "add_pct":
+                steps.append(f"x+x*{n[0]}//100")
             else:
-                ops.append(["+", int(m.group(1)) * int(m.group(2))])
+                steps.append(f"x-x*{n[0]}//100")
+            ops.append(["?", 0])
+            continue
+        ops.append(op)
+        steps.append(f"x{op[0]}{op[1]}")
     if start is None:
         return _unparsed("no start value")
     if not asked:
         return _unparsed("no question")
+    if complex_op or guard:
+        spec = {"start": start, "steps": steps}
+        if guard:
+            spec["nonneg"] = True
+        return spec
     return {"start": start, "ops": ops}
 
 
@@ -134,6 +197,8 @@ def execute_steps(spec: dict) -> SolveResult:
                 return _unparsed("bad step")
             if abs(x) > _LIMIT:
                 return _unparsed("value too large")
+            if spec.get("nonneg") and x < 0:
+                return _unparsed("stock below zero")
         return SolveResult("solved", str(x))
     except _Infeasible as e:
         return SolveResult("infeasible", note=str(e))

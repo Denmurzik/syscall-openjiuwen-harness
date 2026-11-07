@@ -26,7 +26,7 @@ def test_examples():
 
 def test_unknown_sentence_is_unparsed():
     instr = _fixture("math_0004")["instruction"].replace(
-        "How many boxes", "It loses 5 boxes to theft. How many boxes")
+        "How many boxes", "It gets repainted 5 times. How many boxes")
     assert solve(_task(instr)).status == "unparsed"
 
 
@@ -146,3 +146,80 @@ def test_steps_bad_spec_unparsed():
 def test_execute_dispatches_steps_and_keeps_ops():
     assert execute({"start": 10, "steps": ["x-3"]}).answer == "7"
     assert execute({"start": 10, "ops": [["-", 3]]}).answer == "7"
+
+
+# ---- round-2 grammar (v2 operations and paraphrases)
+import pytest  # noqa: E402
+
+_Q = " How many boxes does it have at the end?"
+
+
+def _run(*sentences, q=_Q):
+    return solve(_task("A warehouse starts with 1000 boxes. " + " ".join(sentences) + q))
+
+
+@pytest.mark.parametrize("sentence,expected", [
+    ("Then the stock is tripled by a big merger.", "3000"),
+    ("Then a big merger triples the stock.", "3000"),
+    ("A merger with a sister warehouse then doubles the stock.", "2000"),
+    ("It loses 90 boxes to theft.", "910"),
+    ("Thieves take 90 boxes.", "910"),
+    ("A leak ruins 90 boxes, which are thrown away.", "910"),
+    ("Water damage destroys 90 boxes.", "910"),
+    ("Then one quarter of the stock (rounded down) is moved to another site.", "750"),
+    ("Then a quarter of the stock, rounded down, is transferred to another site.", "750"),
+    ("Then it sells half of the boxes, rounding the number sold down.", "500"),
+    ("It then sells half of the stock, with the number of boxes sold rounded down.", "500"),
+    ("Then the stock grows by 25 percent (rounded down).", "1250"),
+    ("A seasonal restock adds 25 percent of the current stock, rounded down.", "1250"),
+    ("Then 15 percent of the stock (rounded down) spoils.", "850"),
+    ("Spoilage removes 15 percent of the stock, rounded down.", "850"),
+    ("Every day for 3 days, 10 boxes leave the warehouse.", "970"),
+    ("For 3 days in a row, 10 boxes are shipped out daily.", "970"),
+    ("4 trucks arrive, each carrying 10 boxes.", "1040"),
+    ("The warehouse takes in 4 shipments of 10 boxes apiece.", "1040"),
+    ("The stock is then divided evenly among 3 warehouses, and this one retains a single share (rounded down).", "333"),
+])
+def test_v2_sentences(sentence, expected):
+    res = _run(sentence)
+    assert res.status == "solved" and res.answer == expected, res
+
+
+def test_rounding_semantics_with_odd_stock():
+    t = "A warehouse starts with 1001 boxes. "
+    assert solve(_task(t + "Then it sells half of the boxes, rounding the number sold down." + _Q)).answer == "501"
+    assert solve(_task(t + "Then one quarter of the stock (rounded down) is moved to another site." + _Q)).answer == "751"
+    assert solve(_task(t + "Then 15 percent of the stock (rounded down) spoils." + _Q)).answer == "851"
+    assert solve(_task(t + "Then the stock grows by 25 percent (rounded down)." + _Q)).answer == "1251"
+
+
+@pytest.mark.parametrize("q", ["What is the final stock level in boxes?", "How many boxes remain in the end?",
+                               "How many boxes are left at the end?"])
+def test_question_paraphrases(q):
+    assert _run("Then the stock is doubled by merging with a sister warehouse.", q=" " + q).answer == "2000"
+
+
+@pytest.mark.parametrize("sentence", [
+    "Then it sells half of the boxes, rounding the number sold up.",   # wrong direction: not our rule
+    "Then it sells half of the boxes.",                                 # no rounding statement
+    "Then 15 percent of the stock spoils.",                             # rounding unspecified
+    "Then the stock grows by 25 percent.",
+    "Thieves take 90 boxes from the neighbour.",
+    "Then the stock is quadrupled by a big merger.",
+])
+def test_unknown_or_underspecified_stays_unparsed(sentence):
+    assert _run(sentence).status == "unparsed"
+
+
+def test_loss_below_zero_is_not_answered():
+    assert _run("Thieves take 5000 boxes.").status == "unparsed"
+    assert _run("Spoilage removes 150 percent of the stock, rounded down.").status == "unparsed"
+
+
+def test_mixed_chain_and_zero_split_infeasible():
+    r = _run("Then it sells half of the boxes, rounding the number sold down.", "It loses 50 boxes to theft.",
+             "Then the stock is tripled by a big merger.")
+    assert r.answer == str((500 - 50) * 3)
+    assert _run("Then it sells half of the boxes, rounding the number sold down.",
+                "Then the stock is split equally into 0 warehouses and it keeps one share (rounded down).",
+                ).status == "infeasible"
