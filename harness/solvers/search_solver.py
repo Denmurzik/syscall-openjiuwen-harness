@@ -155,7 +155,6 @@ _FIELD_CUES = {
     "city": "Headquarters", "headquarter": "Headquarters", "headquarters": "Headquarters",
     "headquartered": "Headquarters", "based": "Headquarters", "located": "Headquarters",
 }
-_EMPLOYER_CUES = {"employer", "employs", "employed", "company"}
 _WORK_CUES = {"work", "works", "working"}
 _WORD = re.compile(r"[a-z0-9]+")
 
@@ -173,8 +172,9 @@ def _mentioned_names(question: str, kb: dict) -> list[tuple[int, int, str]]:
 
 
 def parse_loose(instruction: str, kb: dict) -> dict | SolveResult:
-    """Fallback after the strict `parse`: exactly one kb name in the question, k = number of "mentor" words,
-    field from a closed keyword vocabulary. Any other significant word -> unparsed."""
+    """Fallback after the strict `parse`: exactly one kb name in the question, relations read from a closed
+    vocabulary with a fixed grammatical form ("the X of ...", "...'s X", "who mentors/employs NAME",
+    "... NAME work"), field word from a closed list. Any other word or any non-canonical chain -> unparsed."""
     question = _question(instruction)
     if isinstance(question, SolveResult):
         return question
@@ -182,34 +182,59 @@ def parse_loose(instruction: str, kb: dict) -> dict | SolveResult:
     if len(hits) != 1:
         return _unparsed(f"loose: expected exactly one known name, found {len(hits)}")
     start, end, entity = hits[0]
-    words = _WORD.findall((question[:start] + " " + question[end:]).casefold())
-    k = 0
-    cues, employer, work, for_ = set(), False, False, False
-    for w in words:
-        if w in ("mentor", "mentors"):
-            k += 1
+    words = _WORD.findall((question[:start] + " zzname " + question[end:]).casefold())
+    cues: set[str] = set()
+    inner: list[str] = []   # relations written as "NAME's X", applied in text order
+    outer: list[str] = []   # relations written as "the X of ...", applied in reverse text order
+    work = employer_word = for_ = who = where = when_year = False
+    for i, w in enumerate(words):
+        prev = words[i - 1] if i else ""
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        if w in ("mentor", "employer", "company"):
+            rel = "Mentor" if w == "mentor" else "Employer"
+            if nxt == "of":
+                outer.append(rel)
+            elif prev == "s":
+                inner.append(rel)
+            else:
+                return _unparsed(f"loose: cannot place {w!r}")
+            employer_word = employer_word or rel == "Employer"
+        elif w in ("mentors", "employs"):
+            if prev != "who" or nxt != "zzname":
+                return _unparsed(f"loose: cannot place {w!r}")
+            outer.append("Mentor" if w == "mentors" else "Employer")
+            employer_word = employer_word or w == "employs"
         elif w in _FIELD_CUES:
             cues.add(_FIELD_CUES[w])
-        elif w in _EMPLOYER_CUES:
-            employer = True
         elif w in _WORK_CUES:
             work = True
         elif w == "for":
             for_ = True
-        elif w not in _STOP_WORDS:
+        elif w == "who":
+            who = True
+        elif w == "where":
+            where = True
+        elif w in ("when", "year"):
+            when_year = True
+        elif w not in _STOP_WORDS and w != "zzname":
             return _unparsed(f"loose: unknown word {w!r}")
+    chain = inner + outer[::-1] + (["Employer"] if work else [])
+    if work and not (employer_word or for_ or cues):
+        return _unparsed("loose: ambiguous 'work'")
+    if "Employer" in chain[:-1]:
+        return _unparsed("loose: non-canonical relation order")
     if len(cues) > 1:
         return _unparsed("loose: conflicting field words")
     if cues:
-        field = cues.pop()
-        path = ["Mentor"] * k + (["Employer"] if (employer or work) and field in ("Headquarters", "Founded") else [])
-    elif employer or (work and for_):
-        field, path = "Employer", ["Mentor"] * k
-    elif k and not work:
-        field, path = "Mentor", ["Mentor"] * (k - 1)
-    else:
+        field = next(iter(cues))
+        if who or (field in ("Born", "Founded") and where) or (field == "Headquarters" and when_year):
+            return _unparsed("loose: question word does not fit the field")
+        if field == "Born" and "Employer" in chain:
+            return _unparsed("loose: Born asked of a company")
+        return {"entity": entity, "path": chain, "field": field}
+    if not chain:
         return _unparsed("loose: no field word")
-    return {"entity": entity, "path": path, "field": field}
+    return {"entity": entity, "path": chain[:-1], "field": chain[-1]}
 
 
 # -------------------------------------------------------------------- execution

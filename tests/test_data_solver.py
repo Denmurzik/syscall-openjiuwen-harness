@@ -322,3 +322,23 @@ def test_solve_loose_end_to_end(tmp_path):
 def test_solve_top_tie_is_unparsed(tmp_path):
     ws = _ws(tmp_path, "1,west,widget,1,5,2\n2,east,gizmo,1,5,2\n")
     assert solve(_task(_q("Which product sold the most units overall?"), ws, "exact_str")).status == "unparsed"
+
+
+@pytest.mark.parametrize("question", [
+    "How many units were sold in months 1 and 3?",
+    "How many units were sold in month 1 and month 3?",
+])
+def test_parse_loose_and_is_not_a_range_without_between(tmp_path, question):
+    ws = _ws(tmp_path, TOP_ROWS)
+    assert isinstance(parse_loose(_q(question), ws), SolveResult)
+
+
+def test_parse_loose_between_and_is_a_range(tmp_path):
+    ws = _ws(tmp_path, TOP_ROWS)
+    res = parse_loose(_q("How many units were sold between months 1 and 3?"), ws)
+    assert (res["month_from"], res["month_to"]) == (1, 3)
+
+
+def test_top_ignores_rows_with_empty_key(tmp_path):
+    ws = _ws(tmp_path, "1,west,widget,1,5,2\n2,west,,1,50,2\n3,east,gizmo,1,3,2\n")
+    assert execute(_spec("top_product_sum_units"), ws, "exact_str") == SolveResult("solved", "widget")

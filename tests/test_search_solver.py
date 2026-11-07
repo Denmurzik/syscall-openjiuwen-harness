@@ -278,3 +278,33 @@ def test_solve_loose_does_not_guess_when_chain_missing(tmp_path):
     ws = _kb(tmp_path, _KB)
     task = _task(_q("What is the birth year of Arktika Labs' employer?"), ws)
     assert solve(task).status == "unparsed"
+
+
+@pytest.mark.parametrize("question", [
+    "Who does Alice Novak mentor?",                              # inverse relation
+    "Who did Alice Novak mentor?",
+    "In which year was the employer of Alice Novak born?",       # Born asked of a company
+    "Who founded Arktika Labs?",
+    "Where was Alice Novak born?",
+    "When is Alice Novak headquartered?",
+    "In which city is the mentor of the employer of Alice Novak based?",   # permuted chain
+    "Who is the mentor of Alice Novak's employer?",
+])
+def test_parse_loose_rejects_misleading_phrasings(tmp_path, question):
+    kb = load_kb(_kb(tmp_path, _KB) / "kb")
+    assert isinstance(parse_loose(_q(question), kb), SolveResult)
+
+
+@pytest.mark.parametrize("question,spec", [
+    ("In which city is the employer of the mentor of Alice Novak based?",
+     ("Alice Novak", ["Mentor", "Employer"], "Headquarters")),
+    ("Who mentors Alice Novak?", None),
+    ("Who is Alice Novak's mentor's mentor?", ("Alice Novak", ["Mentor"], "Mentor")),
+])
+def test_parse_loose_canonical_chains(tmp_path, question, spec):
+    kb = load_kb(_kb(tmp_path, _KB) / "kb")
+    res = parse_loose(_q(question), kb)
+    if spec is None:
+        assert res == _spec("Alice Novak", [], "Mentor")
+    else:
+        assert res == _spec(*spec)

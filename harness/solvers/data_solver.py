@@ -158,7 +158,8 @@ _LOOSE_STOP = {
     "to", "through", "and", "s", "which", "did", "there", "had", "has", "have", "been", "we", "by", "that",
 }
 _LOOSE_MONTHS = re.compile(
-    r"\bmonths?\s+(\d+)(?:\s*(?:through|to|and|-)\s*(?:months?\s+)?(\d+))?(?!\d)", _FLAGS)
+    r"(?:\b(between|from)\s+)?\bmonths?\s+(\d+)"
+    r"(?:\s*(?:through|to|-)\s*(?:months?\s+)?(\d+)|\s+and\s+(?:months?\s+)?(\d+))?(?!\d)", _FLAGS)
 _WORD = re.compile(r"[a-z0-9]+")
 
 
@@ -200,9 +201,12 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
         return _unparsed("loose: several month expressions")
     month_from = month_to = None
     if ranges:
-        month_from = int(ranges[0].group(1))
-        month_to = int(ranges[0].group(2) or ranges[0].group(1))
-        text = text[:ranges[0].start()] + " " + text[ranges[0].end():]
+        mm = ranges[0]
+        if mm.group(4) is not None and mm.group(1) is None:
+            return _unparsed("loose: 'and' joins months only after between/from")
+        month_from = int(mm.group(2))
+        month_to = int(mm.group(3) or mm.group(4) or mm.group(2))
+        text = text[:mm.start()] + " " + text[mm.end():]
 
     words = _WORD.findall(text)
     found = {c: set() for c in _TOP_COLUMNS}
@@ -355,6 +359,8 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
                 count += 1
                 if top_col is not None:
                     raw = (row[top_col] or "").strip()
+                    if not raw:
+                        continue
                     share = (Decimal(1) if base == "count_orders" else Decimal(row["units"].strip())
                              if base == "sum_units" else
                              Decimal(row["units"].strip()) * Decimal(row["price"].strip()))
