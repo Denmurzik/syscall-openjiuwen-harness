@@ -39,10 +39,11 @@ FILE_CAP = 12 * 1024
 _FENCE = re.compile(r"```[A-Za-z0-9_+-]*[ \t]*\n(.*?)```", re.S)
 
 
-def extract_code(text: str) -> str:
+def extract_code(text: str, join_all: bool = True) -> str:
+    """Code from ``` fences: all blocks joined (patches) or only the first (programs)."""
     blocks = [m.group(1).strip("\n").rstrip() for m in _FENCE.finditer(text)]
     if blocks:
-        return "\n".join(b for b in blocks if b)
+        return "\n".join(b for b in blocks if b) if join_all else blocks[0]
     t = text.strip("\n")
     if t.lstrip().startswith("```"):  # unterminated fence
         t = re.sub(r"^\s*```[A-Za-z0-9_+-]*[ \t]*\n?", "", t)
