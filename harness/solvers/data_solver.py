@@ -12,13 +12,25 @@ _FILE = re.compile(r"The file (\S+\.csv) has columns ([\w,]+)(?: \(\d+ rows\))?\
 
 # Filter fragments, removed from the question text before the metric is matched.
 _PRODUCT = re.compile(r"\s+of product '(\w+)'", _FLAGS)
-_REGION = re.compile(r"\s+in region '(\w+)'", _FLAGS)
-_MONTHS = re.compile(r"\s+in months? (\d+) through (\d+) inclusive", _FLAGS)
+# (pattern, value is quoted); an unquoted region must be confirmed against the CSV.
+_REGIONS = [
+    (re.compile(r"\s+in region '(\w+)'", _FLAGS), True),
+    (re.compile(r"\s+in the '(\w+)' region", _FLAGS), True),
+    (re.compile(r"\s+in region (\w+)", _FLAGS), False),
+    (re.compile(r"\s+in the (\w+) region", _FLAGS), False),
+]
+_RANGES = [
+    re.compile(r"\s+in months? (\d+) through (\d+) inclusive", _FLAGS),
+    re.compile(r"\s+in months? (\d+) to (\d+)(?: inclusive)?", _FLAGS),
+    re.compile(r"\s+between months? (\d+) and (\d+)(?: inclusive)?", _FLAGS),
+    re.compile(r"\s+from months? (\d+) to (?:month )?(\d+)(?: inclusive)?", _FLAGS),
+]
 _MONTH = re.compile(r"\s+in month (\d+)(?!\d)", _FLAGS)
 
 _METRICS = [
-    ("sum_units", re.compile(r"how many units were sold\?", _FLAGS)),
-    ("sum_revenue", re.compile(r"what (?:is|was) the total revenue\?", _FLAGS)),
+    ("sum_units", re.compile(
+        r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total units(?: sold)?)\?", _FLAGS)),
+    ("sum_revenue", re.compile(r"what (?:is|was) (?:the )?(?:total )?revenue\?", _FLAGS)),
     ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)\?", _FLAGS)),
     ("avg_price", re.compile(r"what (?:is|was) the average price\?", _FLAGS)),
     ("avg_units", re.compile(r"what (?:is|was) the average units(?: per order)?\?", _FLAGS)),
@@ -49,7 +61,19 @@ def _take(rx: re.Pattern, text: str):
     return m, text[:m.start()] + text[m.end():]
 
 
-def parse(instruction: str) -> dict | SolveResult:
+def _column_values(path: Path, column: str) -> set[str] | None:
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            names = {(c or "").strip().casefold(): c for c in (reader.fieldnames or [])}
+            if column not in names:
+                return None
+            return {(row[names[column]] or "").strip().casefold() for row in reader}
+    except (OSError, ValueError, csv.Error):
+        return None
+
+
+def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult:
     sentences = [" ".join(s.split()) for s in split_sentences(strip_boilerplate(instruction))]
     if len(sentences) != 2:
         return _unparsed(f"expected file sentence and question, got {len(sentences)} sentences")
@@ -60,22 +84,45 @@ def parse(instruction: str) -> dict | SolveResult:
     text = sentences[1]
 
     product = region = month_from = month_to = None
-    for name, rx in (("product", _PRODUCT), ("region", _REGION), ("months", _MONTHS), ("month", _MONTH)):
+    found, text = _take(_PRODUCT, text)
+    if found is False:
+        return _unparsed("repeated product filter")
+    if found:
+        product = found.group(1)
+
+    regions = []
+    for rx, quoted in _REGIONS:
         found, text = _take(rx, text)
         if found is False:
-            return _unparsed(f"repeated {name} filter")
-        if found is None:
-            continue
-        if name == "product":
-            product = found.group(1)
-        elif name == "region":
-            region = found.group(1)
-        elif name == "months":
-            month_from, month_to = int(found.group(1)), int(found.group(2))
-        else:
-            if month_from is not None:
-                return _unparsed("conflicting month filters")
-            month_from = month_to = int(found.group(1))
+            return _unparsed("repeated region filter")
+        if found:
+            regions.append((found.group(1), quoted))
+    if len(regions) > 1:
+        return _unparsed("repeated region filter")
+    if regions:
+        region, quoted = regions[0]
+        if not quoted:
+            values = _column_values(Path(workspace) / file, "region") if workspace is not None else None
+            if values is None or region.casefold() not in values:
+                return _unparsed(f"unquoted region {region!r} not confirmed by the data")
+
+    ranges = []
+    for rx in _RANGES:
+        found, text = _take(rx, text)
+        if found is False:
+            return _unparsed("repeated month filter")
+        if found:
+            ranges.append((int(found.group(1)), int(found.group(2))))
+    found, text = _take(_MONTH, text)
+    if found is False:
+        return _unparsed("repeated month filter")
+    if found:
+        ranges.append((int(found.group(1)),) * 2)
+    if len(ranges) > 1:
+        return _unparsed("conflicting month filters")
+    if ranges:
+        month_from, month_to = ranges[0]
+
     text = " ".join(text.split())
     metrics = [name for name, rx in _METRICS if rx.fullmatch(text)]
     if len(metrics) != 1:
@@ -117,7 +164,7 @@ def _fmt(value: Decimal, check: str | None) -> str:
     text = format(value, "f")
     if "." in text:
         text = text.rstrip("0").rstrip(".")
-    return text
+    return "0" if text == "-0" else text
 
 
 def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
@@ -131,7 +178,7 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             return SolveResult("infeasible", note=f"no such file: {spec['file']}")
         with path.open(newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
-            columns = [c.strip() for c in (reader.fieldnames or [])]
+            columns = [c.strip().casefold() for c in (reader.fieldnames or [])]
             reader.fieldnames = columns
             needed = list(_REQUIRED[metric])
             if spec["product"] is not None:
@@ -171,6 +218,8 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
                 return SolveResult("solved", "0", note="average of empty selection")
             total = total / count
         return SolveResult("solved", _fmt(total, check))
+    except UnicodeDecodeError as e:
+        return SolveResult("infeasible", note=f"cannot decode file: {e!r}")
     except (ValueError, InvalidOperation, AttributeError, KeyError, TypeError, csv.Error) as e:
         return _unparsed(f"bad data: {e!r}")
     except OSError as e:
@@ -179,7 +228,7 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
 
 def solve(task: Task) -> SolveResult:
     try:
-        spec = parse(task.instruction)
+        spec = parse(task.instruction, task.workspace)
         if isinstance(spec, SolveResult):
             return spec
         return execute(spec, task.workspace, task.check)
