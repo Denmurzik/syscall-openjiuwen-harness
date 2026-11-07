@@ -81,10 +81,10 @@ def test_average_rounds_half_up(tmp_path):
     assert res.answer == "2.5"
 
 
-def test_average_empty_is_infeasible(tmp_path):
+def test_average_empty_answers_zero(tmp_path):
     ws = _ws(tmp_path, ROWS)
     res = solve(_task(_q("What is the average price of product 'nothing'?"), ws))
-    assert res.status == "infeasible"
+    assert (res.status, res.answer) == ("solved", "0")
 
 
 def test_region_filter(tmp_path):

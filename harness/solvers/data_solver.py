@@ -168,7 +168,7 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             return SolveResult("solved", str(count))
         if metric in ("avg_price", "avg_units"):
             if count == 0:
-                return SolveResult("infeasible", note="average of empty selection")
+                return SolveResult("solved", "0", note="average of empty selection")
             total = total / count
         return SolveResult("solved", _fmt(total, check))
     except (ValueError, InvalidOperation, AttributeError, KeyError, TypeError, csv.Error) as e:
