@@ -1,6 +1,11 @@
 """All thresholds and timeouts in one place."""
 import os
 
+# model names: the single place (chosen by measurement, see README)
+MODEL_FAST = "qwen3.8-27b-noreason"
+MODEL_ALT = "qwen3.6-35b-a3b-noreason"
+MODEL_REASON = "qwen3.8-27b"
+
 PHASE1_WORKERS = 8
 CODING_TIME_LIMIT = 90
 PHASE1_TIMEOUT = {"coding": 100, "default": 15}

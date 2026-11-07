@@ -1,3 +1,4 @@
+import ast
 import re
 
 from harness.result import SolveResult
@@ -75,7 +76,71 @@ def _is_int(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
+_LIMIT = 10**18
+_BIN = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b, ast.Mult: lambda a, b: a * b,
+        ast.FloorDiv: lambda a, b: a // b}
+
+
+class _Infeasible(Exception):
+    pass
+
+
+class _Unparsed(Exception):
+    pass
+
+
+def _eval(node: ast.AST, x: int) -> int:
+    if isinstance(node, ast.Expression):
+        return _eval(node.body, x)
+    if isinstance(node, ast.Constant):
+        if type(node.value) is not int:
+            raise _Unparsed("non-integer constant")
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id != "x":
+            raise _Unparsed(f"unknown name {node.id!r}")
+        return x
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        v = _eval(node.operand, x)
+        return -v if isinstance(node.op, ast.USub) else v
+    if isinstance(node, ast.BinOp) and type(node.op) in _BIN:
+        a, b = _eval(node.left, x), _eval(node.right, x)
+        if isinstance(node.op, ast.FloorDiv) and b == 0:
+            raise _Infeasible("division by zero")
+        v = _BIN[type(node.op)](a, b)
+        if abs(v) > _LIMIT:
+            raise _Unparsed("value too large")
+        return v
+    raise _Unparsed(f"forbidden expression node {type(node).__name__}")
+
+
+def execute_steps(spec: dict) -> SolveResult:
+    """Safe evaluator for {"start": int, "steps": ["x-3*4", "x-x//4", ...]}."""
+    try:
+        x = spec["start"]
+        steps = spec["steps"]
+        if not _is_int(x) or abs(x) > _LIMIT or not isinstance(steps, list):
+            return _unparsed("bad spec")
+        for step in steps:
+            if not isinstance(step, str) or len(step) > 200:
+                return _unparsed("bad step")
+            try:
+                tree = ast.parse(step.strip(), mode="eval")
+            except (SyntaxError, ValueError, RecursionError):
+                return _unparsed(f"bad step syntax: {step!r}")
+            x = _eval(tree, x)
+        return SolveResult("solved", str(x))
+    except _Infeasible as e:
+        return SolveResult("infeasible", note=str(e))
+    except _Unparsed as e:
+        return _unparsed(str(e))
+    except Exception as e:
+        return _unparsed(f"bad spec: {e!r}")
+
+
 def execute(spec: dict) -> SolveResult:
+    if isinstance(spec, dict) and "steps" in spec and "ops" not in spec:
+        return execute_steps(spec)
     try:
         x = spec["start"]
         ops = spec["ops"]

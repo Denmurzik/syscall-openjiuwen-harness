@@ -2,12 +2,13 @@
 import json
 import re
 
+from harness.config import MODEL_FAST
 from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable
 from harness.result import SolveResult
 from harness.solvers import data_solver, math_solver, search_solver
 from harness.tasks import Task
 
-MODEL = "qwen3.6-35b-a3b-noreason"
+MODEL = MODEL_FAST
 MAX_TOKENS = 250
 
 _WHOLE = re.compile(r"\{([SEN]\d+)\}")
@@ -19,19 +20,22 @@ _RULES = (
     "A placeholder is a JSON string such as \"{N1}\", used as the whole value. "
     "If the task text does not contain enough data to build the specification, return {\"impossible\": true}. "
     "String-valued fields (product, region, entity, file) take {S#} or {E#} placeholders or literal text, never {N#}. "
+    "Write the JSON object on one line without spaces or line breaks. "
     "Output only the JSON object, nothing else."
 )
 
 _SCHEMAS = {
     "math": (
         "You turn a short arithmetic word problem into a JSON specification.\n"
-        "Schema: {\"start\": <integer>, \"ops\": [[<op>, <integer>], ...]}\n"
-        "start is the initial quantity. ops are applied in order to the running value; op is one of "
-        "\"+\", \"-\", \"*\", \"//\" (integer division rounding down). Each operand is one integer "
-        "(or one placeholder), or a list of integers/placeholders meaning their product; no other expressions. Examples: 'it loses N boxes' is [\"-\", N]; 'receives N boxes' is "
-        "[\"+\", N]; 'doubled' is [\"*\", 2]; 'split equally into N parts, keeps one share rounded down' is "
-        "[\"//\", N]. 'ships N per day for M days' is [\"-\", [\"{N2}\", \"{N3}\"]] (a list operand is a product); "
-        "'receives N deliveries of M boxes each' is [\"+\", [N, M]].\n"
+        "Schema: {\"start\": <integer>, \"steps\": [<expression>, ...]}\n"
+        "start is the initial quantity. Each step is a string expression over the running value x, applied in "
+        "order; the result of a step becomes the new x. Allowed: x, integers (or placeholders), + - * //, "
+        "unary minus, parentheses; // is integer division rounding down. Examples: 'loses N boxes' is "
+        "\"x-{N1}\"; 'receives N boxes' is \"x+{N1}\"; 'doubled' is \"x*2\"; 'split equally into N parts, "
+        "keeps one share rounded down' is \"x//{N1}\"; 'loses a quarter (rounded down)' is \"x-x//4\"; "
+        "'ships N per day for M days' is \"x-{N2}*{N3}\"; 'receives N deliveries of M boxes each' is "
+        "\"x+{N2}*{N3}\". Full example on one line: "
+        "{\"start\":\"{N1}\",\"steps\":[\"x-{N2}*{N3}\",\"x-x//4\",\"x*2\"]}.\n"
     ),
     "data_analysis": (
         "You turn a question about a CSV file into a JSON specification.\n"
@@ -39,7 +43,11 @@ _SCHEMAS = {
         "\"product\": <string or null>, \"region\": <string or null>, "
         "\"month_from\": <integer or null>, \"month_to\": <integer or null>}\n"
         "metric is one of: \"sum_units\" (total units sold or ordered), \"sum_revenue\" (total of units*price), "
-        "\"count_orders\" (number of rows), \"avg_price\" (average price), \"avg_units\" (average units per order). "
+        "\"count_orders\" (number of rows), \"avg_price\" (average price), \"avg_units\" (average units per order); "
+        "or, for 'which product/region sold the most units / had the most revenue / most orders': "
+        "\"top_product_sum_units\", \"top_product_sum_revenue\", \"top_product_count_orders\", "
+        "\"top_region_sum_units\", \"top_region_sum_revenue\", \"top_region_count_orders\" "
+        "(the answer is the winning product or region name; product/region filters stay null). "
         "product and region filter rows by exact value (case-insensitive); null means no filter. "
         "month_from and month_to are an inclusive month range; give both or set both to null (a single month m "
         "is month_from = month_to = m). file is the literal file name from the text.\n"
@@ -128,7 +136,7 @@ def _collapse_products(spec: object) -> object:
 
 def _execute(task: Task, spec: object) -> SolveResult:
     if task.task_type == "math":
-        return math_solver.execute(_collapse_products(spec))
+        return math_solver.execute(_collapse_products(spec))  # dispatches steps / ops
     if task.task_type == "data_analysis":
         return data_solver.execute(spec, task.workspace, task.check)
     if task.task_type == "search":

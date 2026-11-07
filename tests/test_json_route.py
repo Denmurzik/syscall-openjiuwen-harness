@@ -1,3 +1,4 @@
+from harness import config
 import asyncio
 import json
 import shutil
@@ -66,7 +67,7 @@ def test_one_call_per_group():
     assert len(client.calls) == 1
     assert client.calls[0]["extra"] == {"response_format": {"type": "json_object"}}
     assert client.calls[0]["max_tokens"] == 250
-    assert client.calls[0]["model"] == "qwen3.6-35b-a3b-noreason"
+    assert client.calls[0]["model"] == config.MODEL_FAST
     assert client.calls[0]["messages"][-1] == {"role": "user", "content": template}
     assert [out[k].answer for k in ("m1", "m2", "m3")] == ["993", "480", "89"]
     assert {r.status for r in out.values()} == {"solved"}
@@ -179,3 +180,46 @@ def test_product_operand_list_collapsed():
     spec = {"start": "{N1}", "ops": [["-", ["{N2}", "{N3}"]]]}
     out = asyncio.run(solve_group("math", template, _members(tasks), FakeClient(json.dumps(spec))))
     assert [out[k].answer for k in ("m1", "m2")] == ["979", "420"]
+
+
+def test_steps_spec_with_placeholders_inside_expression():
+    def ship(start, n, d):
+        return (f"A warehouse starts with {start} boxes. It ships {n} boxes per day for {d} days. "
+                "How many boxes does it have at the end? Work only inside the current directory.")
+    tasks = [_math_task("m1", ship(1000, 7, 3)), _math_task("m2", ship(500, 20, 4))]
+    template = templatize(tasks[0].instruction)[0]
+    spec = {"start": "{N1}", "steps": ["x-{N2}*{N3}", "x-x//4"]}
+    out = asyncio.run(solve_group("math", template, _members(tasks), FakeClient(json.dumps(spec))))
+    assert [out[k].answer for k in ("m1", "m2")] == [str(979 - 979 // 4), str(420 - 420 // 4)]
+
+
+def test_math_schema_has_steps_example_and_one_line_rule():
+    from harness.json_route import _system_prompt
+    p = _system_prompt("math")
+    assert '"steps"' in p and "x-{N2}*{N3}" in p
+    assert "one line" in p.lower()
+
+
+def test_data_schema_lists_top_metrics():
+    from harness.json_route import _system_prompt
+    from harness.solvers.data_solver import _TOP_NAMES
+    p = _system_prompt("data_analysis")
+    for name in _TOP_NAMES:
+        assert name in p
+
+
+def test_data_top_metric_via_2a():
+    ws = FIX / "data_analysis_0002" / "workspace"
+    ins = json.loads((FIX / "data_analysis_0002" / "task.json").read_text(encoding="utf-8"))["instruction"]
+    t = Task("d1", "data_analysis", ins, 1.0, "exact_int", ws.parent, ws)
+    spec = {"file": "sales.csv", "metric": "top_product_sum_units", "product": None, "region": None,
+            "month_from": None, "month_to": None}
+    out = asyncio.run(solve_group("data_analysis", templatize(ins)[0], [(t, {})], FakeClient(json.dumps(spec))))
+    assert out["d1"].status == "solved", out
+
+
+def test_model_names_come_from_config():
+    from harness import config, json_route, llm_routes
+    assert json_route.MODEL == config.MODEL_FAST
+    assert llm_routes.MODEL_FAST == config.MODEL_FAST
+    assert config.MODEL_ALT and config.MODEL_REASON

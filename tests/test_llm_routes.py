@@ -1,3 +1,4 @@
+from harness import config
 import asyncio
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def test_program_route_writes_last_line(tmp_path):
     c = FakeClient(["```python\nprint('x')\nprint(42)\n```"])
     r = run(solve_with_program(_task(tmp_path), c))
     assert r.status == "solved" and r.answer == "42"
-    assert c.calls[0]["model"] == "qwen3.6-35b-a3b-noreason" and c.calls[0]["max_tokens"] == 400
+    assert c.calls[0]["model"] == config.MODEL_FAST and c.calls[0]["max_tokens"] == 400
 
 
 def test_program_route_impossible(tmp_path):
@@ -97,7 +98,7 @@ def test_fix_coding_second_attempt(tmp_path):
                     "FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE])
     r = run(fix_coding(t, c))
     assert r.status == "solved" and r.answer == "DONE"
-    assert [x["model"] for x in c.calls] == ["qwen3.6-35b-a3b-noreason", "qwen3.8-27b-noreason"]
+    assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT]
     assert [x["max_tokens"] for x in c.calls] == [400, 600]
     assert (t.workspace / "test_mylib.py").read_bytes() == tests_before
     assert "return sum(xs)" in (t.workspace / "mylib.py").read_text()
@@ -115,7 +116,7 @@ def test_fix_coding_third_attempt_only_for_reward_3(tmp_path):
     c = FakeClient([bad, bad, "FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE])
     r = run(fix_coding(t, c))
     assert r.status == "solved" and len(c.calls) == 3
-    assert c.calls[2]["model"] == "qwen3.8-27b"
+    assert c.calls[2]["model"] == config.MODEL_REASON
     assert c.calls[2]["extra"] == {"reasoning_effort": "low"} and c.calls[2]["max_tokens"] == 3000
 
 

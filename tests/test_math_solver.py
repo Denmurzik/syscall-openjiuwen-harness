@@ -87,3 +87,52 @@ def test_solve_never_raises(monkeypatch):
     monkeypatch.setattr(ms, "parse", boom)
     res = ms.solve(_task("anything"))
     assert res.status == "unparsed" and "kaboom" in res.note
+
+
+# ---- expression steps
+from harness.solvers.math_solver import execute_steps  # noqa: E402
+
+
+def _steps(start, *steps):
+    return execute_steps({"start": start, "steps": list(steps)})
+
+
+def test_steps_basic_and_expressions():
+    r = _steps(1000, "x-7*3", "x-x//4", "x*2", "-x+5", "(x+1)*2")
+    x = 1000 - 21
+    x = x - x // 4
+    x = -(x * 2) + 5
+    x = (x + 1) * 2
+    assert r.status == "solved" and r.answer == str(x)
+
+
+def test_steps_floor_division_negative():
+    assert _steps(-7, "x//2").answer == "-4"
+
+
+def test_steps_div_zero_infeasible():
+    assert _steps(5, "x//0").status == "infeasible"
+    assert _steps(5, "x-5", "10//x").status == "infeasible"
+
+
+def test_steps_forbidden_nodes_unparsed():
+    for bad in ("y+1", "x**2", "x/2", "x%3", "__import__('os')", "x+1.5", "abs(x)", "x if x else 1",
+                "[x]", "x<2", "x+True", "lambda: 1", "x;1", "", "x.real", "x+'a'"):
+        assert _steps(5, bad).status == "unparsed", bad
+
+
+def test_steps_overflow_unparsed():
+    assert _steps(10**9, "x*x", "x*x").status == "unparsed"
+    assert _steps(10**18 + 1, "x").status == "unparsed"
+
+
+def test_steps_bad_spec_unparsed():
+    assert execute_steps({"start": "5", "steps": ["x"]}).status == "unparsed"
+    assert execute_steps({"start": 5, "steps": "x"}).status == "unparsed"
+    assert execute_steps({"start": 5, "steps": [3]}).status == "unparsed"
+    assert execute_steps({"start": True, "steps": ["x"]}).status == "unparsed"
+
+
+def test_execute_dispatches_steps_and_keeps_ops():
+    assert execute({"start": 10, "steps": ["x-3"]}).answer == "7"
+    assert execute({"start": 10, "ops": [["-", 3]]}).answer == "7"

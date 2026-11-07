@@ -13,7 +13,8 @@ import textwrap
 from pathlib import Path
 
 from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
-from harness.llm_routes import MODEL_FAST, _run_candidate, write_mylib
+from harness.config import MODEL_FAST
+from harness.llm_routes import _run_candidate, write_mylib
 from harness.result import SolveResult
 from harness.solvers.coding_solver import _segment, _splice, _units
 from harness.tasks import Task

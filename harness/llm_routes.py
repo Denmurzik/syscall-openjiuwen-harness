@@ -16,9 +16,7 @@ from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic 
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
 
-MODEL_FAST = "qwen3.6-35b-a3b-noreason"
-MODEL_MID = "qwen3.8-27b-noreason"
-MODEL_REASON = "qwen3.8-27b"
+from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON  # noqa: E402,F401
 
 PROGRAM_SYSTEM = ("Write a Python 3 program that prints only the final answer to stdout. "
                   "Never write answer.txt or any file: the task text mentions answer.txt, ignore that, "
@@ -279,7 +277,7 @@ async def fix_coding(task: Task, client) -> SolveResult:
     if base_report.ok:
         return SolveResult("solved", answer="DONE", note="tests already pass")
     output = base_report.output
-    attempts = [(MODEL_FAST, 400, {}), (MODEL_MID, 600, {})]
+    attempts = [(MODEL_FAST, 400, {}), (MODEL_ALT, 600, {})]
     if task.reward >= 3 or _budget_is_free(client):
         attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))
     note = "no attempt made"
