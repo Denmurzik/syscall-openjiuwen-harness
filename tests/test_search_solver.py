@@ -71,6 +71,12 @@ def test_parse_variants():
         "Which company does Alice Novak work for?": ("Alice Novak", [], "Employer"),
         "Who employs the mentor of Alice Novak?": ("Alice Novak", ["Mentor"], "Employer"),
         "Who is Alice Novak's employer?": ("Alice Novak", [], "Employer"),
+        "Who is the employer of Alice Novak?": ("Alice Novak", [], "Employer"),
+        "Where is the headquarters of Helix Motors?": ("Helix Motors", [], "Headquarters"),
+        "In which city is Helix Motors headquartered?": ("Helix Motors", [], "Headquarters"),
+        "What year was Alice Novak born?": ("Alice Novak", [], "Born"),
+        "When was Helix Motors founded?": ("Helix Motors", [], "Founded"),
+        "Who mentors Alice Novak?": ("Alice Novak", [], "Mentor"),
         "in  which year was  ALICE novak born.": ("ALICE novak", [], "Born"),
         "In which year was the employer of Alice Novak founded?": ("Alice Novak", ["Employer"], "Founded"),
     }
@@ -82,8 +88,6 @@ def test_parse_rejects_noise():
     assert parse(_q("In which year was Alice Novak born? Also, where?")).status == "unparsed"
     assert parse(INTRO.strip()).status == "unparsed"
     assert parse(_q("In which year was  born?")).status == "unparsed"
-    # ambiguous scoping must not be guessed
-    assert parse(_q("Who is the mentor of Alice Novak's employer?")).status == "unparsed"
 
 
 def test_case_and_whitespace_insensitive_names():
@@ -140,3 +144,54 @@ def test_load_kb(tmp_path):
 def test_solve_never_raises(tmp_path):
     assert solve(_task(_q("In which year was Irina Smith born?"), tmp_path / "missing")).status == "infeasible"
     assert solve(_task(None)).status == "unparsed"  # type: ignore[arg-type]
+
+
+def test_ambiguous_scope_gives_alternatives():
+    spec = parse(_q("Who is the mentor of Alice Novak's employer?"))
+    assert spec["alternatives"] == [
+        {"entity": "Alice Novak", "path": ["Employer"], "field": "Mentor"},
+        {"entity": "Alice Novak", "path": ["Mentor"], "field": "Employer"},
+    ]
+    assert execute(spec, WS1).status == "unparsed"  # execute stays single-spec strict
+
+
+def test_ambiguous_scope_solve(tmp_path):
+    ws = _kb(tmp_path, {
+        "a.md": "# Ann\nEmployer: Acme\n",
+        "c.md": "# Acme\nMentor: Dan\n",
+    })
+    # reading 1: mentor of (Ann's employer) = Dan; reading 2: (mentor of Ann)'s employer has no answer
+    assert solve(_task(_q("Who is the mentor of Ann's employer?"), ws)) == SolveResult("solved", "Dan")
+    assert solve(_task(_q("Who is the mentor of Nobody's employer?"), ws)).status == "infeasible"
+    # both readings answer with different values -> unparsed
+    ws2 = _kb(tmp_path / "x", {
+        "a.md": "# Ann\nEmployer: Acme\nMentor: Bob\n",
+        "b.md": "# Bob\nEmployer: Zed\n",
+        "c.md": "# Acme\nMentor: Dan\n",
+    })
+    assert solve(_task(_q("Who is the mentor of Ann's employer?"), ws2)).status == "unparsed"
+
+
+def test_ambiguous_readings_disagree_is_unparsed(tmp_path):
+    ws = _kb(tmp_path, {
+        "a.md": "# Ann\nEmployer: Acme\nMentor: Bob\n",
+        "b.md": "# Bob\nEmployer: Zed\nMentor: Cy\n",
+        "c.md": "# Acme\nEmployer: Q\nMentor: Dan\n",
+        "d.md": "# Ann's employer\nMentor: Eve\n",
+    })
+    # reading 1: entity named "Ann's employer" -> Eve; reading 2: mentor of Acme -> Dan
+    assert solve(_task(_q("Who is the mentor of Ann's employer?"), ws)).status == "unparsed"
+
+
+def test_names_with_the_period_and_possessive(tmp_path):
+    ws = _kb(tmp_path, {
+        "a.md": "# The Foo Group\nFounded: 1999\nHeadquarters: Rome\n",
+        "b.md": "# Acme Inc.\nFounded: 2001\n",
+        "c.md": "# Macy's\nFounded: 1858\n",
+    })
+    assert solve(_task(_q("When was The Foo Group founded?"), ws)) == SolveResult("solved", "1999")
+    assert solve(_task(_q("Where is The Foo Group headquartered?"), ws)) == SolveResult("solved", "Rome")
+    assert solve(_task(_q("Who employs Acme Inc.?"), _kb(tmp_path / "w2", {"a.md": "# Bo" + chr(10) + "Employer: Acme Inc." + chr(10),
+                                                                         "b.md": "# Acme Inc." + chr(10) + "Employer: X" + chr(10)}))) == SolveResult("solved", "X")
+    assert solve(_task(_q("In which year was Macy's founded?"), ws)) == SolveResult("solved", "1858")
+    assert solve(_task(_q("In which year was Acme Inc founded?"), ws)).status == "infeasible"

@@ -17,7 +17,13 @@ _QUESTIONS = [
     (re.compile(r"in which year was (.+) founded", _FLAGS), "Founded"),
     (re.compile(r"in which city is the headquarters of (.+)", _FLAGS), "Headquarters"),
     (re.compile(r"where is (.+) headquartered", _FLAGS), "Headquarters"),
+    (re.compile(r"what year was (.+) born", _FLAGS), "Born"),
+    (re.compile(r"when was (.+) founded", _FLAGS), "Founded"),
+    (re.compile(r"where is the headquarters of (.+)", _FLAGS), "Headquarters"),
+    (re.compile(r"in which city is (.+) headquartered", _FLAGS), "Headquarters"),
     (re.compile(r"who is the mentor of (.+)", _FLAGS), "Mentor"),
+    (re.compile(r"who mentors (.+)", _FLAGS), "Mentor"),
+    (re.compile(r"who is the employer of (.+)", _FLAGS), "Employer"),
     (re.compile(r"who is (.+)['\u2019]s mentor", _FLAGS), "Mentor"),
     (re.compile(r"which company does (.+) work for", _FLAGS), "Employer"),
     (re.compile(r"who employs (.+)", _FLAGS), "Employer"),
@@ -74,31 +80,27 @@ def load_kb(kb_dir: Path) -> dict[str, dict[str, str]]:
 
 # ---------------------------------------------------------------------- parsing
 
-def _parse_entity(expr: str) -> tuple[str, list[str]] | None:
-    """Return (name, path) for the entity grammar, or None when it is not understood or ambiguous."""
+def _parse_entity(expr: str, bare: bool = False) -> list[tuple[str, list[str]]]:
+    """Readings of an entity expression as (name, path). Structural readings use the possessive /
+    "the X of" grammar (a plain name when there is none); `bare=True` gives only the whole string as a name."""
     expr = " ".join(expr.split())
     if not expr:
-        return None
+        return []
+    if bare:
+        return [(expr, [])]
+    out: list[tuple[str, list[str]]] = []
     poss = _POSSESSIVE.fullmatch(expr)
-    the_of = _THE_OF.fullmatch(expr)
-    if poss is not None and the_of is not None:
-        return None  # "the mentor of X's employer": scope is ambiguous, do not guess
     if poss is not None:
-        inner = _parse_entity(poss.group(1))
-        if inner is None:
-            return None
-        return inner[0], inner[1] + [poss.group(2).capitalize()]
+        for name, path in _parse_entity(poss.group(1)):
+            out.append((name, path + [poss.group(2).capitalize()]))
+    the_of = _THE_OF.fullmatch(expr)
     if the_of is not None:
-        inner = _parse_entity(the_of.group(2))
-        if inner is None:
-            return None
-        return inner[0], inner[1] + [the_of.group(1).capitalize()]
-    if "'s " in expr.lower() or "\u2019s " in expr.lower() or expr.lower().startswith("the "):
-        return None
-    return expr, []
+        for name, path in _parse_entity(the_of.group(2)):
+            out.append((name, path + [the_of.group(1).capitalize()]))
+    return out or [(expr, [])]
 
 
-def parse(instruction: str) -> dict | SolveResult:
+def _question(instruction: str) -> str | SolveResult:
     question = None
     for sentence in split_sentences(strip_boilerplate(instruction)):
         sentence = " ".join(sentence.split())
@@ -109,20 +111,37 @@ def parse(instruction: str) -> dict | SolveResult:
         question = sentence
     if question is None:
         return _unparsed("no question")
-    body = question.rstrip("?.! ").strip()
-    matches = []
-    for rx, field in _QUESTIONS:
-        m = rx.fullmatch(body)
-        if m:
-            ent = _parse_entity(m.group(1))
-            if ent is not None:
-                matches.append((ent, field))
-    if not matches:
+    return question
+
+
+def _specs(question: str, bare: bool) -> list[dict]:
+    bodies = []
+    for body in (question.rstrip("?.! ").strip(), question.rstrip("?! ").strip()):
+        if body and body not in bodies:
+            bodies.append(body)
+    specs: list[dict] = []
+    for body in bodies:
+        for rx, field in _QUESTIONS:
+            m = rx.fullmatch(body)
+            if not m:
+                continue
+            for entity, path in _parse_entity(m.group(1), bare):
+                spec = {"entity": entity, "path": path, "field": field}
+                if spec not in specs:
+                    specs.append(spec)
+    return specs
+
+
+def parse(instruction: str) -> dict | SolveResult:
+    """One reading -> {"entity", "path", "field"}. Ambiguous scope ("the mentor of X's employer") ->
+    {"alternatives": [spec, ...]}; `solve` runs each spec through the strict single-spec `execute`."""
+    question = _question(instruction)
+    if isinstance(question, SolveResult):
+        return question
+    specs = _specs(question, bare=False)
+    if not specs:
         return _unparsed(f"unrecognized question: {question!r}")
-    if any(m != matches[0] for m in matches):
-        return _unparsed(f"ambiguous question: {question!r}")
-    (entity, path), field = matches[0]
-    return {"entity": entity, "path": path, "field": field}
+    return specs[0] if len(specs) == 1 else {"alternatives": specs}
 
 
 # -------------------------------------------------------------------- execution
@@ -169,11 +188,33 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
         return _unparsed(f"bad spec: {e!r}")
 
 
+def _run(specs: list[dict], workspace: Path) -> SolveResult:
+    results = [execute(spec, workspace) for spec in specs]
+    answers = {r.answer for r in results if r.status == "solved"}
+    if len(answers) == 1:
+        return SolveResult("solved", answers.pop())
+    if len(answers) > 1:
+        return _unparsed(f"ambiguous question, readings disagree: {sorted(answers)!r}")
+    if any(r.status == "unparsed" for r in results):
+        return _unparsed("bad spec")
+    return SolveResult("infeasible", note="no reading has an answer")
+
+
 def solve(task: Task) -> SolveResult:
     try:
         spec = parse(task.instruction)
         if isinstance(spec, SolveResult):
             return spec
-        return execute(spec, task.workspace)
+        result = _run(spec.get("alternatives", [spec]), task.workspace)
+        if result.status == "infeasible":
+            # The name may itself contain "'s" / "the X of" / punctuation: retry with the whole string as a name.
+            question = _question(task.instruction)
+            if not isinstance(question, SolveResult):
+                bare = [b for b in _specs(question, bare=True) if b != spec]
+                if bare:
+                    retry = _run(bare, task.workspace)
+                    if retry.status == "solved":
+                        return retry
+        return result
     except Exception as e:
         return _unparsed(f"unexpected error: {e!r}")
