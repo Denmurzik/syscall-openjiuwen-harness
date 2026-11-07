@@ -247,3 +247,23 @@ def test_fix_coding_uses_first_test_file(tmp_path):
     c = FakeClient(["FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE])
     r = run(fix_coding(t, c))
     assert r.status == "solved" and "return sum(xs)" in (ws / "mylib.py").read_text()
+
+
+class _Ledger:
+    def __init__(self, budget, spent):
+        self.budget, self.spent = budget, spent
+
+    def remaining(self):
+        return self.budget - self.spent
+
+
+def test_fix_coding_reasoning_step_when_budget_is_free(tmp_path):
+    bad = "FUNC total\n" + GOOD_TOTAL
+    good = "FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE
+    for spent, expect_calls in ((100, 3), (60000, 2)):
+        t = _fixture("coding_0003", tmp_path / str(spent), reward=2.0)
+        c = FakeClient([bad, bad, good])
+        c.ledger = _Ledger(100000, spent)
+        r = run(fix_coding(t, c))
+        assert len(c.calls) == expect_calls, spent
+        assert (r.status == "solved") == (expect_calls == 3)

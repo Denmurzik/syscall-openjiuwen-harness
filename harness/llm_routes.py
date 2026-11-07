@@ -257,6 +257,15 @@ def _patch_messages(mylib: str, tests: str, output: str) -> list[dict]:
     return [{"role": "system", "content": PATCH_SYSTEM}, {"role": "user", "content": user}]
 
 
+def _budget_is_free(client) -> bool:
+    """More than half of the budget left: the reasoning step is affordable for any reward."""
+    ledger = getattr(client, "ledger", None)
+    try:
+        return ledger is not None and ledger.remaining() > 0.5 * ledger.budget
+    except Exception:
+        return False  # fake or foreign clients: keep the old reward threshold
+
+
 async def fix_coding(task: Task, client) -> SolveResult:
     ws = Path(task.workspace)
     mylib_path = ws / "mylib.py"
@@ -271,7 +280,7 @@ async def fix_coding(task: Task, client) -> SolveResult:
         return SolveResult("solved", answer="DONE", note="tests already pass")
     output = base_report.output
     attempts = [(MODEL_FAST, 400, {}), (MODEL_MID, 600, {})]
-    if task.reward >= 3:
+    if task.reward >= 3 or _budget_is_free(client):
         attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))
     note = "no attempt made"
     for model, max_tokens, extra in attempts:

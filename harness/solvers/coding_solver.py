@@ -16,12 +16,15 @@ from typing import Iterator
 from harness import config
 from harness.result import SolveResult
 from harness.solvers.mutations import Mutant, tagged_mutants
+from harness.solvers.probe import behaviour, inputs_from_call, visible_call
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
 
 CANDIDATE_CAP = 3000
 CAND_TIMEOUT_MAX = 5.0
 BASE_TIMEOUT = 20.0
+AMBIG_MUTANT_CAP = 400
+AMBIG_MAX_OPTIONS = 9
 
 
 class _OutOfTime(Exception):
@@ -336,6 +339,74 @@ def contradictory_tests(test_src: str) -> bool:
     return False
 
 
+def _norm(seg: str) -> str:
+    try:
+        return ast.unparse(ast.parse(textwrap.dedent(seg)))
+    except SyntaxError:
+        return seg
+
+
+def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
+               failing: list[str]) -> dict | None:
+    """Fixed top-level functions with several green fixes that behave differently on probe
+    inputs. Candidates are single mutants of the buggy function spliced into the chosen
+    solution (other functions stay as chosen); one representative per behaviour cluster."""
+    orig_units = {u.qualname: u for u in _units(original)}
+    found: list[dict] = []
+    asserts: list[str] = []
+    for u in _units(cur):
+        old = orig_units.get(u.qualname)
+        if old is None or "." in u.qualname or _segment(cur, u) == _segment(original, old):
+            continue
+        call = visible_call(test_src, u.qualname)
+        if call is None:
+            continue
+        args, stmt = call
+        inputs = inputs_from_call(args)
+        chosen_seg = _segment(cur, u)
+        chosen_key = tuple(behaviour(cur, u.qualname, inputs))
+        clusters: dict[tuple, str] = {}
+        seen = {_norm(chosen_seg)}
+        tried = 0
+        for m in tagged_mutants(_segment(original, old)):
+            if tried >= AMBIG_MUTANT_CAP:
+                break
+            seg = _norm(m.source)
+            if seg in seen:
+                continue
+            seen.add(seg)
+            tried += 1
+            cand = _splice(cur, u, m.source)
+            if not ctx.candidate(cand, failing).ok or not ctx.run(cand, None, ctx.verify_timeout).ok:
+                continue
+            key = tuple(behaviour(cand, u.qualname, inputs))
+            if key not in clusters:
+                clusters[key] = textwrap.dedent(m.source).strip("\n")
+        clusters[chosen_key] = textwrap.dedent(chosen_seg).strip("\n")
+        if len(clusters) < 2:
+            continue
+        reps = [(k, s) for k, s in clusters.items() if k != chosen_key][:AMBIG_MAX_OPTIONS - 1]
+        reps.append((chosen_key, clusters[chosen_key]))
+        # the chosen one keeps its natural place among the mutants' clusters, not always last
+        order = list(clusters)
+        reps.sort(key=lambda r: order.index(r[0]))
+        found.append({"func": u.qualname,
+                      "buggy": textwrap.dedent(_segment(original, old)).strip("\n"),
+                      "candidates": [s for _k, s in reps],
+                      "chosen": [k for k, _s in reps].index(chosen_key)})
+        asserts.append(stmt)
+    if not found:
+        return None
+    return {"ambiguous": found, "visible_asserts": asserts}
+
+
+def _partial(ws: Path, mylib: Path, cur: str, report: TestReport) -> SolveResult:
+    _write_mylib(mylib, cur)
+    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+    return SolveResult("solved", answer="DONE", tentative=True,
+                       note=f"partial repair, still failing: {report.failed}")
+
+
 def _solve(task: Task, time_limit: float) -> SolveResult:
     deadline = time.monotonic() + time_limit
     ws = Path(task.workspace)
@@ -367,16 +438,31 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             return SolveResult("solved", answer="DONE", note="tests already pass")
         if any(f.startswith("<") for f in report.failed):
             return SolveResult("unparsed", note=f"cannot localize failures: {report.failed}")
+        initially_failing = list(report.failed)
         cur = original
-        while not report.ok:
-            step = _repair_round(ctx, cur, report, refs)
-            if step is None:
-                if contradictory_tests(test_src):  # only after repair failed: saves model tokens
-                    return SolveResult("infeasible", note="tests contradict each other")
-                return SolveResult("unparsed", note=f"no repair found for {report.failed}")
-            cur, report = step
+        try:
+            while not report.ok:
+                step = _repair_round(ctx, cur, report, refs)
+                if step is None:
+                    if contradictory_tests(test_src):  # only after repair failed: saves model tokens
+                        return SolveResult("infeasible", note="tests contradict each other")
+                    if cur != original:  # best partial repair: a guess beats no answer
+                        return _partial(ws, mylib, cur, report)
+                    return SolveResult("unparsed", note=f"no repair found for {report.failed}")
+                cur, report = step
+        except _OutOfTime:
+            if cur != original and not report.ok:
+                return _partial(ws, mylib, cur, report)
+            raise
         _write_mylib(mylib, cur)
         shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+        try:  # the deterministic choice is already on disk; ambiguity only adds a hint
+            extra = _ambiguity(ctx, original, cur, test_src, initially_failing)
+        except Exception:
+            extra = None
+        if extra:
+            return SolveResult("solved", answer="DONE", note="repaired by mutation, ambiguous",
+                               tentative=True, extra=extra)
         return SolveResult("solved", answer="DONE", note="repaired by mutation")
     except _OutOfTime:
         return SolveResult("unparsed", note="time limit reached")

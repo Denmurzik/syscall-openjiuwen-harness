@@ -24,6 +24,7 @@ JSON_TYPES = ("math", "data_analysis", "search")
 solve_group = None
 solve_with_program = None
 fix_coding = None
+arbitrate = None
 BudgetExhausted = None
 
 
@@ -144,14 +145,16 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
 
 
 def _load_phase2() -> None:
-    global solve_group, solve_with_program, fix_coding, BudgetExhausted
-    from harness import json_route, llm, llm_routes
+    global solve_group, solve_with_program, fix_coding, arbitrate, BudgetExhausted
+    from harness import arbitrate as arbitrate_mod, json_route, llm, llm_routes
     if solve_group is None:
         solve_group = json_route.solve_group
     if solve_with_program is None:
         solve_with_program = llm_routes.solve_with_program
     if fix_coding is None:
         fix_coding = llm_routes.fix_coding
+    if arbitrate is None:
+        arbitrate = arbitrate_mod.arbitrate
     BudgetExhausted = llm.BudgetExhausted
 
 
@@ -208,9 +211,12 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float = config.DEADL
             tasks = []
         by_id = {t.task_id: t for t in tasks}
         last_spent = [ledger.spent]
+        tentative: dict[str, SolveResult] = {}   # written but not final: phase 2 may improve it
+        guesses: dict[str, SolveResult] = {}     # unanswered tasks with a stored best guess
 
         def settle(phase: int, task: Task, res: SolveResult, elapsed: float) -> None:
             st = res.status
+            prior_tentative = task.task_id in tentative
             if st == "solved" and res.answer is None:
                 st = "unparsed"
             elif st == "solved":
@@ -219,6 +225,16 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float = config.DEADL
                 except Exception as e:
                     log.exception("cannot write answer for %s", task.task_id)
                     st, res = "unparsed", SolveResult("unparsed", note=f"write failed: {e!r}")
+            if st == "solved":
+                guesses.pop(task.task_id, None)
+                if res.tentative:
+                    tentative[task.task_id] = res
+                else:
+                    tentative.pop(task.task_id, None)
+            elif prior_tentative and phase >= 2:
+                st = "solved"   # a failed later attempt never takes back a written answer
+            elif (res.extra or {}).get("best_guess") is not None:
+                guesses[task.task_id] = res
             status[task.task_id] = st
             # cost deltas telescope, so their sum equals the ledger's spent exactly
             delta = ledger.spent - last_spent[0]
@@ -228,9 +244,10 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float = config.DEADL
 
         _phase1(tasks, phase1_workers, t0, deadline_s, lambda t, r, e: settle(1, t, r, e))
 
-        left = [by_id[i] for i, s in status.items() if s == "unparsed"]
+        left = [by_id[i] for i, s in status.items() if s == "unparsed" or i in tentative]
         if client is not None and left:
-            _phase2(left, client, ledger, t0, deadline_s, settle, status, traj)
+            _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative)
+        _write_guesses(by_id, guesses, tentative, status)
     except Exception:
         log.exception("scheduler failed")
     finally:
@@ -242,6 +259,20 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float = config.DEADL
     return counts
 
 
+def _write_guesses(by_id: dict, guesses: dict, tentative: dict, status: dict) -> None:
+    """Last pass: a stored best guess becomes the answer of a task that has none yet.
+    Never touches a task that already has an answer file (final or tentative)."""
+    for tid, res in guesses.items():
+        task = by_id.get(tid)
+        try:
+            if task is None or (task.dir / "answer.txt").exists():
+                continue
+            write_answer(task, str(res.extra["best_guess"]))
+            status[tid] = "solved"
+        except Exception:
+            log.exception("cannot write best guess for %s", tid)
+
+
 def _phase2(*args) -> None:
     # one event loop for the whole phase: openjiuwen caches an HTTP pool bound to the first loop
     try:
@@ -250,7 +281,9 @@ def _phase2(*args) -> None:
         log.exception("phase 2 failed")
 
 
-async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, traj) -> None:
+async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, traj,
+                        tentative=None) -> None:
+    tentative = tentative if tentative is not None else {}
     try:
         os.chdir(_log_dir())  # openjiuwen writes ./logs relative to cwd
     except OSError:
@@ -285,9 +318,29 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     units.sort(key=lambda u: -u["prio"])
     await _drive(units, t0, deadline_s, ledger, state)
 
-    # 2b: per-task routes for whatever is still unparsed
+    # 2c: model arbitration among behaviourally different green fixes (cheap: before 2b)
     units = []
-    for task in [t for t in left if status.get(t.task_id) == "unparsed"]:
+    for task in [t for t in left if (tentative.get(t.task_id) is not None
+                                     and (tentative[t.task_id].extra or {}).get("ambiguous"))]:
+        extra = tentative[task.task_id].extra
+        est = max(40, len(str(extra.get("ambiguous"))) // 3 + 20)
+
+        def make(task=task, extra=extra):
+            async def go():
+                start = time.monotonic()
+                res = await arbitrate(task, extra, client)
+                if res.status == "solved":
+                    res = SolveResult("solved", res.answer, res.note)  # final: no longer tentative
+                settle(2, task, res, time.monotonic() - start)
+            return go
+        units.append({"prio": 1e9, "estimate": est, "run": make(), "name": f"arbitrate:{task.task_id}"})
+    await _drive(units, t0, deadline_s, ledger, state)
+
+    # 2b: per-task routes for whatever is still unparsed or only tentatively answered
+    # (arbitrated tasks are final; tentative ones with candidates wait for 2c above)
+    units = []
+    for task in [t for t in left if status.get(t.task_id) == "unparsed"
+                 or (t.task_id in tentative and not (tentative[t.task_id].extra or {}).get("ambiguous"))]:
         est = estimate_tokens(task)
 
         def make(task=task):

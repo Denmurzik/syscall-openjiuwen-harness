@@ -68,14 +68,23 @@ def test_infinite_loop_mutant_does_not_hang(tmp_path):
 
 
 def test_unfixable_is_unparsed(tmp_path):
-    t = _fixture_task("coding_0003", tmp_path)
-    tp = t.workspace / "test_mylib.py"
-    tp.write_text(tp.read_text(encoding="utf-8").replace("m.total([1, 2, 3]), 6", "m.total([1, 2, 3]), 1000"),
-                  encoding="utf-8")
+    mylib = "def total(xs):\n    return 0\n"
+    tests = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
+             "    def test_total(self):\n        self.assertEqual(m.total([1, 2, 3]), 1000)\n")
+    t = _custom(tmp_path, mylib, tests)
     before = (t.workspace / "mylib.py").read_bytes()
     res = solve(t, time_limit=60)
     assert res.status == "unparsed" and res.note
     assert (t.workspace / "mylib.py").read_bytes() == before
+
+
+def test_unfixable_function_leaves_partial_tentative(tmp_path):
+    t = _fixture_task("coding_0003", tmp_path)
+    tp = t.workspace / "test_mylib.py"
+    tp.write_text(tp.read_text(encoding="utf-8").replace("m.total([1, 2, 3]), 6", "m.total([1, 2, 3]), 1000"),
+                  encoding="utf-8")
+    res = solve(t, time_limit=60)
+    assert res.status == "solved" and res.tentative and "partial" in res.note
 
 
 def test_no_pycache_left(tmp_path):
@@ -196,3 +205,48 @@ def test_contradiction_never_preempts_a_repair(tmp_path):
     tests = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
              "    def test_f(self):\n        self.assertEqual(m.f(7), 8)\n")
     assert solve(_custom(tmp_path, lib, tests)).status == "solved"
+
+
+# ---------------------------------------------------------------- candidates and tentative answers
+
+AMBIG_LIB = "def count_even(xs):\n    return sum(1 for x in xs if x % 3 == 0)\n"
+AMBIG_TEST = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
+              "    def test_count(self):\n        self.assertEqual(mylib.count_even([1, 2, 4, 6, 7]), 3)\n")
+
+
+def test_ambiguous_fix_returns_clusters(tmp_path):
+    t = _custom(tmp_path, AMBIG_LIB, AMBIG_TEST)
+    res = solve(t)
+    assert res.status == "solved" and res.answer == "DONE" and res.tentative
+    amb = res.extra["ambiguous"]
+    assert len(amb) == 1 and amb[0]["func"] == "count_even"
+    cands = amb[0]["candidates"]
+    assert len(cands) >= 2 and len(set(cands)) == len(cands)
+    written = (t.workspace / "mylib.py").read_text(encoding="utf-8")
+    import ast
+    assert ast.unparse(ast.parse(cands[amb[0]["chosen"]])) == ast.unparse(ast.parse(written))
+    assert any("x % 2 == 0" in c for c in cands)
+    assert any("count_even" in a for a in res.extra["visible_asserts"])
+    assert run_tests(t.workspace).ok
+
+
+def test_unambiguous_fix_has_no_extra(tmp_path):
+    mylib = "def f(n):\n    i = 0\n    while i <= n:\n        i += 1\n    return i\n"
+    tests = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
+             "    def test_f(self):\n        self.assertEqual(m.f(5), 5)\n")
+    res = solve(_custom(tmp_path, mylib, tests))
+    assert res.status == "solved" and not res.tentative and res.extra is None
+
+
+def test_partial_repair_is_tentative_and_written(tmp_path):
+    lib = ("def a(x):\n    return x + 2\n\n\ndef b(x):\n    return x * 3\n")
+    tests = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
+             "    def test_a(self):\n        self.assertEqual(mylib.a(5), 6)\n"
+             "    def test_b(self):\n        self.assertEqual(mylib.b(5), 100)\n")
+    t = _custom(tmp_path, lib, tests)
+    res = solve(t)
+    assert res.status == "solved" and res.answer == "DONE" and res.tentative
+    assert "partial" in res.note
+    text = (t.workspace / "mylib.py").read_text(encoding="utf-8")
+    assert "x + 1" in text and "x * 3" in text  # a fixed, b untouched
+    assert (t.workspace / "test_mylib.py").read_text(encoding="utf-8") == tests

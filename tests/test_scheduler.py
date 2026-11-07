@@ -317,3 +317,123 @@ def test_chdir_failure_does_not_disable_llm(tmp_path, monkeypatch, capsys):
         run_agent.main(["--tasks-dir", str(tmp_path)])
     assert e.value.code == 0 and got["run_client"] is got["client"]
     assert "cannot chdir" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- tentative answers and arbitration
+
+def tentative_amb_target(queue, task, solver_name=None):
+    queue.put((task.task_id, SolveResult("solved", "DONE", "amb", tentative=True,
+                                         extra={"ambiguous": [{"func": "f", "candidates": ["a", "b"],
+                                                               "chosen": 0}]})))
+
+
+def tentative_plain_target(queue, task, solver_name=None):
+    queue.put((task.task_id, SolveResult("solved", "DONE", "partial", tentative=True)))
+
+
+def guess_target(queue, task, solver_name=None):
+    queue.put((task.task_id, SolveResult("unparsed", note="guess", extra={"best_guess": "42"})))
+
+
+def mixed_target(queue, task, solver_name=None):
+    (tentative_amb_target if task.task_id == "c_arb" else unparsed_target)(queue, task)
+
+
+def _coding(tasks, tid="c1", reward=1.0):
+    d = _make(tasks, tid, "coding", "fix it", reward, "unittest")
+    (d / "workspace" / "mylib.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (d / "workspace" / "test_mylib.py").write_text("import mylib\n", encoding="utf-8")
+    return d
+
+
+def test_tentative_with_candidates_goes_to_arbitration_not_2b(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _coding(tasks)
+    calls = []
+
+    async def fake_arb(task, extra, client):
+        calls.append(("arb", extra["ambiguous"][0]["func"]))
+        return SolveResult("solved", "DONE", "kept")
+
+    async def fake_fix(task, client):
+        calls.append(("fix",))
+        return SolveResult("unparsed")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_amb_target)
+    monkeypatch.setattr(scheduler, "arbitrate", fake_arb)
+    monkeypatch.setattr(scheduler, "fix_coding", fake_fix)
+    counts = scheduler.run(tasks, 100000, object())
+    assert calls == [("arb", "f")]
+    assert counts["solved"] == 1 and (d / "answer.txt").read_text() == "DONE\n"
+
+
+def test_arbitration_runs_before_2b(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _coding(tasks, "c_arb", 1.0)
+    _coding(tasks, "c_plain", 9.0)
+    order = []
+
+    async def fake_arb(task, extra, client):
+        order.append("arb")
+        return SolveResult("solved", "DONE")
+
+    async def fake_fix(task, client):
+        order.append("fix")
+        return SolveResult("unparsed")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", mixed_target)
+    monkeypatch.setattr(scheduler, "arbitrate", fake_arb)
+    monkeypatch.setattr(scheduler, "fix_coding", fake_fix)
+    scheduler.run(tasks, 100000, object())
+    assert order == ["arb", "fix"]
+
+
+def test_partial_tentative_goes_to_2b_and_final_overwrites(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _coding(tasks)
+
+    async def fake_fix(task, client):
+        assert (d / "answer.txt").read_text() == "DONE\n"   # the tentative answer is on disk
+        return SolveResult("solved", "FINAL", "model fixed")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_plain_target)
+    monkeypatch.setattr(scheduler, "fix_coding", fake_fix)
+    scheduler.run(tasks, 100000, object())
+    assert (d / "answer.txt").read_text() == "FINAL\n"
+
+
+def test_failed_2b_keeps_tentative_answer(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _coding(tasks)
+
+    async def fake_fix(task, client):
+        return SolveResult("unparsed", note="nope")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_plain_target)
+    monkeypatch.setattr(scheduler, "fix_coding", fake_fix)
+    counts = scheduler.run(tasks, 100000, object())
+    assert (d / "answer.txt").read_text() == "DONE\n" and counts["solved"] == 1
+
+
+def test_final_pass_writes_best_guess_only_without_answer(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d1 = _make(tasks, "g1", "search", "q one?")
+    d2 = _make(tasks, "g2", "search", "q two?")
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    scheduler.run(tasks, 100000, None)
+    assert (d1 / "answer.txt").read_text() == "42\n" and (d2 / "answer.txt").read_text() == "42\n"
+
+    # an answer written by phase 2 is never overwritten by the stored guess
+    for d in (d1, d2):
+        (d / "answer.txt").unlink()
+
+    async def grp(ttype, template, members, client):
+        return {t.task_id: SolveResult("solved", "REAL") for t, _ in members}
+
+    async def prog(task, client):
+        return SolveResult("solved", "REAL")
+
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    scheduler.run(tasks, 100000, object())
+    assert (d1 / "answer.txt").read_text() == "REAL\n"
