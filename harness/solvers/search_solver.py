@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 from harness.result import SolveResult
-from harness.solvers.common import split_sentences, strip_boilerplate
+from harness.solvers.common import normalize_instruction, split_sentences, strip_boilerplate
 from harness.tasks import Task
 
 _FLAGS = re.IGNORECASE
@@ -146,7 +146,7 @@ def _parse_entity(expr: str, bare: bool = False) -> list[tuple[str, list[str]]]:
 
 def _question(instruction: str) -> str | SolveResult:
     question = None
-    parts = [" ".join(p.split()) for p in split_sentences(strip_boilerplate(instruction))]
+    parts = [" ".join(p.split()) for p in split_sentences(normalize_instruction(instruction, "search"))]
     sentences: list[str] = []
     for part in parts:  # "Jonas T. Dubois": a single-letter initial does not end a sentence
         if sentences and _INITIAL_END.search(sentences[-1]):

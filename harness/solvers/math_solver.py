@@ -2,7 +2,7 @@ import ast
 import re
 
 from harness.result import SolveResult
-from harness.solvers.common import split_sentences, strip_boilerplate
+from harness.solvers.common import normalize_instruction, split_sentences
 from harness.tasks import Task
 
 _FLAGS = re.IGNORECASE
@@ -78,7 +78,7 @@ def parse(instruction: str) -> dict | SolveResult:
     complex_op = False  # an operation that `ops` cannot express
     guard = False  # a loss or shipment: stock must not go below zero, else leave it to the model
     asked = False
-    for sentence in split_sentences(strip_boilerplate(instruction)):
+    for sentence in split_sentences(normalize_instruction(instruction, "math")):
         sentence = " ".join(sentence.split())
         matches = [(m, kind) for rx, kind in _RULES if (m := rx.fullmatch(sentence))]
         if len(matches) != 1:

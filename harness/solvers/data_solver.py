@@ -4,7 +4,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 from harness.result import SolveResult
-from harness.solvers.common import split_sentences, strip_boilerplate
+from harness.solvers.common import normalize_instruction, split_sentences, strip_boilerplate
 from harness.tasks import Task
 
 _FLAGS = re.IGNORECASE
@@ -35,7 +35,9 @@ _METRICS = [
         r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total (?:number of )?units(?: sold)?)[?.!]?", _FLAGS)),
     ("sum_revenue", re.compile(
         r"what (?:is|was) (?:the )?(?:total )?revenue(?: \(units multiplied by price\))?[?.!]?", _FLAGS)),
-    ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)[?.!]?", _FLAGS)),
+    ("count_orders", re.compile(
+        r"(?:how many orders were (?:placed|made|recorded)"
+        r"|what (?:is|was) the (?:total )?number of orders(?: placed| made| recorded)?)[?.!]?", _FLAGS)),
     ("avg_price", re.compile(r"what (?:is|was) the average price[?.!]?", _FLAGS)),
     ("avg_units", re.compile(
         r"what (?:is|was) the average (?:number of )?units(?: per order| in an order)?[?.!]?", _FLAGS)),
@@ -106,7 +108,7 @@ def _column_values(path: Path, column: str) -> set[str] | None:
 
 
 def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult:
-    sentences = [" ".join(s.split()) for s in split_sentences(strip_boilerplate(instruction))]
+    sentences = [" ".join(s.split()) for s in split_sentences(normalize_instruction(instruction, "data"))]
     if len(sentences) != 2:
         return _unparsed(f"expected file sentence and question, got {len(sentences)} sentences")
     m = _FILE.fullmatch(sentences[0])
