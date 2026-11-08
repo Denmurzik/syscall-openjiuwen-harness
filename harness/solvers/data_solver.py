@@ -154,6 +154,8 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
         return _unparsed("conflicting month filters")
     if ranges:
         month_from, month_to = ranges[0]
+        if not (1 <= month_from <= 12 and 1 <= month_to <= 12):
+            return _unparsed("month outside 1..12")
 
     found, text = _take(_ROUND, text)
     if found is False:

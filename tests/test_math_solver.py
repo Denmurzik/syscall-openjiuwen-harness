@@ -44,7 +44,7 @@ def test_tolerates_case_and_spacing():
 
 def test_parse_gives_spec():
     assert parse(_fixture("math_0004")["instruction"]) == {
-        "start": 1669, "ops": [["-", 108], ["+", 174]]}
+        "start": 1669, "steps": ["x-108", "x+174"], "nonneg": True}
 
 
 def test_missing_start_or_question_is_unparsed():
@@ -228,3 +228,11 @@ def test_mixed_chain_and_zero_split_infeasible():
 def test_nonneg_negative_value_is_best_guess_not_answer():
     r = execute({"start": 3, "steps": ["x-5", "x*2"], "nonneg": True})
     assert r.status == "unparsed" and r.extra == {"best_guess": "-4"}
+
+
+def test_overdrawn_shipment_is_unparsed():
+    instr = ("A warehouse starts with 1000 boxes. Every day for 2 days, 1,000 boxes leave the warehouse. "
+             "How many boxes does it have at the end?")
+    assert solve(_task(instr)).status == "unparsed"
+    ok = instr.replace("1,000 boxes leave", "10 boxes leave")
+    assert solve(_task(ok)).answer == "980"

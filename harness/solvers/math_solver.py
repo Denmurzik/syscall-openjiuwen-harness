@@ -76,7 +76,7 @@ def parse(instruction: str) -> dict | SolveResult:
     ops: list[list] = []
     steps: list[str] = []  # the same operations as expressions over x
     complex_op = False  # an operation that `ops` cannot express
-    guard = False  # a loss: stock must not go below zero, else leave it to the model
+    guard = False  # a loss or shipment: stock must not go below zero, else leave it to the model
     asked = False
     for sentence in split_sentences(strip_boilerplate(instruction)):
         sentence = " ".join(sentence.split())
@@ -104,6 +104,7 @@ def parse(instruction: str) -> dict | SolveResult:
             op = ["*", 2 if word in ("doubled", "doubles") else 3]
         elif kind == "ship":
             op = ["-", n[0] * n[1]]
+            guard = True
         elif kind == "receive":
             op = ["+", n[0] * n[1]]
         elif kind == "loss":

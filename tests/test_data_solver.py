@@ -112,7 +112,7 @@ def test_revenue_orders_price(tmp_path):
 def test_month_filters(tmp_path):
     ws = _ws(tmp_path, ROWS)
     assert solve(_task(_q("How many units were sold in month 6?"), ws)).answer == "107"
-    assert solve(_task(_q("How many units were sold in months 13 through 14 inclusive?"), ws)).answer == "0"
+    assert solve(_task(_q("How many units were sold in months 13 through 14 inclusive?"), ws)).status == "unparsed"
     assert solve(_task(_q("How many units were sold in months 5 through 2 inclusive?"), ws)).answer == "0"
 
 
@@ -477,3 +477,11 @@ def test_loose_path_tie_keeps_best_guess(tmp_path):
     ws = _ws(tmp_path, "1,west,widget,1,5,2\n2,east,gizmo,1,5,2\n")
     r = solve(_task(_q("Which product sold the most units in total?"), ws, "exact_str"))
     assert r.status == "unparsed" and r.extra == {"best_guess": "widget"}
+
+
+def test_strict_months_outside_1_12_are_unparsed():
+    for q in ("How many units were sold in month 13?",
+              "How many units were sold in months 0 to 5?",
+              "How many units were sold between months 3 and 13?"):
+        assert parse(_q(q)).status == "unparsed", q
+    assert parse(_q("How many units were sold in month 12?"))["month_from"] == 12
