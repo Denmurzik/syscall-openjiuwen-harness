@@ -564,3 +564,28 @@ def test_step_count_budget_exhausted_keeps_results():
         asyncio.run(solve_group("math", template, [(t, slots)], client))
     assert ei.value.results["m1"].status == "unparsed"
     assert ei.value.results["m1"].extra["shape_mismatch"] is True
+
+
+def test_compound_sentences_are_not_counted():
+    q = "How many boxes does it have at the end?"
+    for body in ("After losing {N2} boxes to theft, a merger doubles the inventory. Next, it sells half.",
+                 "It receives {N2} shipments of {N3} boxes each, plus {N4} deliveries of {N5} boxes each. It sells half.",
+                 "It ships {N2} boxes per day for {N3} days, then doubles. It sells half.",
+                 "Spoilage removes {N2} percent, and it loses {N3} boxes to theft. It sells half."):
+        assert _count_operations(f"A warehouse begins with {{N1}} boxes. {body} {q}") is None, body
+    assert _count_operations(f"Starting with {{N1}} boxes, the warehouse first doubles its stock. It sells half. "
+                             f"It loses {{N2}} boxes to theft. {q}") is None
+
+
+def test_more_steps_than_sentences_is_not_flagged():
+    from harness.json_route import _step_mismatch
+    template, _ = templatize(MATH_0136, "math")
+    assert _step_mismatch("math", template, {"steps": STEPS8 + ["x-1"]}) is None
+    assert _step_mismatch("math", template, {"steps": STEPS8[:7]}) is not None
+
+
+def test_reverse_guard_calls_x_their_mentor():
+    from harness.json_route import _reverse_relation
+    for q in ("Who calls {n} their mentor?", "Who calls {c} her employer?"):
+        template, _ = templatize(q.format(n="Ann Lee", c="Arktika Labs"), "search")
+        assert _reverse_relation(template) is not None, q

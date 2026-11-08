@@ -107,6 +107,7 @@ _REVERSE = re.compile("|".join([
     rf"{_SLOT} (?:is|was|has been) mentoring\b", rf"\b(?:is|was) {_SLOT} mentoring\b",
     rf"\b(?:counts?|counted|regards?|regarded|considers?|considered|treats?|views?|sees?|takes?|names?|lists?|calls?) "
     rf"{_SLOT} as (?:(?:his|her|their|its|a|an|the) )?(?:mentor|employer)\b",   # who counts X as his mentor
+    rf"\bcalls? {_SLOT} (?:his|her|their|its) (?:mentor|employer)\b",
     rf"\b(?:has|had|have) {_SLOT} as (?:(?:his|her|their|its|a|an|the) )?(?:mentor|employer)\b",  # X is the mentor
     rf"{_SLOT} (?:is|was) (?:(?:the|a|an) )?mentor of\b",          # X is the mentor of whom
     r"\bwhose (?:mentor|employer)\b",                              # whose mentor is X: always asks for the mentee
@@ -117,27 +118,44 @@ _REVERSE = re.compile("|".join([
 
 # math 2a: the number of operation sentences in the template against the number of steps in the spec
 _START_WORD = re.compile(r"\b(?:start|begin|outset|initial|opening|contain|hold|there (?:are|is)|stocked)", re.I)
-_OP_MARK = re.compile(r"\{N\d+\}|doubl|tripl|twice|three times|merg|\b(?:half|quarter|fourth|third|fifth|tenth)\b", re.I)
+_FAMILIES = {  # one operation family per sentence; a sentence with 0 or 2+ families is not counted reliably
+    "ship": r"\bships?\b|\bshipped|dispatch|send|sends|go out|goes out|leave the warehouse|gone out",
+    "receive": r"deliver|consign|lorr|truck|takes in|\bgets\b|receives? \{N|arrive|incoming|shipments",
+    "split": r"split|divid|distribut|equal|cut into|portion|shared out",
+    "scale": r"doubl|tripl|twice|three times|merg|absorb|joining|\bjoins?\b|multipl",
+    "loss": r"theft|stolen|stole|burglar|burglary|thie|leak|water damage|disappear|destroy|discard|ruin",
+    "pct": r"percent|restock",
+    "frac": r"\bhalf\b|quarter|fourth|\bthird\b|\bfifth\b|\btenth\b|\bsells?\b|\bsold\b|customers",
+}
+_FAMILY_RX = {k: re.compile(v, re.I) for k, v in _FAMILIES.items()}
+_COMPOUND = re.compile(r"\bplus\b|\band then\b|, then\b|\bthen\b.*\bthen\b", re.I)
+_ASKING = re.compile(r"(?:tell|give|determine|find|calculate|state|report|what|how)\b", re.I)
 
 
-_ASKING = re.compile(r"(?:tell|give|determine|find|calculate|state|report|what|how|finally)\b", re.I)
+def _families(sentence: str) -> int:
+    return sum(1 for rx in _FAMILY_RX.values() if rx.search(sentence))
 
 
 def _count_operations(template: str) -> int | None:
     """Operation sentences of a math template, or None when the text does not read as intro + operations +
-    question (any doubt means no check)."""
+    question, or when any operation sentence is compound (two operation cues, `plus`, `, then`, an operation in
+    the intro): then the count would be too low and the step check could punish a correct spec."""
     sentences = split_sentences(strip_boilerplate(template))
     if len(sentences) < 3:
         return None
     last = sentences[-1]
-    if not (last.endswith("?") or (_ASKING.match(last) and not re.search(r"\{N\d+\}", last))):
+    if not (last.endswith("?") or (_ASKING.match(
+            re.sub(r"^finally,?\s+", "", last, flags=re.I)) and not re.search(r"\{N\d+\}", last))):
         return None
     intro = sentences[0]
-    if not (re.search(r"\{N\d+\}", intro) and _START_WORD.search(intro)):
+    if (len(re.findall(r"\{N\d+\}", intro)) != 1 or not _START_WORD.search(intro) or _families(intro)
+            or _COMPOUND.search(intro)):
         return None
     middle = sentences[1:-1]
-    if not all(_OP_MARK.search(s) and not s.endswith("?") and not _ASKING.match(s) for s in middle):
-        return None
+    for sent in middle:
+        if (sent.endswith("?") or _ASKING.match(sent) or _COMPOUND.search(sent) or _families(sent) != 1
+                or len(re.findall(r"\{N\d+\}", sent)) > 2):
+            return None
     return len(middle)
 
 
@@ -154,7 +172,7 @@ def _step_mismatch(task_type: str, template: str, spec: object) -> str | None:
     if task_type != "math":
         return None
     expected, got = _count_operations(template), _step_count(spec)
-    if expected is None or got is None or expected == got:
+    if expected is None or got is None or got >= expected:
         return None
     return (f"The text has {expected} operations, your spec has {got} steps; each sentence is a separate step "
             "even if it repeats an earlier one")
@@ -378,7 +396,8 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
              else {})
     for task, _ in redo:
         res = again.get(task.task_id)
-        retry_counts = steps_why is None or _step_mismatch(task_type, template, retry) is None
+        retry_counts = steps_why is None or (_step_count(retry) is not None
+                                             and _step_mismatch(task_type, template, retry) is None)
         if res is not None and res.status == "solved" and _shape_error(task, res) is None and retry_counts:
             out[task.task_id] = res
         else:

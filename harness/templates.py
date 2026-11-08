@@ -5,14 +5,17 @@ from harness.solvers.common import strip_boilerplate
 from harness.tasks import Task
 
 _STOP_WORDS = {"A", "An", "The", "In", "How", "What", "Which", "Who", "Where", "When", "Then", "It", "Use",
-               "Compute", "Report", "Give", "Answer", "Write", "State", "Provide", "Return", "Find", "List", "Name"}
+               "Compute"}
 _QUOTED = re.compile(r"""(?<![\w])'([^'\n]+)'(?!\w)|"([^"\n]+)\"""")
 _ENTITY = re.compile(r"\b[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}\b")
 # search only (person names): a name word may be hyphenated (Nikolai-Felix, Petrov-Sato) and a middle initial
 # may stand BETWEEN name words (Quinn D. Muller). Not for math/data, where "Tank A. What ..." would glue a
 # letter, the full stop and the next sentence's first word into one slot.
 _NAME_WORD = r"[A-Z][a-z]+(?:-[A-Z][a-z]+)*"
-_INITIAL = rf"(?: [A-Z]\.(?! (?:{'|'.join(sorted(_STOP_WORDS))})\b))"
+# a command verb after a lone initial ("Ann B. Report the name") ends the name; kept apart from _STOP_WORDS so a
+# company called "State Street Corp" or "Return Systems" is not trimmed
+_INITIAL_STOP = _STOP_WORDS | {"Report", "Give", "Answer", "Write", "State", "Provide", "Return", "Find", "List", "Name"}
+_INITIAL = rf"(?: [A-Z]\.(?! (?:{'|'.join(sorted(_INITIAL_STOP))})\b))"
 _PERSON = re.compile(rf"\b{_NAME_WORD}{_INITIAL}?(?: {_NAME_WORD}){{1,2}}(?![\w])")
 _PLACEHOLDER = re.compile(r"\{[SEN]\d+\}")
 # whole integers only: not part of a word, a decimal, or an existing placeholder

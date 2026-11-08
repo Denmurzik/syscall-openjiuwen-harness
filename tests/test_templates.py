@@ -136,3 +136,10 @@ def test_initial_before_command_verb_is_not_part_of_the_name():
         assert slots == {}, (verb, slots)
         t, slots = templatize(f"Who mentors Ann Lee B. {verb} the name only.", "search")
         assert slots == {"E1": "Ann Lee"} and f"B. {verb}" in t, (verb, slots, t)
+
+
+def test_company_starting_with_a_command_word_keeps_its_first_word():
+    t, slots = templatize("Where is State Street Corp headquartered?", "search")
+    assert slots == {"E1": "State Street Corp"} and t == "Where is {E1} headquartered?"
+    t, slots = templatize("Where is Return Systems based?", "search")
+    assert slots == {"E1": "Return Systems"}
