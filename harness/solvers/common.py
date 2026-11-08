@@ -23,19 +23,21 @@ def strip_boilerplate(instruction: str) -> str:
 
 # ============================================================================ phase-1 normalizer
 #
-# `normalize_instruction` only rewrites the FORM of an instruction (bullets, filler preambles, file-description
-# variants, polite question leads) into the canonical wording the solvers parse. It never decides anything:
-# a sentence is dropped only when it is made of filler words alone and every number, quoted literal, file name and
-# capitalised name in it also stands in the question or the file sentence (so it cannot carry a filter the solver
-# would miss). Everything else stays as written and the solver answers `unparsed`, as before.
+# `normalize_instruction` only rewrites the FORM of an instruction and is deliberately conservative: it saves tokens,
+# a wrong silent answer costs points. Rules: (1) bullet lines become sentences; (2) a sentence is dropped only if it
+# fully matches a short CLOSED list of content-free patterns (no domain word, number, quote or name can be in it);
+# (3) a file description is rewritten to the canonical file sentence; (4) a polite/imperative question lead is
+# rewritten to a wh-question. Anything else, and any text after the question sentence, leaves the instruction as
+# `strip_boilerplate` gives it: the solver then parses it strictly or answers `unparsed`.
 
 _I = re.IGNORECASE
-_BULLET = re.compile(r"^\s*(?:[-*•‣◦●]|\d{1,2}[.)])\s+")
+_BULLET = re.compile(r"^(\s*)(?:[-*•‣◦●]|\d{1,2}[.)])\s+")
 _INITIAL_END = re.compile(r"\s[A-Z]\.$")
+_MAX_LEN = 20000
 
 
-def _flatten(text: str) -> str:
-    """Bullet lines become sentences (a missing final stop is added); other lines are joined as they are."""
+def _flatten(text: str) -> str | None:
+    """Bullet lines become sentences (a missing final stop is added). None if a bullet is nested / indented."""
     parts = []
     for line in text.splitlines():
         s = line.strip()
@@ -43,104 +45,52 @@ def _flatten(text: str) -> str:
             continue
         m = _BULLET.match(line)
         if m:
+            if m.group(1):
+                return None
             s = line[m.end():].strip()
             if not s:
                 continue
             if s[-1] not in ".?!":
                 s += "."
         parts.append(s)
-    text = " ".join(parts)
-    # "(Note: The directory kb/ holds ... files.)": a parenthesised whole sentence is just a sentence
-    return re.sub(r"\(\s*([A-Z][^()]*[.?!])\s*\)", r"\1", text)
+    return " ".join(parts)
 
 
-# Words that carry no task content. PREFIX words may open a sentence before a "," or ":" (no question words, no
-# measures); the sentence-level sets add words used by redundant restatements ("Calculate the total volume ...").
-_BASE = set("""
-a an the this that these those it its their his her our your my we you i us me they them he she
-is are was were be being been am do does did has have having can could would will should may might shall must
-of in on at for with from by as to into within about regarding concerning during and or through
-please quick note notes fyi heads up headsup just here there now then also some small following below above
-before proceeding proceed continue given based context information info resource using use considering consider
-imagine suppose assume let's lets let look looking take check out review reviewing see read open access consult
-refer examine study analyze analyzing analyse inspect task involves involving overview brief
-dataset structure data file files folder directory kb/ markdown markdown-based knowledge base collection set stored
-located contains contain contained comprising comprises consists consisting holds hold available provided
-maintain maintains maintained format question query request problem puzzle scenario situation update status story
-inventory stock level levels warehouse warehouses logistics center centre distribution busy managing manages
-tracking track changes specifically heads-up finally next lastly
-""".split())
-_DATA = set("""
-orders order units unit price revenue region product month months sales sale year quarter total number count
-value mean average sum result answer volume period specified specific entries entry rows row columns column
-calculate compute determine identify locate focus focusing focused compile get inclusive between
-which who where that need needed want wanted know max maximum min minimum largest smallest highest lowest
-single per
-""".split())
-_SEARCH = set("""
-employer employers mentor mentors mentorship chain company companies person people individual headquarters city
-founding founded year born birth headquartered employs employed find identify determine locate trace
-second third final first which who where that when need needed want know
-""".split())
-_MATH = set()
-_VOCAB = {"math": _BASE | _MATH, "data": _BASE | _DATA, "search": _BASE | _SEARCH}
-
-_QUOTED = re.compile(r"(?<![\w])'([^'\n]{1,40})'(?![\w])")
-_TOKEN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./’'-]*")
-_MAX_FLUFF_WORDS = 40
+# Content-free whole sentences (case-insensitive, full match). No digits, quotes, names or domain words.
+_GENERIC_FILLER = [re.compile(p, _I) for p in (
+    r"(?:please )?(?:review|read|consider|look at) the following(?: task| problem| question| scenario)?[.:]?",
+    r"here is (?:a|the) (?:task|problem|question|scenario)[.:]?",
+    r"you are given the following(?: task| problem| scenario)?[.:]?",
+    r"let['’]s look at the following[.:]?",
+)]
+_DATA_FILLER = [re.compile(p, _I) for p in (
+    r"here is a brief overview of the dataset structure\.",
+)]
+_SEARCH_FILLER = [re.compile(p, _I) for p in (
+    r"(?:the )?(?:directory )?kb/ (?:directory )?(?:contains|holds) a small knowledge base of markdown files\.",
+    r"the kb/ directory holds a small knowledge base in markdown format\.",
+    r"a small knowledge base of markdown files is (?:available|located|stored) in the kb/ directory\.",
+    r"(?:you can find|we have|we maintain) a small knowledge base of markdown files in the kb/ directory\.",
+    r"(?:refer to|locate|access) the small knowledge base of markdown files (?:located )?in the kb/ directory\.",
+    r"check out the kb/ folder for some markdown files\.",
+)]
+_FILLER = {"math": _GENERIC_FILLER, "data": _GENERIC_FILLER + _DATA_FILLER, "search": _GENERIC_FILLER + _SEARCH_FILLER}
+# Sentence-initial words that carry nothing: "FYI, ...", "Quick question: ...", "Given this context, ...".
+_PREFIX = re.compile(
+    r"(?:fyi|quick (?:note|question|query)|just a heads-up|heads up|note|here is (?:a|the) (?:task|problem|question|scenario)"
+    r"|(?:given|based on|using|considering|with) (?:this|that|the above) (?:context|information|data|resource))\s*[:,]\s+",
+    _I)
+_PRE_FILE = {"", "looking at", "regarding", "quick query on", "given that", "here is", "please check", "please review",
+             "please look at", "reviewing", "checking", "we have", "we need to analyze", "heads up", "fyi", "note",
+             "i am looking at a dataset from", "looking at the file"}
 
 
-def _clean_token(tok: str) -> str:
-    tok = tok.rstrip(".'’-")
-    for suffix in ("'s", "’s"):
-        if tok.endswith(suffix):
-            tok = tok[:-2]
-    return tok
-
-
-def _contained(token: str, ref: str) -> bool:
-    return re.search(rf"(?<![\w]){re.escape(token.casefold())}(?![\w])", ref.casefold()) is not None
-
-
-def _is_fluff(text: str, ref: str, vocab: set[str]) -> bool:
-    """True if `text` holds only filler words, plus numbers / quoted literals / file names / names that `ref` repeats."""
-    quoted = _QUOTED.findall(text)
-    if any(f"'{q.casefold()}'" not in ref.casefold() for q in quoted):
-        return False
-    rest = _QUOTED.sub(" ", text)
-    tokens = [_clean_token(t) for t in _TOKEN.findall(rest)]
-    tokens = [t for t in tokens if t]
-    if not tokens or len(tokens) > _MAX_FLUFF_WORDS:
-        return False
-    for tok in tokens:
-        low = tok.casefold()
-        if low in vocab:
-            continue
-        if any(c.isdigit() for c in tok) or low.endswith(".csv") or "/" in tok or tok[0].isupper():
-            if _contained(tok, ref):
-                continue
-        return False
-    return True
-
-
-def _peel_prefix(sentence: str, ref: str) -> str:
-    """Drop leading filler clauses ("Quick note on inventory: ...", "Given this context, ...")."""
+def _peel_prefix(sentence: str) -> str:
     while True:
-        for i, ch in enumerate(sentence):
-            if ch not in ",:":
-                continue
-            prefix, rest = sentence[:i].strip(), sentence[i + 1:].strip()
-            if prefix and rest and _is_fluff(prefix, rest + " " + ref, _BASE):
-                sentence = rest
-                break
-        else:
+        m = _PREFIX.match(sentence)
+        if not m or not sentence[m.end():].strip():
             return sentence
-
-
-def _unwrap(sentence: str) -> str:
-    if sentence.startswith("(") and sentence.endswith(")") and sentence.count("(") == sentence.count(")") == 1:
-        return sentence[1:-1].strip()
-    return sentence
+        sentence = sentence[m.end():].strip()
 
 
 # ---------------------------------------------------------------------------- data: file description
@@ -193,7 +143,12 @@ def _rewrite_file(text: str) -> str:
     post = re.sub(r"^\s*(?:and\s+)?[,;:.]*", "", post, flags=_I).strip()
     parts = []
     if pre:
-        parts.append(pre if pre[-1] in ".?!" else pre + ".")
+        head, tail = (pre.rsplit(". ", 1) + [""])[:2] if ". " in pre else ("", pre)
+        if head:
+            tail_sentences = head + "."
+            parts.append(tail_sentences)
+        if _peel_prefix(tail.strip() + " \0").rstrip("\0").strip(" :,").lower() not in _PRE_FILE:
+            return text
     parts.append(_file_sentence(best))
     if post:
         parts.append(post)
@@ -275,42 +230,39 @@ def _merge_initials(sentences: list[str]) -> list[str]:
 
 def normalize_instruction(instruction: str, domain: str) -> str:
     """Instruction without the boilerplate tail, in canonical wording where the rewrite is safe.
-    `domain` is "math", "data" or "search"."""
+    `domain` is "math", "data" or "search". Never raises; on doubt returns `strip_boilerplate(instruction)`."""
     try:
-        return _normalize(instruction, domain)
+        if len(instruction) > _MAX_LEN:
+            return strip_boilerplate(instruction)
+        out = _normalize(instruction, domain)
+        return strip_boilerplate(instruction) if out is None else out
     except Exception:
         return strip_boilerplate(instruction)
 
 
-def _normalize(instruction: str, domain: str) -> str:
-    vocab = _VOCAB[domain]
-    text = strip_boilerplate(_flatten(instruction))
+def _normalize(instruction: str, domain: str) -> str | None:
+    flat = _flatten(instruction)
+    if flat is None:
+        return None
+    text = strip_boilerplate(flat)
     if domain == "data":
         text = _rewrite_file(text)
-    sents = [_unwrap(" ".join(s.split())) for s in _merge_initials(split_sentences(text))]
-    sents = [s for s in sents if s]
+    sents = [" ".join(s.split()) for s in _merge_initials(split_sentences(text))]
+    sents = [_peel_prefix(s) for s in sents if s]
     if not sents:
-        return ""
+        return None
     protected = {i for i, s in enumerate(sents) if domain == "data" and _CANON_FILE.fullmatch(s)}
-    file_text = " ".join(sents[i] for i in protected)
-    asking = [i for i, s in enumerate(sents) if s.endswith("?") and i not in protected]
     others = [i for i in range(len(sents)) if i not in protected]
     if not others:
-        return " ".join(sents)
+        return None
+    asking = [i for i in others if sents[i].endswith("?")]
     q = asking[-1] if asking else others[-1]
-    sents[q] = _peel_prefix(sents[q], file_text)
-    for i in range(len(sents)):
-        if i != q and i not in protected:
-            sents[i] = _peel_prefix(sents[i], sents[q] + " " + file_text)
-    ref = sents[q] + " " + file_text
-    keep = []
-    for i, s in enumerate(sents):
-        if i != q and i not in protected and not s.endswith("?") and _is_fluff(s, ref, vocab):
-            continue
-        keep.append(i)
+    if q != len(sents) - 1:
+        return None  # something follows the question: never guess
     out = []
-    for i in keep:
-        s = sents[i]
+    for i, s in enumerate(sents):
+        if i != q and i not in protected and not s.endswith("?") and any(rx.fullmatch(s) for rx in _FILLER[domain]):
+            continue
         if i == q:
             if domain == "data":
                 s = _data_question(s)

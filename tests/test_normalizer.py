@@ -52,12 +52,19 @@ def test_math_bullets_parse_like_flat():
     assert math_solver.parse(text) == math_solver.parse(FLAT_M + M_SUF)
 
 
-@pytest.mark.parametrize("pre", ["Quick note on inventory: ", "FYI on stock levels: ",
-                                 "Imagine a logistics center managing inventory. ",
-                                 "Consider the logistics of a busy warehouse. ", "Let's look at a distribution update. "])
+@pytest.mark.parametrize("pre", ["Quick note: ", "FYI: ", "Consider the following. ", "Please review the following task. ",
+                                 "Here is a task: "])
 def test_math_filler_preamble_dropped(pre):
     assert isinstance(math_solver.parse(pre + FLAT_M + M_SUF), dict)
     assert math_solver.parse(pre + FLAT_M + M_SUF) == math_solver.parse(FLAT_M + M_SUF)
+
+
+@pytest.mark.parametrize("pre", ["Imagine a logistics center managing inventory. ", "Quick note on inventory: ",
+                                 "Before that, ", "Finally, "])
+def test_math_domain_words_and_ordering_are_not_filler(pre):
+    text = FLAT_M.replace("It loses 5 boxes to theft.", pre + "it loses 5 boxes to theft.") if pre.endswith(", ") else pre + FLAT_M
+    r = math_solver.parse(text + M_SUF)
+    assert _unparsed(r) or pre == "Finally, "
 
 
 @pytest.mark.parametrize("pre", ["Ignore the shipments. ", "Note that 5 boxes are missing. ",
@@ -92,8 +99,6 @@ def test_data_canonical_parses():
 
 @pytest.mark.parametrize("text", [
     "Here is a brief overview of the dataset structure. " + CANON_D,
-    "- The file sales.csv has columns order_id,region,product,month,units,price (636 rows).\n"
-    "- Calculate the mean value.\nWhat is the average price in month 8, rounded to 2 decimal places?",
     "- File: sales.csv\n- Columns: order_id, region, product, month, units, price\n- Row count: 636\n\n"
     "What is the average price in month 8, rounded to 2 decimal places?",
     "Looking at sales.csv (order_id, region, product, month, units, price; 636 rows), what's the mean price in month 8, "
@@ -127,13 +132,12 @@ def test_data_total_number_of_orders():
     assert isinstance(spec, dict) and spec["metric"] == "count_orders"
 
 
-def test_data_redundant_filler_with_contained_values_is_dropped():
+def test_data_restating_sentences_are_kept_so_unparsed():
     text = ("- The file sales.csv has columns order_id,region,product,month,units,price (327 rows).\n"
             "- Focus on 'sprocket' units in month 4.\n- Compute the mean value.\n"
             "What is the average number of units per order in month 4 for product 'sprocket', "
             "rounded to 2 decimal places?")
-    spec = data_solver.parse(text + D_SUF)
-    assert isinstance(spec, dict) and spec["product"] == "sprocket" and spec["month_from"] == 4
+    assert _unparsed(data_solver.parse(text + D_SUF))
 
 
 @pytest.mark.parametrize("filler", [
@@ -168,15 +172,20 @@ def test_search_intro_variants():
     want = search_solver.parse("In which year was Petra Ivanova's mentor born?" + S_SUF)
     assert isinstance(want, dict)
     for intro in ["The directory kb/ contains a small knowledge base of markdown files.",
-                  "You can find a collection of markdown files in the kb/ directory.",
                   "Check out the kb/ folder for some markdown files.",
                   "The kb/ directory holds a small knowledge base in markdown format.",
                   "FYI, the directory kb/ contains a small knowledge base of markdown files."]:
         assert search_solver.parse(intro + " In which year was Petra Ivanova's mentor born?" + S_SUF) == want, intro
     assert search_solver.parse("- The kb/ directory contains a small knowledge base of markdown files.\n"
+"\n"
                                "In which year was Petra Ivanova's mentor born?" + S_SUF) == want
-    assert search_solver.parse("In which year was Petra Ivanova's mentor born? (Note: The directory kb/ contains a "
-                               "small knowledge base of markdown files.)" + S_SUF) == want
+
+
+def test_search_sentence_after_question_is_never_dropped():
+    q = "In which year was Petra Ivanova's mentor born?"
+    note = "(Note: The directory kb/ contains a small knowledge base of markdown files.)"
+    assert _unparsed(search_solver.parse(q + " " + note + S_SUF))
+    assert _unparsed(search_solver.parse(q + " Then find the employer of that mentor." + S_SUF))
 
 
 def test_search_polite_prefix_and_imperative():
@@ -184,6 +193,7 @@ def test_search_polite_prefix_and_imperative():
     assert search_solver.parse("The kb/ directory holds a small knowledge base of markdown files. Given this context, "
                                "in which year was Petra Ivanova's mentor born?" + S_SUF) == want
     spec = search_solver.parse("- The kb/ directory contains a small knowledge base of markdown files.\n"
+"\n"
                                "- Identify the mentor of the mentor of Lena Ito." + S_SUF)
     assert isinstance(spec, dict)
     assert spec == search_solver.parse("Who is the mentor of the mentor of Lena Ito?" + S_SUF)
@@ -192,19 +202,47 @@ def test_search_polite_prefix_and_imperative():
     assert spec == search_solver.parse("Which company employs the mentor of Bruno-Dmitri Moreau?" + S_SUF)
 
 
-def test_search_redundant_steps_dropped_only_when_contained():
+def test_search_step_sentences_are_kept_so_unparsed():
     q = "What year was the employer of the mentor of Rosa Haddad founded?"
-    steps = ("- Identify Rosa Haddad's mentor.\n- Determine the employer of that mentor.\n"
-             "- Find the founding year of that employer.\n")
-    base = "- Locate the knowledge base in the kb/ directory, which consists of markdown files.\n"
-    want = search_solver.parse(q + S_SUF)
-    assert isinstance(want, dict)
-    assert search_solver.parse(base + steps + q + S_SUF) == want
-    assert _unparsed(search_solver.parse(base + "- Identify Boris Garcia's mentor.\n" + q + S_SUF))
-    assert _unparsed(search_solver.parse(base + "- Ignore anyone who left the company.\n" + q + S_SUF))
-    assert _unparsed(search_solver.parse(base + "- Only use the file kb/people.md.\n" + q + S_SUF))
+    base = "The kb/ directory contains a small knowledge base of markdown files.\n"
+    for step in ["Identify Rosa Haddad's mentor.", "Identify Boris Garcia's mentor.", "Ignore anyone who left.",
+                 "Only use the file kb/people.md."]:
+        assert _unparsed(search_solver.parse(base + step + "\n" + q + S_SUF)), step
 
 
 def test_search_wrong_directory_not_dropped():
     assert _unparsed(search_solver.parse("The data/ directory contains a small knowledge base of markdown files. "
                                          "In which year was Petra Ivanova's mentor born?" + S_SUF))
+
+
+def test_long_comma_list_is_fast():
+    import time
+    text = "A warehouse starts with " + ", ".join(["x"] * 5000) + " boxes. How many boxes does it have at the end?"
+    t = time.time()
+    math_solver.parse(text + M_SUF)
+    data_solver.parse(text + D_SUF)
+    search_solver.parse(text + S_SUF)
+    assert time.time() - t < 1.0
+
+
+# ------------------------------------------------------------------ adversarial gate (84 probes from the review)
+
+import json
+from pathlib import Path
+
+from harness.tasks import Task
+
+_FIX = Path(__file__).parent / "fixtures" / "probes_r6"
+_PROBES = json.loads((_FIX / "probes.json").read_text(encoding="utf-8"))
+_SUFFIX = {"data": D_SUF, "math": M_SUF, "search": S_SUF}
+_MOD = {"data": (data_solver, "data_analysis"), "math": (math_solver, "math"), "search": (search_solver, "search")}
+_WS = {"data": _FIX / "data", "north": _FIX / "north", "search": _FIX / "search"}
+
+
+@pytest.mark.parametrize("probe", _PROBES, ids=[p["id"] for p in _PROBES])
+def test_probe_never_confidently_wrong(probe, tmp_path):
+    mod, typ = _MOD[probe["dom"]]
+    ws = _WS[probe["ws"]]
+    r = mod.solve(Task(probe["id"], typ, probe["text"] + _SUFFIX[probe["dom"]], 1.0, "exact_str", ws, ws))
+    if r.status == "solved":
+        assert r.answer in probe["allowed"], (probe["note"], r.answer)
