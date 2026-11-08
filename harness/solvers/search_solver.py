@@ -129,14 +129,14 @@ def _parse_entity(expr: str, bare: bool = False) -> list[tuple[str, list[str]]]:
     if bare:
         return [(expr, [])]
     out: list[tuple[str, list[str]]] = []
-    poss = _POSSESSIVE.fullmatch(expr)
-    if poss is not None:
-        for name, path in _parse_entity(poss.group(1)):
-            out.append((name, path + [poss.group(2).capitalize()]))
     the_of = _THE_OF.fullmatch(expr)
     if the_of is not None:
         for name, path in _parse_entity(the_of.group(2)):
             out.append((name, path + [the_of.group(1).capitalize()]))
+    poss = _POSSESSIVE.fullmatch(expr)
+    if poss is not None:
+        for name, path in _parse_entity(poss.group(1)):
+            out.append((name, path + [poss.group(2).capitalize()]))
     employs = _EMPLOYS.fullmatch(expr)
     if employs is not None:
         for name, path in _parse_entity(employs.group(1)):

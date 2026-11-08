@@ -1478,5 +1478,33 @@
   ],
   "ws": "data",
   "note": "filter inside column list"
+ },
+ {
+  "id": "t01",
+  "dom": "search",
+  "text": "In which city is the headquarters of the mentor of Alice Khan's employer?",
+  "allowed": [],
+  "ws": "search",
+  "note": "mentor of a company, nested"
+ },
+ {
+  "id": "t23",
+  "dom": "search",
+  "text": "In which year was the employer of Alice Khan's mentor founded?",
+  "allowed": [
+   "1983"
+  ],
+  "ws": "search",
+  "note": "positive nested possessive"
+ },
+ {
+  "id": "t26",
+  "dom": "search",
+  "text": "In which city is the headquarters of the employer of the mentor of Alice Khan's mentor?",
+  "allowed": [
+   "Ghent"
+  ],
+  "ws": "search",
+  "note": "positive nested"
  }
 ]
