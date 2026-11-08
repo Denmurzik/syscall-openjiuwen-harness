@@ -166,3 +166,47 @@ def test_every_template_renders_data_and_search():
     assert len(c) >= 8
     for tid, build in c:
         assert "the mentor of Ana B. Rossi" in build(), tid
+
+
+# ---- math: every operation x every style, against a hand-computed table (start 1001)
+_M_CASES = {  # kind: (canonical sentence, hand-computed stock after it from 1001, must keep "rounded down")
+    "ship": ("It ships 7 boxes per day for 3 days.", 1001 - 21, False),
+    "receive": ("It receives 3 deliveries of 40 boxes each.", 1001 + 120, False),
+    "split": ("Then the stock is split equally into 4 warehouses and it keeps one share (rounded down).",
+              250, True),
+    "double": ("Then the stock is doubled by merging with a sister warehouse.", 2002, False),
+    "triple": ("Then the stock is tripled by a big merger.", 3003, False),
+    "theft": ("It loses 11 boxes to theft.", 990, False),
+    "ruined": ("A leak ruins 12 boxes, which are thrown away.", 989, False),
+    "moved": ("Then one quarter of the stock (rounded down) is moved to another site.", 1001 - 250, True),
+    "sell_half": ("Then it sells half of the boxes, rounding the number sold down.", 1001 - 500, True),
+    "add_pct": ("Then the stock grows by 33 percent (rounded down).", 1001 + 330, True),
+    "lose_pct": ("Then 33 percent of the stock (rounded down) spoils.", 1001 - 330, True),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_M_CASES))
+def test_math_styles_agree_with_hand_table(kind):
+    from harness.tasks import Task
+    from tools.gen_tasks import SUFFIX_MATH
+    sentence, expected, rounded = _M_CASES[kind]
+    body = f"A warehouse starts with 1001 boxes. {sentence} How many boxes does it have at the end?"
+    t = Task("m", "math", body + SUFFIX_MATH, 1.0, "exact_int", Path("."), Path("."))
+    assert paraphrase.math_solver.solve(t).answer == str(expected)  # the table matches the real semantics
+    for i in range(4):
+        out = paraphrase._math_candidates(body)[i][1]()
+        assert _digits(out) == _digits(body)
+        if rounded:
+            assert "rounded down" in out.split("1001 boxes", 1)[-1] or "rounded down" in out or \
+                "rounding" in out, (kind, i, out)
+    # explicit guard: the percent-loss wording must say the AMOUNT LOST is rounded down
+    if kind == "lose_pct":
+        for alt in paraphrase._M_OP_ALTS["lose_pct"]:
+            if "shrinks" in alt or "costs" in alt:
+                assert "amount lost is rounded down" in alt
+
+
+def test_revenue_styles_are_not_sum_units_times_price():
+    for texts, _ in paraphrase._D_STYLES:
+        r = texts["revenue"]
+        assert "over all rows" in r or "per-row" in r, r
