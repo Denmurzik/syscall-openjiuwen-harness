@@ -46,8 +46,8 @@ def grandchild_target(queue, task, solver_name=None):
     from harness.proc import run_python
     marker = Path(task.workspace) / "alive.txt"
     code = ("import time, pathlib; "
-            f"p = pathlib.Path({str(marker)!r}); "
-            "exec('while True: p.write_text(str(time.time())); time.sleep(0.2)')")
+            f"p = pathlib.Path({str(marker)!r}); end = time.time() + 30; "
+            "exec('while time.time() < end: p.write_text(str(time.time())); time.sleep(0.2)')")
     run_python(["-c", code], Path(task.workspace), 60)
 
 
@@ -162,6 +162,35 @@ def test_timed_out_phase1_child_takes_its_subprocesses_with_it(tmp_path, monkeyp
     stamp = marker.read_text()
     time.sleep(1.5)
     assert marker.read_text() == stamp           # and stopped writing: it is dead
+
+
+def test_posix_descendants_walks_a_fake_proc(tmp_path):
+    from harness.proc import _posix_descendants
+    # pid: ppid ; comm with spaces and parens must not confuse the parser; 7 and 8 form a cycle
+    for pid, ppid in {10: 1, 11: 10, 12: 11, 13: 10, 20: 1, 7: 8, 8: 7}.items():
+        d = tmp_path / str(pid)
+        d.mkdir()
+        (d / "stat").write_text(f"{pid} (a b) c) S {ppid} 0 0" + chr(10))
+    (tmp_path / "self").mkdir()
+    assert sorted(_posix_descendants(10, str(tmp_path))) == [11, 12, 13]
+    assert sorted(_posix_descendants(7, str(tmp_path))) == [8]  # the cycle terminates
+    assert _posix_descendants(10, str(tmp_path / "missing")) == []
+
+
+def test_kill_order_child_first_then_snapshot(monkeypatch):
+    from types import SimpleNamespace
+    from harness import proc as procmod
+    calls = []
+    fake = SimpleNamespace(exitcode=None, pid=42, kill=lambda: calls.append("child"))
+    monkeypatch.setattr(procmod, "os", SimpleNamespace(name="posix"))
+    monkeypatch.setattr(procmod, "_posix_descendants", lambda pid: calls.append("snap") or [43, 44])
+    monkeypatch.setattr(procmod, "kill_pids", lambda pids: calls.append(("kill", pids)))
+    procmod.kill_tree_of_process(fake)
+    assert calls == ["snap", "child", ("kill", [43, 44])]
+    calls.clear()
+    fake.exitcode = 0   # already reaped: its pid is stale, touch nothing
+    procmod.kill_tree_of_process(fake)
+    assert calls == []
 
 
 def test_run_agent_exits_zero_on_missing_dir(tmp_path):

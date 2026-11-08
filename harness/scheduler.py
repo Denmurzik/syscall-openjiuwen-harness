@@ -60,12 +60,8 @@ def _phase1_target(out_queue, task: Task, solver_name=None) -> None:
 
 
 def _kill(proc) -> None:
-    try:
-        if proc.pid is not None:
-            from harness.proc import kill_descendants
-            kill_descendants(proc.pid)
-    except Exception:
-        pass
+    from harness.proc import kill_tree_of_process
+    kill_tree_of_process(proc)
     try:
         proc.terminate()
         proc.join(1.0)
@@ -82,6 +78,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
     pending = list(tasks)
     running: dict = {}  # task_id -> (proc, start, task)
     done: set = set()
+    killed: set = set()  # tids whose child was killed: a result arriving later is not trusted
 
     def finish(task: Task, res: SolveResult, start: float) -> None:
         done.add(task.task_id)
@@ -99,6 +96,9 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
             except Exception:
                 log.exception("phase 1: bad queue message")
                 return
+            if tid in killed:
+                timeout = 0.0
+                continue
             ent = running.pop(tid, None)
             if ent is not None and tid not in done:
                 proc, start, task = ent
@@ -133,6 +133,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
                         running.pop(tid)
                         finish(task, SolveResult("unparsed", note="solver process died"), start)
                 elif time.monotonic() - start > limit or over:
+                    killed.add(tid)
                     _kill(proc)
                     drain()
                     if tid in running:

@@ -27,44 +27,55 @@ def _cut(b: bytes | str | None) -> str:
     return b[:2048] + mark + b[-(MAX_OUT - 2048 - len(mark)):]
 
 
-def _posix_descendants(pid: int) -> list[int]:
+def _posix_descendants(pid: int, proc_root: str = "/proc") -> list[int]:
     """Pids of all descendants of `pid` (via /proc); best effort, [] when /proc is unavailable."""
     children: dict[int, list[int]] = {}
     try:
-        for name in os.listdir("/proc"):
+        for name in os.listdir(proc_root):
             if not name.isdigit():
                 continue
             try:
-                with open(f"/proc/{name}/stat", "rb") as f:
+                with open(f"{proc_root}/{name}/stat", "rb") as f:
                     ppid = int(f.read().rsplit(b")", 1)[1].split()[1])
             except (OSError, ValueError, IndexError):
                 continue
             children.setdefault(ppid, []).append(int(name))
     except OSError:
         return []
-    out, todo = [], [pid]
+    out, todo, seen = [], [pid], {pid}
     while todo:
         for c in children.get(todo.pop(), []):
-            out.append(c)
-            todo.append(c)
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+                todo.append(c)
     return out
 
 
-def kill_descendants(pid: int) -> None:
-    """Kill everything `pid` started (not `pid` itself). A solver subprocess runs in its own session
-    (posix) or is merely a child (Windows), so killing only the phase-1 child would orphan it, and an
-    orphaned endless loop burns CPU for the rest of the run."""
+def kill_pids(pids: list[int]) -> None:
+    import signal
+    for c in pids:
+        try:
+            os.kill(c, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def kill_tree_of_process(proc) -> None:
+    """Kill a multiprocessing child together with everything it started. A solver subprocess runs in
+    its own session (posix) or is merely a child (Windows), so killing only the child would orphan it,
+    and an orphaned endless loop burns CPU for the rest of the run.
+    posix: snapshot the descendants, kill the child FIRST (so it cannot report a result built on a
+    killed subprocess), then SIGKILL the snapshot. Windows: `taskkill /T` takes the whole tree at once."""
     try:
+        if proc.exitcode is not None or proc.pid is None:
+            return
         if os.name == "posix":
-            import signal
-            for c in _posix_descendants(pid):
-                try:
-                    os.kill(c, signal.SIGKILL)
-                except OSError:
-                    pass
+            snap = _posix_descendants(proc.pid)
+            proc.kill()
+            kill_pids(snap)
         else:
-            # taskkill /T walks the parent links of live processes, so run it before the parent dies
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
                            capture_output=True, check=False, timeout=15)
     except Exception:
         pass
