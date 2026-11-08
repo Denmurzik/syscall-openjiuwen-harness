@@ -199,7 +199,6 @@ def parse(instruction: str) -> dict | SolveResult:
 
 # ------------------------------------------------------------------ loose parser
 
-_COMPANY_ONLY = {"headquarters", "founded"}
 _STOP_WORDS = {"the", "of", "in", "is", "was", "a", "an", "does", "do", "did", "which", "what", "who", "whom",
                "can", "could", "you", "tell", "me", "to", "year", "s", "please", "where", "when"}
 _FIELD_CUES = {

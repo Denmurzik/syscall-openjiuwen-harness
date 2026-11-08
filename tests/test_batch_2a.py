@@ -226,3 +226,28 @@ def test_finished_groups_are_delivered_before_a_cancellation():
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(go())
     assert got["a"].answer == "93" and "b" not in got
+
+
+def test_batch_gather_error_does_not_leave_siblings_running(monkeypatch):
+    import harness.json_route as jr
+    items = [_item("a", 100, 7, "flood"), _item("b", 50, 5, "fire")]
+    done = []
+    real = jr.solve_group
+
+    async def boom(task_type, template, members, client, spec=None):
+        if members[0][0].task_id == "a":
+            raise RuntimeError("settle failed")
+        await asyncio.sleep(0.05)
+        r = await real(task_type, template, members, client, spec=spec)
+        done.append("b")
+        return r
+    monkeypatch.setattr(jr, "solve_group", boom)
+    client = FakeClient(batch_reply(SPEC, SPEC))
+
+    async def run():
+        with pytest.raises(RuntimeError):
+            await solve_batch("math", items, client)
+        at_raise = list(done)
+        await asyncio.sleep(0.2)
+        assert done == at_raise  # nothing keeps running after solve_batch has raised
+    asyncio.run(run())

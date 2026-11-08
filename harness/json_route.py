@@ -400,8 +400,8 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
              else {})
     for task, _ in redo:
         res = again.get(task.task_id)
-        retry_counts = steps_why is None or (_step_count(retry) is not None
-                                             and _step_mismatch(task_type, template, retry) is None)
+        retry_counts = (_step_mismatch(task_type, template, retry) is None
+                        and (steps_why is None or _step_count(retry) is not None))
         if res is not None and res.status == "solved" and _shape_error(task, res) is None and retry_counts:
             out[task.task_id] = res
         else:
@@ -506,7 +506,12 @@ async def solve_batch(task_type: str, items: list[tuple[str, list[tuple[Task, di
     The groups finish concurrently; `on_group(members, results)` is called as soon as one is ready, so a
     cancellation (deadline) loses only the groups still running. The full dict is returned as well."""
     if len(items) == 1:
-        res = await solve_group(task_type, items[0][0], items[0][1], client)
+        try:
+            res = await solve_group(task_type, items[0][0], items[0][1], client)
+        except BudgetExhausted as e:  # settle what the retry produced, then stop
+            if on_group is not None and getattr(e, "results", None):
+                on_group(items[0][1], e.results)
+            raise
         if on_group is not None:
             on_group(items[0][1], res)
         return res
@@ -530,7 +535,11 @@ async def solve_batch(task_type: str, items: list[tuple[str, list[tuple[Task, di
         if on_group is not None:
             on_group(members, res)
 
-    await asyncio.gather(*(one(t, m, s) for (t, m), s in zip(items, specs)))
+    outcomes = await asyncio.gather(*(one(t, m, s) for (t, m), s in zip(items, specs)),
+                                    return_exceptions=True)
+    for o in outcomes:  # a non-budget failure of one group surfaces after its siblings have finished
+        if isinstance(o, BaseException) and not isinstance(o, BudgetExhausted):
+            raise o
     if exhausted:
         exhausted[0].results = out
         raise exhausted[0]

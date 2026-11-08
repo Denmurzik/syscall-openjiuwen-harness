@@ -13,10 +13,9 @@ from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not ca
 from harness.result import SolveResult
 from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
-from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.shape import DESCRIBE, expected_shape, mismatch
-from harness.solvers.coding_solver import _write_mylib as write_mylib
-from harness.solvers.coding_solver import provable_contradiction  # atomic writer reused
+from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic writer reused
+from harness.solvers.coding_solver import provable_contradiction
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
 

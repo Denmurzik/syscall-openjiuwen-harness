@@ -439,3 +439,18 @@ def test_proof_decorators_returns_and_reflection():
     assert not _pc(_t("if self.id():" + chr(10) + "    return" + chr(10) + two), _PURE)
     for hook in ("setattr(m, 'f', len)", "delattr(m, 'f')", "importlib.reload(m)", "m.__dict__.update({})"):
         assert not _pc(_t(hook + chr(10) + two), _PURE), hook
+
+
+def test_phase1_branching_contradiction_is_not_infeasible(tmp_path):
+    # asserts under a branch are not a proof: only provable_contradiction may declare infeasible
+    lib = "def f(x):\n    return x\n"
+    tests = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
+             "    def test_f(self):\n        if m.f(0) == 0:\n"
+             "            self.assertEqual(m.f(7), 7)\n            self.assertEqual(m.f(7), 8)\n")
+    r = solve(_custom(tmp_path, lib, tests))
+    assert r.status != "infeasible"
+
+
+def test_proof_redefinition_in_nested_module_block_means_no_proof():
+    lib = "import sys\nif sys.platform:\n    def f(x):\n        return x\nelse:\n    def f(x):\n        return -x\n"
+    assert not _pc(_t("self.assertEqual(m.f(7), 7)\nself.assertEqual(m.f(7), 8)"), lib)

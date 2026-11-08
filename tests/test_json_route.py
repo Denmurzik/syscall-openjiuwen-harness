@@ -589,3 +589,18 @@ def test_reverse_guard_calls_x_their_mentor():
     for q in ("Who calls {n} their mentor?", "Who calls {c} her employer?"):
         template, _ = templatize(q.format(n="Ann Lee", c="Arktika Labs"), "search")
         assert _reverse_relation(template) is not None, q
+
+
+def test_shape_retry_spec_also_gets_the_step_count_check(monkeypatch):
+    import harness.json_route as jr
+    t = _math_task("m1", MATH_0136)
+    template, slots = templatize(t.instruction, "math")
+    state = {"n": 0}
+
+    def fake_shape(task, res):  # the first answer has the wrong shape, later ones are fine
+        state["n"] += 1
+        return "wrong kind" if state["n"] == 1 else None
+    monkeypatch.setattr(jr, "_shape_error", fake_shape)
+    client = FakeClient(_spec(STEPS8), _spec(STEPS8[:2] + STEPS8[3:]))
+    out = asyncio.run(solve_group("math", template, [(t, slots)], client))
+    assert out["m1"].status == "unparsed"

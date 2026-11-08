@@ -373,7 +373,9 @@ def _callee_is_pure(tree: ast.Module, name: str) -> bool:
             top[n.name] = top.get(n.name, 0) + 1
         else:
             for t in ast.walk(n):
-                if isinstance(t, ast.Name) and isinstance(t.ctx, ast.Store):
+                if isinstance(t, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    top[t.name] = top.get(t.name, 0) + 2  # redefinition in a module-level if/try
+                elif isinstance(t, ast.Name) and isinstance(t.ctx, ast.Store):
                     top[t.id] = top.get(t.id, 0) + 2
                 elif isinstance(t, (ast.Import, ast.ImportFrom)):
                     for a in t.names:
@@ -751,7 +753,7 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             while not report.ok:
                 step = _repair_round(ctx, cur, report, refs)
                 if step is None:
-                    if contradictory_tests(test_src) or provable_contradiction(test_src, original):
+                    if provable_contradiction(test_src, original):
                         return SolveResult("infeasible", note="tests contradict each other")
                     if cur != original:  # best partial repair: a guess beats no answer
                         return _partial(ws, mylib, cur, report)
