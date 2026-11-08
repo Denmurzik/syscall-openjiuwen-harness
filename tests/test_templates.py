@@ -128,3 +128,11 @@ def test_initials_and_hyphens_only_for_search():
         assert all("." not in v and "-" not in v for v in slots.values()), (kind, slots)
     _, slots = templatize("Ask about Quinn D. Muller and Nikolai-Felix Lindqvist.", "search")
     assert set(slots.values()) >= {"Quinn D. Muller", "Nikolai-Felix Lindqvist"}
+
+
+def test_initial_before_command_verb_is_not_part_of_the_name():
+    for verb in ("Report", "Give", "Answer", "Write", "State", "Provide", "Return", "Compute", "Find", "List", "Name"):
+        t, slots = templatize(f"Who mentors Ann B. {verb} the name only.", "search")
+        assert slots == {}, (verb, slots)
+        t, slots = templatize(f"Who mentors Ann Lee B. {verb} the name only.", "search")
+        assert slots == {"E1": "Ann Lee"} and f"B. {verb}" in t, (verb, slots, t)

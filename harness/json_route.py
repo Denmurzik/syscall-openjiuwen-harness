@@ -7,6 +7,7 @@ from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable
 from harness.result import SolveResult
 from harness.shape import DESCRIBE, expected_shape, mismatch
 from harness.solvers import data_solver, math_solver, search_solver
+from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.tasks import Task
 
 MODEL = MODEL_FAST
@@ -104,12 +105,59 @@ _REVERSE = re.compile("|".join([
     rf"\bmentored by {_SLOT}",
     rf"{_SLOT} mentor(?:s|ed)?\b(?! by)",                       # does X mentor / X mentors / X mentored
     rf"{_SLOT} (?:is|was|has been) mentoring\b", rf"\b(?:is|was) {_SLOT} mentoring\b",
+    rf"\b(?:counts?|counted|regards?|regarded|considers?|considered|treats?|views?|sees?|takes?|names?|lists?|calls?) "
+    rf"{_SLOT} as (?:(?:his|her|their|its|a|an|the) )?(?:mentor|employer)\b",   # who counts X as his mentor
     rf"\b(?:has|had|have) {_SLOT} as (?:(?:his|her|their|its|a|an|the) )?(?:mentor|employer)\b",  # X is the mentor
     rf"{_SLOT} (?:is|was) (?:(?:the|a|an) )?mentor of\b",          # X is the mentor of whom
     r"\bwhose (?:mentor|employer)\b",                              # whose mentor is X: always asks for the mentee
     rf"\b(?:works?|working|worked) (?:for|at) {_SLOT}",
     rf"\bemployed (?:by|at) {_SLOT}", rf"{_SLOT} employs?\b", r"\bemployees?\b", rf"\bstaff (?:of|at) {_SLOT}",
 ]), re.I)
+
+
+# math 2a: the number of operation sentences in the template against the number of steps in the spec
+_START_WORD = re.compile(r"\b(?:start|begin|outset|initial|opening|contain|hold|there (?:are|is)|stocked)", re.I)
+_OP_MARK = re.compile(r"\{N\d+\}|doubl|tripl|twice|three times|merg|\b(?:half|quarter|fourth|third|fifth|tenth)\b", re.I)
+
+
+_ASKING = re.compile(r"(?:tell|give|determine|find|calculate|state|report|what|how|finally)\b", re.I)
+
+
+def _count_operations(template: str) -> int | None:
+    """Operation sentences of a math template, or None when the text does not read as intro + operations +
+    question (any doubt means no check)."""
+    sentences = split_sentences(strip_boilerplate(template))
+    if len(sentences) < 3:
+        return None
+    last = sentences[-1]
+    if not (last.endswith("?") or (_ASKING.match(last) and not re.search(r"\{N\d+\}", last))):
+        return None
+    intro = sentences[0]
+    if not (re.search(r"\{N\d+\}", intro) and _START_WORD.search(intro)):
+        return None
+    middle = sentences[1:-1]
+    if not all(_OP_MARK.search(s) and not s.endswith("?") and not _ASKING.match(s) for s in middle):
+        return None
+    return len(middle)
+
+
+def _step_count(spec: object) -> int | None:
+    if not isinstance(spec, dict):
+        return None
+    for key in ("steps", "ops"):
+        if isinstance(spec.get(key), list):
+            return len(spec[key])
+    return None
+
+
+def _step_mismatch(task_type: str, template: str, spec: object) -> str | None:
+    if task_type != "math":
+        return None
+    expected, got = _count_operations(template), _step_count(spec)
+    if expected is None or got is None or expected == got:
+        return None
+    return (f"The text has {expected} operations, your spec has {got} steps; each sentence is a separate step "
+            "even if it repeats an earlier one")
 
 
 def _reverse_relation(template: str) -> str | None:
@@ -296,17 +344,26 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
     if spec.get("impossible") is True:
         return all_members(SolveResult("unparsed", note="model: spec impossible"))
     out = _execute_all(members, spec)
-    bad = {tid: why for tid, why in ((t.task_id, _shape_error(t, out[t.task_id])) for t, _ in members) if why}
+    steps_why = _step_mismatch(task_type, template, spec)
+    if steps_why is not None:  # the spec cannot be right for any member of the group
+        bad = {t.task_id: f"step count: {steps_why}" for t, _ in members}
+    else:
+        bad = {tid: why for tid, why in ((t.task_id, _shape_error(t, out[t.task_id])) for t, _ in members) if why}
     if not bad:
         return out
-    # one retry on MODEL_ALT for the members whose answer has the wrong shape; then unparsed
+    # one retry on MODEL_ALT for the members whose answer has the wrong shape (or the whole group when the step
+    # count is off); then unparsed
     first = next(t for t, _ in members if t.task_id in bad)
-    shape = expected_shape(first)
-    feedback = (f"With that specification the answer has the wrong kind: the question asks for "
-                f"{DESCRIBE[shape]}, but the result was {str(out[first.task_id].answer)[:60]!r}. Re-read the question "
-                + ("and count its relation words again: one hop per relation word, the last hop is the asked field. "
-                   "Reply " if task_type == "search" else "and reply ")
-                + "with only a corrected JSON object.")
+    if steps_why is not None:
+        feedback = (f"{steps_why}. Re-read the text, count its operation sentences again and reply with only a "
+                    "corrected JSON object.")
+    else:
+        shape = expected_shape(first)
+        feedback = (f"With that specification the answer has the wrong kind: the question asks for "
+                    f"{DESCRIBE[shape]}, but the result was {str(out[first.task_id].answer)[:60]!r}. Re-read the question "
+                    + ("and count its relation words again: one hop per relation word, the last hop is the asked field. "
+                       "Reply " if task_type == "search" else "and reply ")
+                    + "with only a corrected JSON object.")
     history = [{"role": "assistant", "content": _as_reply(task_type, spec)},
                {"role": "user", "content": feedback}]
     exhausted = None
@@ -321,12 +378,13 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
              else {})
     for task, _ in redo:
         res = again.get(task.task_id)
-        if res is not None and res.status == "solved" and _shape_error(task, res) is None:
+        retry_counts = steps_why is None or _step_mismatch(task_type, template, retry) is None
+        if res is not None and res.status == "solved" and _shape_error(task, res) is None and retry_counts:
             out[task.task_id] = res
         else:
             # not final, but the latest wrong-shape value stays a best guess for the scheduler's last pass
             guess = res.answer if res is not None and res.status == "solved" else out[task.task_id].answer
-            out[task.task_id] = SolveResult("unparsed", note=f"answer shape: {bad[task.task_id]}",
+            out[task.task_id] = SolveResult("unparsed", note=(bad[task.task_id] if steps_why is not None else f"answer shape: {bad[task.task_id]}"),
                                             extra={"best_guess": guess, "shape_mismatch": True})
     if exhausted is not None:
         exhausted.results = out

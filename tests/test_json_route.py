@@ -184,7 +184,7 @@ def test_product_operand_list_collapsed():
 
 def test_steps_spec_with_placeholders_inside_expression():
     def ship(start, n, d):
-        return (f"A warehouse starts with {start} boxes. It ships {n} boxes per day for {d} days. "
+        return (f"A warehouse starts with {start} boxes. It ships {n} boxes per day for {d} days. A quarter of the stock (rounded down) is moved to another site. "
                 "How many boxes does it have at the end? Work only inside the current directory.")
     tasks = [_math_task("m1", ship(1000, 7, 3)), _math_task("m2", ship(500, 20, 4))]
     template = templatize(tasks[0].instruction)[0]
@@ -381,7 +381,10 @@ REVIEW7 = ["Whom does {n} mentor?", "Who is {n} mentoring?", "Who is mentored by
 REVERSE = REVIEW7 + ["Name the mentee of {n}.", "Which person has {c} as her employer?",
            "Which person does {n} mentor?", "Who are {n}'s mentees?", "Tell me which person {n} mentors.",
            "Who works at {c}?", "Name an employee of {c}.", "List the employees of {c}.",
-           "Which person is employed by {c}?", "Whom does {c} employ?"]
+           "Which person is employed by {c}?", "Whom does {c} employ?",
+           "Who counts {n} as his mentor?", "Who counts {n} as their mentor?", "Which person counts {n} as her mentor?",
+           "Who has {n} as mentor?", "Who has {c} as an employer?", "Who has {c} as their employer?",
+           "Who regards {n} as a mentor?", "Who considers {n} as their mentor?"]
 FORWARD = ["Who is the mentor of {n}?", "Which individual is {n}'s mentor?", "Who does {n} have as a mentor?", "Find the person mentoring {n}.", "Which person mentors {n}?",
            "Who mentored {n}?", "Who has been mentoring {n}?", "{n} is mentored by which person?",
            "Which firm employs {n}?", "Which company does {n} work for?", "Who does {n} work for?",
@@ -484,3 +487,80 @@ def test_data_schema_quotes_placeholders_with_one_line_example():
     example = re.search(r"Full example on one line: (\{.*?\})\.", p).group(1)
     spec = json.loads(example)
     assert fill(spec, {"S1": "widget", "N2": "8", "N3": "2"})["month_from"] == 8
+
+
+# ------------------------------------------------------------------ math: step-count check (round 6, task 28)
+from harness.json_route import _count_operations  # noqa: E402
+
+MATH_0136 = ("Consider the following inventory changes for a warehouse starting with 43791 boxes. First, the stock grows "
+             "by 70 percent (rounded down). Then the stock is doubled by merging with a sister warehouse. A merger with "
+             "a sister warehouse then doubles the stock. Spoilage removes 36 percent of the stock, rounded down. Then the "
+             "stock is split equally into 5 warehouses and it keeps one share (rounded down). A leak ruins 211 boxes, "
+             "which are thrown away. It then sells half of the stock, with the number of boxes sold rounded down. Then 48 "
+             "percent of the stock (rounded down) spoils. How many boxes does it have at the end? Compute it with the bash "
+             "tool (python3 -c). Work only inside the current directory.")
+STEPS8 = ["x+x*{N2}//100", "x*2", "x*2", "x-x*{N3}//100", "x//{N4}", "x-{N5}", "x-x//2", "x-x*{N6}//100"]
+
+
+def _spec(steps):
+    return json.dumps({"start": "{N1}", "steps": steps})
+
+
+def test_count_operations_math_0136_is_eight():
+    template, _ = templatize(MATH_0136, "math")
+    assert _count_operations(template) == 8
+
+
+def test_count_operations_is_none_when_unsure():
+    assert _count_operations("A warehouse starts with {N1} boxes. Something odd happens. How many boxes?") is None
+    assert _count_operations("Hello there.") is None
+    assert _count_operations("A warehouse starts with {N1} boxes. How many boxes does it have?") is None
+
+
+def test_step_count_mismatch_retries_on_alt_and_accepts_matching_count():
+    from harness.config import MODEL_ALT
+    t = _math_task("m1", MATH_0136)
+    template, slots = templatize(t.instruction, "math")
+    client = FakeClient(_spec(STEPS8[:2] + STEPS8[3:]), _spec(STEPS8))
+    out = asyncio.run(solve_group("math", template, [(t, slots)], client))
+    assert out["m1"].status == "solved" and out["m1"].answer == "9856"
+    assert len(client.calls) == 2 and client.calls[1]["model"] == MODEL_ALT
+    fb = client.calls[1]["messages"][-1]["content"]
+    assert "has 8 operations" in fb and "7 steps" in fb and "separate step even if it repeats" in fb
+
+
+def test_step_count_still_wrong_after_retry_is_unparsed_with_weak_guess():
+    t = _math_task("m1", MATH_0136)
+    template, slots = templatize(t.instruction, "math")
+    short = _spec(STEPS8[:2] + STEPS8[3:])
+    client = FakeClient(short, short)
+    out = asyncio.run(solve_group("math", template, [(t, slots)], client))
+    r = out["m1"]
+    assert r.status == "unparsed" and "step count" in r.note
+    assert r.extra["best_guess"] and r.extra["shape_mismatch"] is True
+
+
+def test_step_count_match_makes_a_single_call():
+    t = _math_task("m1", MATH_0136)
+    template, slots = templatize(t.instruction, "math")
+    client = FakeClient(_spec(STEPS8))
+    out = asyncio.run(solve_group("math", template, [(t, slots)], client))
+    assert out["m1"].answer == "9856" and len(client.calls) == 1
+
+
+def test_step_count_unknown_means_no_check():
+    t = _math_task("m1", _theft(1000, 7))
+    template, slots = templatize(t.instruction, "math")
+    client = FakeClient(json.dumps({"start": "{N1}", "steps": ["x-{N2}"]}))
+    out = asyncio.run(solve_group("math", template, [(t, slots)], client))
+    assert out["m1"].answer == "993" and len(client.calls) == 1
+
+
+def test_step_count_budget_exhausted_keeps_results():
+    t = _math_task("m1", MATH_0136)
+    template, slots = templatize(t.instruction, "math")
+    client = FakeClient(_spec(STEPS8[:2] + STEPS8[3:]), BudgetExhausted("x"))
+    with pytest.raises(BudgetExhausted) as ei:
+        asyncio.run(solve_group("math", template, [(t, slots)], client))
+    assert ei.value.results["m1"].status == "unparsed"
+    assert ei.value.results["m1"].extra["shape_mismatch"] is True

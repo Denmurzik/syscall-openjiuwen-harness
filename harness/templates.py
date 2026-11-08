@@ -5,7 +5,7 @@ from harness.solvers.common import strip_boilerplate
 from harness.tasks import Task
 
 _STOP_WORDS = {"A", "An", "The", "In", "How", "What", "Which", "Who", "Where", "When", "Then", "It", "Use",
-               "Compute"}
+               "Compute", "Report", "Give", "Answer", "Write", "State", "Provide", "Return", "Find", "List", "Name"}
 _QUOTED = re.compile(r"""(?<![\w])'([^'\n]+)'(?!\w)|"([^"\n]+)\"""")
 _ENTITY = re.compile(r"\b[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}\b")
 # search only (person names): a name word may be hyphenated (Nikolai-Felix, Petrov-Sato) and a middle initial
