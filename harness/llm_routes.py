@@ -15,7 +15,8 @@ from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.shape import DESCRIBE, expected_shape, mismatch
-from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic writer reused
+from harness.solvers.coding_solver import _write_mylib as write_mylib
+from harness.solvers.coding_solver import provable_contradiction  # atomic writer reused
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
 
@@ -317,6 +318,11 @@ def _patch_messages(mylib: str, tests: str, output: str) -> list[dict]:
     return [{"role": "system", "content": PATCH_SYSTEM}, {"role": "user", "content": user}]
 
 
+def _sig(out: str) -> str:
+    """Test output without temp paths and timings, for comparing two runs."""
+    return re.sub(r"llm_fix_\w+|\d+\.\d+s|0x[0-9a-f]+", "", out)
+
+
 def _budget_is_free(client) -> bool:
     """More than half of the budget left: the reasoning step is affordable for any reward."""
     ledger = getattr(client, "ledger", None)
@@ -338,12 +344,16 @@ async def fix_coding(task: Task, client) -> SolveResult:
     base_report = await asyncio.to_thread(_run_candidate, ws, base)
     if base_report.ok:
         return SolveResult("solved", answer="DONE", note="tests already pass")
+    if provable_contradiction(tests, base):  # visible tests cannot all pass: spend nothing
+        return SolveResult("infeasible", note="tests contradict each other")
     output = base_report.output
     attempts = [(MODEL_FAST, 400, {}), (MODEL_ALT, 600, {})]
-    if task.reward >= 3 or _budget_is_free(client):
-        attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))
+    reason_allowed = task.reward >= 3 or _budget_is_free(client)
     note = "no attempt made"
-    for model, max_tokens, extra in attempts:
+    alt_progress = False
+    for model, max_tokens, extra in attempts + [(MODEL_REASON, 3000, {"reasoning_effort": "low"})]:
+        if model == MODEL_REASON and not (reason_allowed and alt_progress):
+            break  # the expensive tier only follows a partial fix by ALT
         try:
             r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
         except LLMUnavailable as e:
@@ -358,7 +368,12 @@ async def fix_coding(task: Task, client) -> SolveResult:
             shutil.rmtree(ws / "__pycache__", ignore_errors=True)
             return SolveResult("solved", answer="DONE", note=f"patched by {model}")
         note = f"{model}: tests still failing"
+        moved = _sig(report.output) != _sig(output)  # a stuck ladder repeats the same failure
         output = report.output
-        if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
+        clean = not any(f.startswith("<") for f in report.failed)
+        if len(report.failed) < len(base_report.failed) and clean:
             base, base_report = fixed, report  # keep partial progress for the next attempt
+            alt_progress = model == MODEL_ALT
+        elif model == MODEL_ALT and moved and clean:
+            alt_progress = True
     return SolveResult("unparsed", note=note)

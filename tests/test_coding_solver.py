@@ -341,3 +341,29 @@ def test_tie_keeps_strict_comparison_first_occurrence(tmp_path):
     src, it = _chosen_src(res)
     assert "len(w) > len(best)" in src and it["chosen"] == 0
     assert "len(w) > len(best)" in (t.workspace / "mylib.py").read_text(encoding="utf-8")
+
+
+def test_contradiction_ends_before_any_search(tmp_path, monkeypatch):
+    from harness.solvers import coding_solver as cs
+
+    def boom(*a, **k):
+        raise AssertionError("repair search must not start")
+    monkeypatch.setattr(cs, "_repair_round", boom)
+    lib = "def f(x):\n    return x\n\ndef g(x):\n    return x + 1\n"
+    tests = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
+             "    def test_f(self):\n        self.assertEqual(m.f(7), 7)\n        self.assertEqual(m.f(7), 8)\n"
+             "    def test_g(self):\n        self.assertEqual(m.g(1), 5)\n")
+    r = solve(_custom(tmp_path, lib, tests))
+    assert r.status == "infeasible" and r.answer is None
+
+
+def test_stateful_callee_is_not_a_proof():
+    from harness.solvers.coding_solver import provable_contradiction
+    tests = ("import mylib as m\nclass T:\n    def test_f(self):\n"
+             "        self.assertEqual(m.f(1), 1)\n        self.assertEqual(m.f(1), 2)\n")
+    assert provable_contradiction(tests, "def f(x):\n    return x\n")
+    assert not provable_contradiction(tests, "n = 0\ndef f(x):\n    global n\n    n += 1\n    return n\n")
+    assert not provable_contradiction(tests, "c = []\ndef f(x):\n    c.append(x)\n    return len(c)\n")
+    assert not provable_contradiction(tests, "import random\ndef f(x):\n    return random.random()\n")
+    assert not provable_contradiction(tests, "class f:\n    def __init__(self, x): pass\n")
+    assert not provable_contradiction(tests, "def f(x):\n    return g(x)\ndef g(x):\n    return id(x)\n")

@@ -290,16 +290,17 @@ def _mylib_names(tree: ast.AST) -> tuple[set[str], set[str]]:
     return aliases, names
 
 
-def contradictory_tests(test_src: str) -> bool:
-    """True if one test method asserts the same mylib call (literal arguments) equal to two
-    different literals, which no implementation can satisfy. Deliberately narrow."""
+def _contradicted_callees(test_src: str) -> set[str]:
+    """Names of mylib functions that one test method asserts equal to two different literals
+    for the same literal arguments. Deliberately narrow."""
     try:
         tree = ast.parse(test_src)
     except SyntaxError:
-        return False
+        return set()
     aliases, names = _mylib_names(tree)
     if not aliases and not names:
-        return False
+        return set()
+    out: set[str] = set()
 
     def is_mylib_call(c: ast.expr) -> bool:
         if not isinstance(c, ast.Call) or not (c.args or c.keywords):  # no-arg calls may be stateful
@@ -335,8 +336,61 @@ def contradictory_tests(test_src: str) -> bool:
                     continue
                 prev = seen[key]
                 if prev != expected:  # assertEqual semantics: 1 == 1.0 == True
-                    return True
-    return False
+                    f = call.func
+                    out.add(f.attr if isinstance(f, ast.Attribute) else f.id)
+    return out
+
+
+def contradictory_tests(test_src: str) -> bool:
+    """True if one test method asserts the same mylib call (literal arguments) equal to two
+    different literals, which no implementation can satisfy. Deliberately narrow."""
+    return bool(_contradicted_callees(test_src))
+
+
+_IMPURE = {"random", "time", "uuid", "datetime", "os", "sys", "secrets", "input", "open", "id",
+           "globals", "locals", "vars", "setattr", "getattr", "eval", "exec", "itertools",
+           "functools", "threading", "subprocess", "socket", "hash"}
+
+
+def _is_pure(tree: ast.Module, name: str) -> bool:
+    """A top-level function with no hidden state: same arguments always give the same result.
+    Conservative: any global/nonlocal, decorator, module-level variable or impure name -> False."""
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    state = {t.id for n in tree.body if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+             for t in ast.walk(n) if isinstance(t, ast.Name)}
+    todo, seen = [name], set()
+    while todo:
+        cur = todo.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        fn = funcs.get(cur)
+        if fn is None or fn.decorator_list:
+            return False
+        for node in ast.walk(fn):
+            if isinstance(node, (ast.Global, ast.Nonlocal, ast.Await, ast.Yield, ast.YieldFrom)):
+                return False
+            if isinstance(node, ast.Name):
+                if node.id in _IMPURE or node.id in state:
+                    return False
+                if node.id in funcs:
+                    todo.append(node.id)
+            elif isinstance(node, ast.Attribute) and node.attr in _IMPURE:
+                return False
+    return True
+
+
+def provable_contradiction(test_src: str, mylib_src: str) -> bool:
+    """Strict proof for an early `infeasible`: the visible tests ask one mylib function for two
+    different results on identical literal arguments AND that function is stateless."""
+    callees = _contradicted_callees(test_src)
+    if not callees:
+        return False
+    try:
+        tree = ast.parse(mylib_src)
+    except SyntaxError:
+        return False
+    return all(_is_pure(tree, c) for c in callees)
 
 
 def _norm(seg: str) -> str:
@@ -573,6 +627,8 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             return SolveResult("solved", answer="DONE", note="tests already pass")
         if any(f.startswith("<") for f in report.failed):
             return SolveResult("unparsed", note=f"cannot localize failures: {report.failed}")
+        if provable_contradiction(test_src, original):  # no search, no model calls
+            return SolveResult("infeasible", note="tests contradict each other")
         initially_failing = list(report.failed)
         cur = original
         try:
