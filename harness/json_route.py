@@ -342,7 +342,9 @@ def _execute(task: Task, spec: object) -> SolveResult:
 
 
 async def solve_group(task_type: str, template: str, members: list[tuple[Task, dict[str, str]]],
-                      client: LLMClient) -> dict[str, SolveResult]:
+                      client: LLMClient, spec: dict | None = None) -> dict[str, SolveResult]:
+    """`spec` is a spec already obtained for this template (a batched reply): the first request is skipped, every
+    check after it is the same."""
     def all_members(result: SolveResult) -> dict[str, SolveResult]:
         return {task.task_id: result for task, _ in members}
 
@@ -351,12 +353,13 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
     reverse = _reverse_relation(template) if task_type == "search" else None
     if reverse is not None:
         return all_members(SolveResult("unparsed", note=f"reverse relation: {reverse!r}"))
-    try:
-        spec = await request_spec(task_type, template, client)
-    except BudgetExhausted:
-        raise
-    except LLMUnavailable as e:
-        return all_members(SolveResult("unparsed", note=f"llm unavailable: {e}"))
+    if spec is None:
+        try:
+            spec = await request_spec(task_type, template, client)
+        except BudgetExhausted:
+            raise
+        except LLMUnavailable as e:
+            return all_members(SolveResult("unparsed", note=f"llm unavailable: {e}"))
     if spec is None:
         return all_members(SolveResult("unparsed", note="model returned no valid JSON spec"))
     if spec.get("impossible") is True:
@@ -437,3 +440,66 @@ def _execute_all(members: list[tuple[Task, dict[str, str]]], spec: dict) -> dict
 
 def _task_value(entity: object, slots: dict[str, str], instruction: str) -> bool:
     return isinstance(entity, str) and entity in slots.values() and entity in (instruction or "")
+
+
+# ------------------------------------------------------------------ batching of small groups (round 6, task 32)
+BATCH_MAX = 4
+BATCH_MAX_MEMBERS = 2
+
+_BATCH_NOTE = (
+    "\n\nThe user message holds several numbered task texts, each with its own placeholders ({N1}, {E1}, ... "
+    "restart at 1 in every text). Reply with one JSON object {\"specs\": [<spec 1>, <spec 2>, ...]}: one "
+    "specification per text, in the same order, each exactly as described above (or {\"impossible\": true} for that "
+    "text). Write it compactly on one line. Output only that JSON object."
+)
+
+
+def batchable(task_type: str, template: str, members: list) -> bool:
+    """Small groups of a type with a spec prompt; reverse-relation search texts never get a call at all."""
+    if len(members) > BATCH_MAX_MEMBERS or _system_prompt(task_type) is None:
+        return False
+    return not (task_type == "search" and _reverse_relation(template) is not None)
+
+
+async def _request_batch(task_type: str, templates: list[str], client: LLMClient) -> list[dict | None] | None:
+    """One call for several templates; element i is the spec for template i or None when that element is
+    broken. None for the whole reply when it cannot be read at all."""
+    system = _system_prompt(task_type) + _BATCH_NOTE
+    user = "\n".join(f"{i}. {t}" for i, t in enumerate(templates, 1))
+    result = await client.chat(MODEL, [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                               MAX_TOKENS * len(templates), response_format={"type": "json_object"})
+    value, _ = _parse_json(result.text)
+    specs = None if value is None else value.get("specs")
+    if not isinstance(specs, list) or len(specs) != len(templates):
+        return None
+    out: list[dict | None] = []
+    for spec in specs:
+        if isinstance(spec, dict) and task_type == "search":
+            spec, _ = _from_hops(spec)
+        out.append(spec if isinstance(spec, dict) else None)
+    return out
+
+
+async def solve_batch(task_type: str, items: list[tuple[str, list[tuple[Task, dict[str, str]]]]],
+                      client: LLMClient) -> dict[str, SolveResult]:
+    """Groups (template, members) of one task type through one call. A group whose element is broken (or a reply
+    that cannot be read) is solved by solve_group with its own call, as without batching. Every returned spec goes
+    through the same checks (impossible, execution, shape, step count) as a single-call spec."""
+    if len(items) == 1:
+        return await solve_group(task_type, items[0][0], items[0][1], client)
+    out: dict[str, SolveResult] = {}
+    try:
+        specs = await _request_batch(task_type, [t for t, _ in items], client)
+    except BudgetExhausted:
+        raise
+    except LLMUnavailable:
+        specs = None
+    specs = specs or [None] * len(items)
+    for (template, members), spec in zip(items, specs):
+        try:
+            out.update(await solve_group(task_type, template, members, client, spec=spec))
+        except BudgetExhausted as e:  # keep what the earlier groups (and this one's retry) produced
+            out.update(getattr(e, "results", None) or {})
+            e.results = out
+            raise
+    return out

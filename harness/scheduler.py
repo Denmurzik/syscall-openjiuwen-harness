@@ -23,6 +23,9 @@ JSON_TYPES = ("math", "data_analysis", "search")
 
 # resolved lazily (importing them imports openjiuwen); tests may pre-set them
 solve_group = None
+solve_batch = None
+json_route_batchable = None
+json_route_batch_max = None
 solve_with_program = None
 fix_coding = None
 arbitrate = None
@@ -173,10 +176,16 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
 
 
 def _load_phase2() -> None:
-    global solve_group, solve_with_program, fix_coding, arbitrate, BudgetExhausted
+    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, fix_coding, arbitrate, BudgetExhausted
     from harness import arbitrate as arbitrate_mod, json_route, llm, llm_routes
     if solve_group is None:
         solve_group = json_route.solve_group
+    if solve_batch is None:
+        solve_batch = json_route.solve_batch
+    if json_route_batchable is None:
+        json_route_batchable = json_route.batchable
+    if json_route_batch_max is None:
+        json_route_batch_max = lambda: json_route.BATCH_MAX  # noqa: E731
     if solve_with_program is None:
         solve_with_program = llm_routes.solve_with_program
     if fix_coding is None:
@@ -346,31 +355,51 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     except Exception:
         log.exception("grouping failed")
         groups = {}
+    def settle_group(members, results, el):
+        for task, _ in members:
+            res = results.get(task.task_id)
+            # a non-final result with a best guess is settled too: it stays unparsed (2b still runs)
+            # and its guess is written by the last pass if nothing better comes
+            if res is not None and (_final_2a(res) or (res.extra or {}).get("best_guess") is not None):
+                settle(2, task, res, el)
+
+    def make_unit(call, members, est, name):
+        """`call()` returns {task_id: result}; its model calls and cost go to the first settled member."""
+        async def go():
+            start = time.monotonic()
+            exhausted = None
+            try:
+                results = await call()
+            except BudgetExhausted as e:  # may carry the answers computed before it (shape retry)
+                results, exhausted = getattr(e, "results", None) or {}, e
+            settle_group(members, results, time.monotonic() - start)
+            if exhausted is not None:
+                raise exhausted
+        reward = sum(t.reward for t, _ in members)
+        return {"prio": reward / est, "estimate": est, "run": go, "name": name}
+
+    singles, small = [], {}
     for (ttype, template), members in groups.items():
+        if config.batch_2a() and json_route_batchable(ttype, template, members):
+            small.setdefault(ttype, []).append((template, members))
+        else:
+            singles.append((ttype, template, members))
+    for ttype, items in small.items():
+        for i in range(0, len(items), json_route_batch_max()):
+            chunk = items[i:i + json_route_batch_max()]
+            if len(chunk) == 1:
+                singles.append((ttype, chunk[0][0], chunk[0][1]))
+                continue
+            allm = [m for _, ms in chunk for m in ms]
+            est = sum(estimate_json_tokens(t) for t, _ in chunk)  # the shared system prompt makes it an upper bound
+            units.append(make_unit(lambda ttype=ttype, chunk=chunk: solve_batch(ttype, chunk, client), allm, est,
+                                   f"batch:{ttype}:{len(chunk)}"))
+    for ttype, template, members in singles:
         # expected cost of one spec call; the rare shape retry on MODEL_ALT (up to 2 more) is left to the reserve
         est = estimate_json_tokens(template)
-
-        def make(ttype=ttype, template=template, members=members):
-            async def go():
-                start = time.monotonic()
-                exhausted = None
-                try:
-                    results = await solve_group(ttype, template, members, client)
-                except BudgetExhausted as e:  # may carry the answers computed before it (shape retry)
-                    results, exhausted = getattr(e, "results", None) or {}, e
-                el = time.monotonic() - start
-                for task, _ in members:
-                    res = results.get(task.task_id)
-                    # a non-final result with a best guess is settled too: it stays unparsed (2b still runs)
-                    # and its guess is written by the last pass if nothing better comes
-                    if res is not None and (_final_2a(res) or (res.extra or {}).get("best_guess") is not None):
-                        settle(2, task, res, el)
-                if exhausted is not None:
-                    raise exhausted
-            return go
-        reward = sum(t.reward for t, _ in members)
-        units.append({"prio": reward / est, "estimate": est, "run": make(),
-                      "name": f"group:{ttype}:{len(members)}"})
+        units.append(make_unit(lambda ttype=ttype, template=template, members=members:
+                               solve_group(ttype, template, members, client),
+                               members, est, f"group:{ttype}:{len(members)}"))
     units.sort(key=lambda u: -u["prio"])
     await _drive(units, t0, deadline_s, ledger, state)
 

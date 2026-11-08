@@ -53,6 +53,25 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
         return default
 
 
+BATCH_2A = True  # default of HARNESS_BATCH_2A (round 6, task 32): measured, no accuracy loss, see the task report
+
+
+def batch_2a() -> bool:
+    """Several small 2a groups of one type in one call. Read at call time: HARNESS_BATCH_2A=1/0."""
+    raw = os.environ.get("HARNESS_BATCH_2A")
+    if raw is None or raw.strip() == "":
+        return BATCH_2A
+    v = raw.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    if "HARNESS_BATCH_2A" not in _warned:
+        _warned.add("HARNESS_BATCH_2A")
+        _log.warning("invalid HARNESS_BATCH_2A=%r, using default %r", raw, BATCH_2A)
+    return BATCH_2A
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 
