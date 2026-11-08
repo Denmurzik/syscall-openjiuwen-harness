@@ -38,6 +38,14 @@ CASES = {
     "until-month": (_d("How many units were sold until month 5?"), ref("units", lo=1, hi=5)),
     "from-onwards": (_d("How many units were sold from month 5 onwards?"), ref("units", lo=5, hi=12)),
     "months-onwards": (_d("How many units were sold in months 5 onwards?"), ref("units", lo=5, hi=12)),
+    "on-product-1": (_d("What was the revenue in month 2 on product gadget?"), U),
+    "on-product-2": (_d("How many units were sold in month 4 on gizmo?"), U),
+    "on-product-3": (_d("Which region sold the most units in month 2 on gadget?"), U),
+    "on-product-4": (_d("What is the average number of units in month 3 on widget?"), U),
+    "on-product-5": (_d("How many orders were placed in month 3 on widget?"), U),
+    "from-month-on": (_d("How many units were sold from month 5 on?"), U),
+    "ordinal-13": (_d("How many units were sold in the 13th month?"), U),
+    "range-13": (_d("How many units were sold in months 3 through 13?"), U),
     "by-month": (_d("How many units were sold by month 5?"), U),
     "from-month": (_d("How many units were sold from month 5?"), U),
     "after-month": (_d("How many units were sold after month 5?"), U),
@@ -86,15 +94,13 @@ CASES = {
     "fifth-article": (_m(["It sells a fifth of the boxes, rounding the number sold down."], 1001), "801"),
     "tenth-one": (_m(["Then it sells one tenth of the boxes, rounding the number sold down."], 1001), "901"),
     "half-moved": (_m(["Half of the stock (rounded down) is moved to another site."], 1001), "501"),
-    "comma-start": (_m(["It ships 30 boxes per day for 4 days."], 1752)[0:1] + ("A warehouse starts with 1,752 boxes. "
-                    "It ships 30 boxes per day for 4 days.",), None),
+    "comma-start": (("math", "A warehouse starts with 1,752 boxes. It ships 30 boxes per day for 4 days."), "1632"),
     "singular-box": (_m(["It receives 1 delivery of 1 box each."], 1), "2"),
     "singular-loss": (_m(["It loses 1 box to theft."], 5), "4"),
     "singular-ship": (_m(["It ships 1 box per day for 1 day."], 5), "4"),
     "comma-delivery": (_m(["It receives 2 deliveries of 1,500 boxes each."], 10), "3010"),
     "comma-bad": (_m(["It receives 2 deliveries of 1,50 boxes each."], 10), U),
 }
-CASES["comma-start"] = (("math", "A warehouse starts with 1,752 boxes. It ships 30 boxes per day for 4 days."), "1632")
 
 
 @pytest.mark.parametrize("name", list(CASES))
@@ -104,3 +110,17 @@ def test_exact(name, tmp_path):
         text += " " + MQ
     assert _run(kind, text, tmp_path) == want
 
+
+
+@pytest.mark.parametrize("q", ["How many units were sold", "What is the total revenue", "How many orders were placed",
+                               "Which product sold the most units"])
+def test_strict_parse_without_final_punctuation(q):
+    from harness.solvers import data_solver
+    spec = data_solver.parse(D_HEAD + q)
+    assert isinstance(spec, dict), spec
+
+
+@pytest.mark.parametrize("q", ["How many units were sold!?", "How many units were solds", "How many units were sold?x"])
+def test_strict_parse_rejects_garbage_tail(q):
+    from harness.solvers import data_solver
+    assert not isinstance(data_solver.parse(D_HEAD + q), dict)

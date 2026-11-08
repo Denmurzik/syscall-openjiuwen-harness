@@ -32,19 +32,19 @@ _MONTH = re.compile(r"\s+in month (\d+)(?!\d)", _FLAGS)
 
 _METRICS = [
     ("sum_units", re.compile(
-        r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total (?:number of )?units(?: sold)?)\[?.]?", _FLAGS)),
+        r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total (?:number of )?units(?: sold)?)[?.!]?", _FLAGS)),
     ("sum_revenue", re.compile(
-        r"what (?:is|was) (?:the )?(?:total )?revenue(?: \(units multiplied by price\))?\[?.]?", _FLAGS)),
-    ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)\[?.]?", _FLAGS)),
-    ("avg_price", re.compile(r"what (?:is|was) the average price\[?.]?", _FLAGS)),
+        r"what (?:is|was) (?:the )?(?:total )?revenue(?: \(units multiplied by price\))?[?.!]?", _FLAGS)),
+    ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)[?.!]?", _FLAGS)),
+    ("avg_price", re.compile(r"what (?:is|was) the average price[?.!]?", _FLAGS)),
     ("avg_units", re.compile(
-        r"what (?:is|was) the average (?:number of )?units(?: per order| in an order)?\[?.]?", _FLAGS)),
+        r"what (?:is|was) the average (?:number of )?units(?: per order| in an order)?[?.!]?", _FLAGS)),
     ("max_units", re.compile(
         r"what (?:is|was) the (?:largest|biggest|highest|maximum) (?:number of )?units?"
-        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\[?.]?", _FLAGS)),
+        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order[?.!]?", _FLAGS)),
     ("min_units", re.compile(
         r"what (?:is|was) the (?:smallest|lowest|minimum) (?:number of )?units?"
-        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\[?.]?", _FLAGS)),
+        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order[?.!]?", _FLAGS)),
 ]
 # ", rounded to N decimal places" (only for averages and revenue); N=2 is the default.
 _ROUND = re.compile(
@@ -62,7 +62,7 @@ _TOP_MEASURE = {"units": "sum_units", "revenue": "sum_revenue", "orders": "count
                 "number of orders": "count_orders"}
 _TOP_Q = re.compile(
     r"which (product|region) (?:sold the most (units)|(?:had|has|generated|made|recorded) the "
-    r"(?:most|highest|greatest) (?:total )?(units|revenue|orders|number of orders)(?: sold)?)(?: overall)?\[?.]?",
+    r"(?:most|highest|greatest) (?:total )?(units|revenue|orders|number of orders)(?: sold)?)(?: overall)?[?.!]?",
     _FLAGS)
 _METRIC_NAMES = {name for name, _ in _METRICS} | _TOP_NAMES
 _REQUIRED = {
@@ -200,7 +200,7 @@ _LOOSE_STOP = {
 _LOOSE_MONTHS = re.compile(
     r"(?:\b(between|from|through|thru|until|till|up to|by)\s+)?\bmonths?\s+(\d+)"
     r"(?:\s*(?:through|to|-)\s*(?:months?\s+)?(\d+)|\s+and\s+(?:months?\s+)?(\d+))?(?!\d)"
-    r"(?:\s+(onwards?|on)\b)?", _FLAGS)
+    r"(?:\s+(onwards?)\b)?", _FLAGS)
 _MONTH_NAMES = {n: i for i, n in enumerate(
     "january february march april may june july august september october november december".split(), 1)}
 _MONTH_NAMES["sept"] = 9
@@ -291,6 +291,9 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
         else:
             return _unparsed("loose: month bound on one side only")
         text = text[:mm.start()] + " " + text[mm.end():]
+
+    if month_from is not None and not (1 <= month_from <= 12 and 1 <= month_to <= 12):
+        return _unparsed("loose: month outside 1..12")
 
     words = _WORD.findall(text)
     found = {c: set() for c in _TOP_COLUMNS}
