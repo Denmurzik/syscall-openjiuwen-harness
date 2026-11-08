@@ -58,6 +58,7 @@ _NUM = re.compile(r"(?:(?<![\w])-)?\d+(?:\.\d+)?")
 
 _WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
 _DECIMALS = re.compile(r"\bround(?:ed|ing)?\b[^.?!]*?\bto\s+(?:(?P<n>\d+|one|two|three|four|five|six)\s+(?:decimal(?:\s+places?|s)?|d\.?p\.?))\b", re.I)
+_TAIL_DECIMALS = re.compile(r"(?<!given )\bto\s+(?P<n>\d+|one|two|three|four|five|six)\s+decimal(?:\s+places?|s)?\s*[?.!]?$", re.I)
 _PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 

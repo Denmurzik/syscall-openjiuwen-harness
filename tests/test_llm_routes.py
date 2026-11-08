@@ -307,3 +307,10 @@ def test_decimals_only_when_rounding_the_answer():
     assert normalize_answer("12", "exact_str", "The table converts to 2 decimals. How many rows?") == "12"
     assert normalize_answer("12", "exact_str", "How many items cost more than 5? Round to 2 decimal places.") == "12.00"
     assert normalize_answer("30.9", "exact_str", "What is the average price, rounded to 2 decimal places?" + boiler) == "30.90"
+
+
+def test_decimals_tail_form_without_round():
+    q = "Compute the mean price restricted to region 'east', to two decimals?"
+    assert normalize_answer("30.9", "exact_str", q) == "30.90"
+    assert normalize_answer("12", "exact_str", "Prices are given to 2 decimal places. How many items cost more than 5?") == "12"
+    assert normalize_answer("12", "exact_str", "How many items, to 2 decimals in the table, are there?") == "12"
