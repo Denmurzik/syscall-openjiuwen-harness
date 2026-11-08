@@ -104,6 +104,17 @@ def tally(rows: list[dict]) -> dict:
     return out
 
 
+def unparsed_samples(rows: list[dict], per_family: int = 3) -> list[dict]:
+    """Up to `per_family` unparsed tasks of every template family: the phrasings the parsers miss."""
+    seen: Counter = Counter()
+    out = []
+    for r in rows:
+        if r["outcome"] == "unparsed" and seen[(r["type"], r["family"])] < per_family:
+            seen[(r["type"], r["family"])] += 1
+            out.append({k: r[k] for k in ("task_id", "type", "difficulty", "family", "note", "instruction")})
+    return out
+
+
 def write_reports(out: Path, meta: dict, rows: list[dict]) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     summary = tally(rows)
@@ -111,6 +122,7 @@ def write_reports(out: Path, meta: dict, rows: list[dict]) -> dict:
     (out / "fuzz.json").write_text(json.dumps({
         "meta": meta, "summary": summary,
         "wrong": [r for r in rows if r["outcome"] == "wrong"],
+        "unparsed_samples": unparsed_samples(rows),
         "infeasible_answered": [r for r in rows if r["outcome"] == "infeasible_answered"]},
         ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     md = ["# Phase-1 fuzz", "", json.dumps(meta), ""]
@@ -135,6 +147,9 @@ def write_reports(out: Path, meta: dict, rows: list[dict]) -> dict:
         md.append(f"- `{r['task_id']}` [{r['type']}/{r['difficulty']}] {r['outcome']} expected={r['expected']!r} "
                   f"got={r['got']!r} note={r['note']!r}")
         md.append(f"  - {r['instruction'][:600]}")
+    md += ["", "## Unparsed samples (up to 3 per family)", ""]
+    for r in unparsed_samples(rows):
+        md.append(f"- [{r['type']}/{r['difficulty']}] {r['instruction'][:420]!r} -- {r['note'][:100]}")
     (out / "fuzz.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return summary
 
