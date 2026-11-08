@@ -334,7 +334,8 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     for task in [t for t in left if (tentative.get(t.task_id) is not None
                                      and (tentative[t.task_id].extra or {}).get("ambiguous"))]:
         extra = tentative[task.task_id].extra
-        est = len(str(extra.get("ambiguous"))) // 30 + 10
+        # one call per arbitration model (each may retry once without the regex)
+        est = (len(str(extra.get("ambiguous"))) // 30 + 10) * len(config.ARBITRATE_MODELS)
 
         def make(task=task, extra=extra):
             async def go():

@@ -102,9 +102,11 @@ async def _ask(client, model: str, items: list[dict], asserts: list[str]) -> lis
     return parse_choice(r.text, items)
 
 
-async def _agreed(client, items: list[dict], asserts: list[str]) -> list[int]:
-    """Per function: the option every model named, else the phase-1 choice. LLMUnavailable only
-    when no model was reachable; BudgetExhausted (and anything unexpected) propagates."""
+async def _agreed(client, items: list[dict], asserts: list[str]) -> tuple[list[int], str]:
+    """Per function: the option every model named, else the phase-1 choice; plus why the
+    choice stays where it is ("one model unavailable", "unusable reply", "models disagree",
+    "models confirmed"). LLMUnavailable only when no model was reachable; BudgetExhausted
+    (and anything unexpected) propagates."""
     replies = await asyncio.gather(*(_ask(client, m, items, asserts) for m in ARBITRATE_MODELS),
                                    return_exceptions=True)
     for r in replies:
@@ -113,13 +115,18 @@ async def _agreed(client, items: list[dict], asserts: list[str]) -> list[int]:
     if all(isinstance(r, LLMUnavailable) for r in replies):
         raise replies[0]
     picks = [it["chosen"] for it in items]
-    if any(r is None or isinstance(r, BaseException) for r in replies):
-        return picks
+    if any(isinstance(r, BaseException) for r in replies):
+        return picks, "one model unavailable"
+    if any(r is None for r in replies):
+        return picks, "unusable reply"
+    agreed = True
     for i, it in enumerate(items):
         named = {r[i] for r in replies}
         if len(named) == 1:
             picks[i] = named.pop()
-    return picks
+        else:
+            agreed = False
+    return picks, "models confirmed" if agreed else "models disagree"
 
 
 def _apply(src: str, items: list[dict], picks: list[int]) -> str | None:
@@ -141,11 +148,11 @@ async def arbitrate(task: Task, extra: dict, client) -> SolveResult:
     if not items:
         return SolveResult("solved", answer="DONE", note="nothing to arbitrate")
     try:
-        picks = await _agreed(client, items, list(extra.get("visible_asserts") or []))
+        picks, why = await _agreed(client, items, list(extra.get("visible_asserts") or []))
     except LLMUnavailable as e:
         return SolveResult("unparsed", note=f"llm unavailable: {e}")
     if all(p == it["chosen"] for p, it in zip(picks, items)):
-        return SolveResult("solved", answer="DONE", note="arbitration kept the choice")
+        return SolveResult("solved", answer="DONE", note=f"arbitration kept the choice ({why})")
     ws = Path(task.workspace)
     mylib = ws / "mylib.py"
     try:

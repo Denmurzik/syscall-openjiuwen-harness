@@ -39,6 +39,8 @@ def _solved(tmp_path):
     task = Task("t", "coding", "fix", 2.0, "unittest", d, d / "workspace")
     res = solve(task)
     assert res.tentative and res.extra["ambiguous"]
+    it = res.extra["ambiguous"][0]
+    assert "x % 2 == 0" in it["candidates"][it["chosen"]]   # phase 1 itself picks the meaning of the name
     return task, res.extra
 
 
@@ -78,6 +80,7 @@ def test_picks_current_choice_leaves_file_untouched(tmp_path):
     before = (task.workspace / "mylib.py").read_bytes()
     res = run(arbitrate(task, extra, Fake([str(extra["ambiguous"][0]["chosen"] + 1)])))
     assert res.status == "solved" and not res.tentative
+    assert res.note == "arbitration kept the choice (models confirmed)"
     assert (task.workspace / "mylib.py").read_bytes() == before
 
 
@@ -188,7 +191,7 @@ def test_models_disagree_keeps_phase1_choice(tmp_path):
     keep = extra["ambiguous"][0]["chosen"] + 1
     for fast, alt in ((want, keep), (keep, want)):
         res = run(arbitrate(task, extra, Fake({MODEL_FAST: [str(fast)], MODEL_ALT: [str(alt)]})))
-        assert res.status == "solved" and "kept" in res.note
+        assert res.status == "solved" and res.note == "arbitration kept the choice (models disagree)"
         assert (task.workspace / "mylib.py").read_bytes() == before
 
 
@@ -201,7 +204,7 @@ def test_models_naming_two_different_new_options_keep_phase1_choice(tmp_path):
         others.append(len(it["candidates"]))
     before = (task.workspace / "mylib.py").read_bytes()
     res = run(arbitrate(task, extra, Fake({MODEL_FAST: [str(others[0])], MODEL_ALT: [str(others[1])]})))
-    assert res.status == "solved" and "kept" in res.note
+    assert res.status == "solved" and res.note == "arbitration kept the choice (models disagree)"
     assert (task.workspace / "mylib.py").read_bytes() == before
 
 
@@ -212,7 +215,8 @@ def test_one_model_unavailable_keeps_phase1_choice(tmp_path):
     for replies in ({MODEL_FAST: [str(want)], MODEL_ALT: [LLMUnavailable("HTTP 404")]},
                     {MODEL_FAST: [LLMUnavailable("HTTP 404")], MODEL_ALT: [str(want)]}):
         res = run(arbitrate(task, extra, Fake(replies)))
-        assert res.status == "solved" and res.answer == "DONE" and "kept" in res.note
+        assert res.status == "solved" and res.answer == "DONE"
+        assert res.note == "arbitration kept the choice (one model unavailable)"
         assert (task.workspace / "mylib.py").read_bytes() == before
 
 
@@ -221,7 +225,7 @@ def test_alt_unusable_reply_keeps_phase1_choice(tmp_path):
     before = (task.workspace / "mylib.py").read_bytes()
     want = _target(extra)
     res = run(arbitrate(task, extra, Fake({MODEL_FAST: [str(want)], MODEL_ALT: ["??", "no"]})))
-    assert res.status == "solved" and "kept" in res.note
+    assert res.status == "solved" and res.note == "arbitration kept the choice (unusable reply)"
     assert (task.workspace / "mylib.py").read_bytes() == before
 
 

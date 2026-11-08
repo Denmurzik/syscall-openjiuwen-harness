@@ -311,7 +311,9 @@ def _chosen_src(res):
     return it["candidates"][it["chosen"]], it
 
 
-def test_tie_prefers_constant_fix_over_comparison_flip(tmp_path):
+def test_tie_constant_fix_wins_over_flip_by_mutant_order(tmp_path):
+    # `_edit_rank` ties the two fixes (see test_edit_rank_constant_beats_flip_only_through_the_mutant_order):
+    # the constant wins only because constants come first in the mutant order
     lib = "def count_positive(xs):\n    return sum(2 for x in xs if x > 0)\n"
     t = _custom(tmp_path, lib, TIE_TESTS + "        self.assertEqual(mylib.count_positive([0, 0, 4, -4, 9]), 2)\n")
     res = solve(t)

@@ -529,3 +529,23 @@ def test_phase2_infeasible_withdraws_best_guess(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     counts = scheduler.run(tasks, 100000, object())
     assert not (d / "answer.txt").exists() and counts["infeasible"] == 1
+
+
+def test_arbitration_estimate_covers_every_arbitration_model(tmp_path, monkeypatch):
+    # one call would cost ~11 units for this hint; two models need ~22, so a budget of 15
+    # (reserve 1 %) affords one call but not the arbitration
+    from harness.config import ARBITRATE_MODELS
+    assert len(ARBITRATE_MODELS) == 2
+    for budget, expect in ((15, []), (30, ["arb"])):
+        tasks = tmp_path / f"tasks{budget}"
+        _coding(tasks)
+        calls = []
+
+        async def fake_arb(task, extra, client, calls=calls):
+            calls.append("arb")
+            return SolveResult("solved", "DONE", "kept")
+
+        monkeypatch.setattr(scheduler, "_phase1_target", tentative_amb_target)
+        monkeypatch.setattr(scheduler, "arbitrate", fake_arb)
+        scheduler.run(tasks, budget, object())
+        assert calls == expect, budget
