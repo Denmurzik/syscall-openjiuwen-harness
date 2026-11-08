@@ -42,7 +42,7 @@ def _reward(data: dict, d: Path) -> float:
         v = float(data["reward"])
         if v == v and abs(v) != float("inf"):
             return v
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):
         pass
     log.warning("task dir %s: missing or non-numeric reward, using 1.0", d)
     return 1.0
@@ -139,7 +139,7 @@ def _write_answer(task: Task, answer: str) -> None:
         try:
             os.replace(tmp, target)
         except PermissionError:
-            os.chmod(target, stat.S_IWRITE | stat.S_IREAD)  # stale read-only answer.txt (Windows)
+            os.chmod(target, os.stat(target).st_mode | stat.S_IWRITE)  # stale read-only answer.txt (Windows)
             os.replace(tmp, target)
         if os.name == "posix":
             _fsync_path(task.dir)

@@ -372,3 +372,12 @@ def test_fix_coding_stateful_callee_is_not_declared_infeasible(tmp_path):
     c = FakeClient(["nonsense", "nonsense"])
     r = run(fix_coding(_custom_task(tmp_path, lib, CONTRA_TESTS, reward=2.0), c))
     assert r.status == "unparsed" and len(c.calls) == 2
+
+
+def test_decimals_standard_question_forms_without_question_mark():
+    boiler = " Use bash with python3 to compute it, then write the answer to answer.txt."
+    for q in ("Report the mean price, rounded to 2 decimal places.",
+              "I need the typical price (arithmetic mean), restricted to product 'gadget', with the region "
+              "being 'east', rounded to 2 decimal places.",
+              "Among the rows where region is 'east', please work out the mean price, rounded to 2 decimal places."):
+        assert normalize_answer("12", "exact_str", q + boiler) == "12.00", q

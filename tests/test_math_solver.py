@@ -236,3 +236,10 @@ def test_overdrawn_shipment_is_unparsed():
     assert solve(_task(instr)).status == "unparsed"
     ok = instr.replace("1,000 boxes leave", "10 boxes leave")
     assert solve(_task(ok)).answer == "980"
+
+
+def test_shipment_equal_to_stock_gives_zero():
+    instr = ("A warehouse starts with 1000 boxes. Every day for 2 days, 500 boxes leave the warehouse. "
+             "How many boxes does it have at the end?")
+    r = solve(_task(instr))
+    assert r.status == "solved" and r.answer == "0"

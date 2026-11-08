@@ -124,3 +124,43 @@ def test_write_answer_read_only_when_replace_denied(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "replace", lambda *a_: (_ for _ in ()).throw(PermissionError()))
     write_answer(t, "9")
     assert a.read_text() == "9\n"
+
+
+def test_reward_overflow_falls_back(tmp_path):
+    base = '"task_id":"%s","task_type":"math","instruction":"x"'
+    _mk(tmp_path, ("{" + base % "big" + ',"reward":' + "9" * 400 + "}").encode(), "a")
+    _mk(tmp_path, ("{" + base % "inf" + ',"reward":1e999}').encode(), "b")
+    by = {t.task_id: t.reward for t in load_tasks(tmp_path)}
+    assert by == {"big": 1.0, "inf": 1.0}
+
+
+def test_write_answer_chmod_keeps_other_mode_bits(tmp_path, monkeypatch):
+    import stat
+    t = copy_task(load_tasks(FIX)[0], tmp_path)
+    a = t.dir / "answer.txt"
+    a.write_text("stale" + chr(10))
+    real_replace, real_chmod, calls = os.replace, os.chmod, []
+    state = {"denied": False}
+
+    def replace(src, dst):
+        if not state["denied"]:
+            state["denied"] = True
+            raise PermissionError("read-only")
+        return real_replace(src, dst)
+
+    def chmod(path, mode, *x, **k):
+        calls.append(mode)
+        return real_chmod(path, mode, *x, **k)
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(os, "chmod", chmod)
+    real_stat = os.stat
+
+    def fake_stat(path, *x, **k):
+        r = real_stat(path, *x, **k)
+        if str(path) == str(a):
+            return os.stat_result((stat.S_IFREG | 0o454,) + tuple(r)[1:])
+        return r
+    monkeypatch.setattr(os, "stat", fake_stat)
+    write_answer(t, "9")
+    assert calls and calls[0] & 0o777 == (0o454 | stat.S_IWRITE) & 0o777 and calls[0] & stat.S_IREAD
+    assert a.read_text() == "9" + chr(10)
