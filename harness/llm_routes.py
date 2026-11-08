@@ -12,6 +12,7 @@ from pathlib import Path
 from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
 from harness.result import SolveResult
 from harness.sandbox import run_program
+from harness.shape import DESCRIBE, expected_shape, mismatch
 from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic writer reused
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
@@ -123,11 +124,13 @@ def _program_messages(task: Task) -> list[dict]:
 
 
 async def solve_with_program(task: Task, client) -> SolveResult:
+    """Up to two MODEL_FAST programs; an answer of the wrong shape gets one more try on MODEL_ALT."""
     messages = _program_messages(task)
     note = ""
-    for _ in range(2):
+    model, attempt, attempts, shape_retried = MODEL_FAST, 0, 2, False
+    while attempt < attempts:
         try:
-            r = await client.chat(MODEL_FAST, messages, 400)
+            r = await client.chat(model, messages, 400)
         except LLMUnavailable as e:
             return SolveResult("unparsed", note=f"llm unavailable: {e}")
         code = extract_code(r.text, join_all=False)
@@ -138,15 +141,25 @@ async def solve_with_program(task: Task, client) -> SolveResult:
             return SolveResult("infeasible", note="program printed IMPOSSIBLE")
         answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check)
         if answer is not None:
-            return SolveResult("solved", answer=answer, note="model program")
-        why = "timed out" if res.timed_out else (
-            f"exit code {res.returncode}" if res.returncode != 0 else "no usable answer printed")
-        note = f"program {why}"
-        feedback = (f"Your program failed ({why}).\nstderr:\n{res.stderr[-FEEDBACK_LIMIT // 2:]}\n"
-                    f"stdout:\n{res.stdout[-FEEDBACK_LIMIT // 2:]}")
+            bad = mismatch(task, answer)
+            if bad is None:
+                return SolveResult("solved", answer=answer, note="model program")
+            if shape_retried:
+                return SolveResult("unparsed", note=f"answer shape: {bad}")
+            shape_retried, model, attempts = True, MODEL_ALT, attempt + 2  # exactly one more call
+            note = f"answer shape: {bad}"
+            feedback = (f"Your program printed {answer!r}, but the question asks for "
+                        f"{DESCRIBE[expected_shape(task)]}. Re-read the question and fix the program.")
+        else:
+            why = "timed out" if res.timed_out else (
+                f"exit code {res.returncode}" if res.returncode != 0 else "no usable answer printed")
+            note = f"program {why}"
+            feedback = (f"Your program failed ({why}).\nstderr:\n{res.stderr[-FEEDBACK_LIMIT // 2:]}\n"
+                        f"stdout:\n{res.stdout[-FEEDBACK_LIMIT // 2:]}")
         messages = messages + [{"role": "assistant", "content": r.text},
                                {"role": "user", "content": feedback + "\nFix it. Print the final answer with print(); "
                                            "do not write it to a file. Output only code."}]
+        attempt += 1
     return SolveResult("unparsed", note=note)
 
 

@@ -2,9 +2,10 @@
 import json
 import re
 
-from harness.config import MODEL_FAST
+from harness.config import MODEL_ALT, MODEL_FAST
 from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable
 from harness.result import SolveResult
+from harness.shape import DESCRIBE, expected_shape, mismatch
 from harness.solvers import data_solver, math_solver, search_solver
 from harness.tasks import Task
 
@@ -115,13 +116,15 @@ def _parse_json(text: str) -> tuple[dict | None, str]:
     return value, ""
 
 
-async def request_spec(task_type: str, template: str, client: LLMClient) -> dict | None:
+async def request_spec(task_type: str, template: str, client: LLMClient, model: str = MODEL,
+                       history: list[dict] | None = None) -> dict | None:
+    """JSON spec for a template; `history` continues an earlier exchange (assistant + user turns)."""
     system = _system_prompt(task_type)
     if system is None:
         return None
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": template}]
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": template}] + (history or [])
     for attempt in range(2):
-        result = await client.chat(MODEL, messages, MAX_TOKENS, response_format={"type": "json_object"})
+        result = await client.chat(model, messages, MAX_TOKENS, response_format={"type": "json_object"})
         spec, error = _parse_json(result.text)
         if spec is not None:
             return spec
@@ -177,6 +180,41 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
         return all_members(SolveResult("unparsed", note="model returned no valid JSON spec"))
     if spec.get("impossible") is True:
         return all_members(SolveResult("unparsed", note="model: spec impossible"))
+    out = _execute_all(members, spec)
+    bad = {tid: why for tid, why in ((t.task_id, _shape_error(t, out[t.task_id])) for t, _ in members) if why}
+    if not bad:
+        return out
+    # one retry on MODEL_ALT for the members whose answer has the wrong shape; then unparsed
+    first = next(t for t, _ in members if t.task_id in bad)
+    shape = expected_shape(first)
+    feedback = (f"With that specification the answer has the wrong kind: the question asks for "
+                f"{DESCRIBE[shape]}, but the result was {out[first.task_id].answer!r}. Re-read the question "
+                "and reply with only a corrected JSON object.")
+    history = [{"role": "assistant", "content": json.dumps(spec, ensure_ascii=False)},
+               {"role": "user", "content": feedback}]
+    try:
+        retry = await request_spec(task_type, template, client, MODEL_ALT, history)
+    except LLMUnavailable:
+        retry = None
+    redo = [(t, s) for t, s in members if t.task_id in bad]
+    again = (_execute_all(redo, retry) if isinstance(retry, dict) and retry.get("impossible") is not True
+             else {})
+    for task, _ in redo:
+        res = again.get(task.task_id)
+        if res is not None and res.status == "solved" and _shape_error(task, res) is None:
+            out[task.task_id] = res
+        else:
+            out[task.task_id] = SolveResult("unparsed", note=f"answer shape: {bad[task.task_id]}")
+    return out
+
+
+def _shape_error(task: Task, res: SolveResult) -> str | None:
+    if res.status != "solved" or res.answer is None:
+        return None
+    return mismatch(task, str(res.answer))
+
+
+def _execute_all(members: list[tuple[Task, dict[str, str]]], spec: dict) -> dict[str, SolveResult]:
     out: dict[str, SolveResult] = {}
     for task, slots in members:
         try:

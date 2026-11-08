@@ -211,7 +211,8 @@ def test_data_schema_lists_top_metrics():
 def test_data_top_metric_via_2a():
     ws = FIX / "data_analysis_0002" / "workspace"
     ins = json.loads((FIX / "data_analysis_0002" / "task.json").read_text(encoding="utf-8"))["instruction"]
-    t = Task("d1", "data_analysis", ins, 1.0, "exact_int", ws.parent, ws)
+    # a "which product" question is checked exact_str (gen_tasks); exact_int would fail the shape check
+    t = Task("d1", "data_analysis", ins, 1.0, "exact_str", ws.parent, ws)
     spec = {"file": "sales.csv", "metric": "top_product_sum_units", "product": None, "region": None,
             "month_from": None, "month_to": None}
     out = asyncio.run(solve_group("data_analysis", templatize(ins)[0], [(t, {})], FakeClient(json.dumps(spec))))

@@ -6,6 +6,7 @@ import os
 import queue as queue_mod
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 from harness import config
@@ -13,7 +14,7 @@ from harness.budget import TokenLedger
 from harness.estimator import estimate_json_tokens, estimate_tokens
 from harness.result import SolveResult
 from harness.tasks import Task, load_tasks, write_answer
-from harness.trajectory import Trajectory
+from harness.trajectory import CALLS, Trajectory
 
 log = logging.getLogger("harness")
 
@@ -30,6 +31,21 @@ BudgetExhausted = None
 
 # infeasible notes that do not depend on the model's reading of the question
 _MODEL_INDEPENDENT = ("division by zero", "start entity not found")
+
+
+# name and model calls of the phase-2 unit running in this context (None outside phase 2)
+_UNIT: ContextVar[dict | None] = ContextVar("harness_unit", default=None)
+
+
+def _take_calls() -> dict:
+    """Trajectory fields for the calls made by the current unit since the last take."""
+    unit = _UNIT.get()
+    if unit is None:
+        return {"cost": 0}
+    calls = list(unit["calls"])
+    unit["calls"].clear()
+    return {"unit": unit["name"], "model": calls[-1]["model"] if calls else None,
+            "cost": sum(c["cost"] for c in calls), "calls": calls}
 
 
 def _final_2a(res: SolveResult) -> bool:
@@ -185,21 +201,29 @@ async def _drive(units: list, t0: float, deadline_s: float, ledger: TokenLedger,
                 continue
             start = time.monotonic()
             remaining = deadline_s - (time.monotonic() - t0) - 5
+            calls: list = []
+            tokens = (_UNIT.set({"name": unit["name"], "calls": calls}), CALLS.set(calls))
             try:
                 await asyncio.wait_for(unit["run"](), remaining)
             except asyncio.TimeoutError:
                 state["traj"].record({"phase": 2, "task_id": unit["name"], "status": "deadline",
-                                      "cost": 0, "elapsed": round(time.monotonic() - start, 3)})
+                                      **_take_calls(), "elapsed": round(time.monotonic() - start, 3)})
             except BudgetExhausted:
                 state["stop"] = True
                 ledger.mark_exhausted()
                 state["traj"].record({"phase": 2, "task_id": unit["name"], "status": "budget_exhausted",
-                                      "cost": 0, "elapsed": round(time.monotonic() - start, 3)})
+                                      **_take_calls(), "elapsed": round(time.monotonic() - start, 3)})
             except Exception as e:
                 log.exception("unit %s failed", unit["name"])
                 state["traj"].record({"phase": 2, "task_id": unit["name"], "status": "error",
-                                      "cost": 0, "note": repr(e)[:200],
+                                      **_take_calls(), "note": repr(e)[:200],
                                       "elapsed": round(time.monotonic() - start, 3)})
+            finally:
+                if calls:  # no settled task took them (e.g. a 2a group with no final answer)
+                    state["traj"].record({"phase": 2, "task_id": unit["name"], "status": "unit",
+                                          **_take_calls(), "elapsed": round(time.monotonic() - start, 3)})
+                _UNIT.reset(tokens[0])
+                CALLS.reset(tokens[1])
 
     await asyncio.gather(*(worker() for _ in range(max(1, LLM_WORKERS))))
 
@@ -212,6 +236,7 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
     traj = Trajectory(_log_dir())
     ledger = getattr(client, "ledger", None) or TokenLedger(budget, budget * config.RESERVE_FRACTION)
     status: dict = {}
+    spent0 = ledger.spent
     try:
         try:
             tasks = load_tasks(Path(tasks_dir))
@@ -219,7 +244,6 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
             log.exception("cannot load tasks from %s", tasks_dir)
             tasks = []
         by_id = {t.task_id: t for t in tasks}
-        last_spent = [ledger.spent]
         tentative: dict[str, SolveResult] = {}   # written but not final: phase 2 may improve it
         guesses: dict[str, SolveResult] = {}     # unanswered tasks with a stored best guess
 
@@ -247,10 +271,8 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
             elif (res.extra or {}).get("best_guess") is not None:
                 guesses[task.task_id] = res
             status[task.task_id] = st
-            # cost deltas telescope, so their sum equals the ledger's spent exactly
-            delta = ledger.spent - last_spent[0]
-            last_spent[0] = ledger.spent
-            traj.record({"phase": phase, "task_id": task.task_id, "status": st, "cost": delta,
+            # the unit's own model calls (a group's go to its first settled member), not a ledger delta
+            traj.record({"phase": phase, "task_id": task.task_id, "status": st, **_take_calls(),
                          "elapsed": round(elapsed, 3), "note": (res.note or "")[:200]})
 
         _phase1(tasks, phase1_workers, t0, deadline_s, lambda t, r, e: settle(1, t, r, e))
@@ -262,6 +284,13 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
     except Exception:
         log.exception("scheduler failed")
     finally:
+        try:
+            # charges outside any recorded call keep the trajectory total equal to the ledger
+            extra = ledger.spent - spent0 - traj.cost_total
+            if abs(extra) > 1e-6:
+                traj.record({"phase": 2, "task_id": None, "status": "unattributed", "cost": extra})
+        except Exception:
+            log.exception("cost reconciliation failed")
         traj.close()
     counts = {"solved": 0, "infeasible": 0, "unparsed": 0}
     for s in status.values():

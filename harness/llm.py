@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from harness.budget import TokenLedger
 from harness import config
 from harness.config import LLM_CONCURRENCY, TIMEOUT_CHARGE
+from harness.trajectory import record_call
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,8 @@ class LLMClient:
                     self._count_failure()
                 elif status is not None and status >= 500 or (status is None and _is_transport_failure(exc)):
                     # may have been served and billed: charge a flat amount, never retry
-                    self.ledger.charge(0, TIMEOUT_CHARGE)
+                    record_call(model, 0, TIMEOUT_CHARGE, self.ledger.charge(0, TIMEOUT_CHARGE),
+                                error=msg[:100])
                     self._count_failure()
                 # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
                 raise LLMUnavailable(msg) from exc
@@ -209,4 +211,5 @@ class LLMClient:
                 p = int(getattr(u, "input_tokens", 0) or 0)
                 c = int(getattr(u, "output_tokens", 0) or 0)
             cost = self.ledger.charge(p, c)
+            record_call(model, p, c, cost)
             return ChatResult(text=r.content or "", prompt_tokens=p, completion_tokens=c, cost=cost)
