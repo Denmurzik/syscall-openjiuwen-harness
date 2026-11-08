@@ -791,9 +791,7 @@
   "id": "s23",
   "dom": "search",
   "text": "Please identify the mentor of Alice Khan's employer.",
-  "allowed": [
-   "Juniper Logistics"
-  ],
+  "allowed": [],
   "ws": "search",
   "note": "company has no mentor -> infeasible ok"
  },
@@ -806,5 +804,45 @@
   ],
   "ws": "search",
   "note": "mentors not in vocab -> kept"
+ },
+ {
+  "id": "s25",
+  "dom": "search",
+  "text": "In which year was Alice Khan's employer born?",
+  "allowed": [],
+  "ws": "search",
+  "note": "born of a company"
+ },
+ {
+  "id": "s26",
+  "dom": "search",
+  "text": "Who is the mentor of the employer of Alice Khan?",
+  "allowed": [],
+  "ws": "search",
+  "note": "mentor of a company"
+ },
+ {
+  "id": "s27",
+  "dom": "search",
+  "text": "In which year was Alice Khan founded?",
+  "allowed": [],
+  "ws": "search",
+  "note": "founded of a person"
+ },
+ {
+  "id": "s28",
+  "dom": "search",
+  "text": "In which city is the headquarters of Alice Khan?",
+  "allowed": [],
+  "ws": "search",
+  "note": "headquarters of a person"
+ },
+ {
+  "id": "s29",
+  "dom": "search",
+  "text": "Who is the employer of the employer of Alice Khan?",
+  "allowed": [],
+  "ws": "search",
+  "note": "employer of a company"
  }
 ]

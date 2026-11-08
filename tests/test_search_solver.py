@@ -162,8 +162,9 @@ def test_ambiguous_scope_solve(tmp_path):
         "a.md": "# Ann\nEmployer: Acme\n",
         "c.md": "# Acme\nMentor: Dan\n",
     })
-    # reading 1: mentor of (Ann's employer) = Dan; reading 2: (mentor of Ann)'s employer has no answer
-    assert solve(_task(_q("Who is the mentor of Ann's employer?"), ws)) == SolveResult("solved", "Dan")
+    # reading 1: mentor of (Ann's employer) = Dan; reading 2: (mentor of Ann)'s employer has no answer. A reading
+    # that asks the wrong kind of entity for a relation never wins silently: unparsed.
+    assert solve(_task(_q("Who is the mentor of Ann's employer?"), ws)).status == "unparsed"
     assert solve(_task(_q("Who is the mentor of Nobody's employer?"), ws)).status == "infeasible"
     # both readings answer with different values -> unparsed
     ws2 = _kb(tmp_path / "x", {
@@ -218,8 +219,12 @@ def _spec(entity, path, field):
 
 def test_execute_inserts_employer_for_company_field(tmp_path):
     ws = _kb(tmp_path, _KB)
-    assert execute(_spec("Alice Novak", [], "Headquarters"), ws) == SolveResult("solved", "Medan")
-    assert execute(_spec("Alice Novak", ["Mentor"], "Founded"), ws) == SolveResult("solved", "2005")
+    # a company field asked of a person is not coerced through the employer
+    assert execute(_spec("Alice Novak", [], "Headquarters"), ws).status == "infeasible"
+    assert execute(_spec("Alice Novak", ["Mentor"], "Founded"), ws).status == "infeasible"
+    assert execute(_spec("Arktika Labs", [], "Born"), ws).status == "infeasible"
+    assert execute(_spec("Arktika Labs", ["Mentor"], "Born"), ws).status == "infeasible"
+    assert solve(_task(_q("In which city does Alice Novak work?"), ws)) == SolveResult("solved", "Medan")
 
 
 def test_execute_no_coercion_when_already_company_or_other_field(tmp_path):

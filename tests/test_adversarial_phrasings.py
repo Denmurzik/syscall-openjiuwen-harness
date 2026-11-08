@@ -391,7 +391,7 @@ _sn("s-chain-mentor-of-company", "Who is the mentor of Arktika Labs?")
 _sn("s-chain-no-mentor", "Who is the mentor of Dmitri Sato?")
 _sn("s-unknown-person", "In which year was Zed Nobody born?")
 _sn("s-unknown-company", "In which year was Nonexistent Corp founded?")
-_sa("s-person-company-field", "In which city is the headquarters of Alice Garcia?", "Medan")
+_sn("s-person-company-field", "In which city is the headquarters of Alice Garcia?")
 # names
 _sa("s-name-initial", "In which year was Jonas T. Dubois born?", "1975")
 _sa("s-name-initial-mentor", "Who is the mentor of Jonas T. Dubois?", "Boris Petrov")

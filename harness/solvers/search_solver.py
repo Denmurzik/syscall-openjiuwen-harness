@@ -38,7 +38,7 @@ _QUESTIONS = [
     (re.compile(r"(?:can you tell me|tell me) the year (.+) was born", _FLAGS), "Born"),
     (re.compile(r"(?:can you tell me|tell me) the year (.+) was founded", _FLAGS), "Founded"),
     (re.compile(r"who is (.+)['\u2019]s employer", _FLAGS), "Employer"),
-    (re.compile(r"in which city does (.+) work", _FLAGS), "Headquarters"),
+    (re.compile(r"in which city does (.+) work", _FLAGS), "Headquarters+Employer"),
     (re.compile(r"(?:what is|find) the birth year of (.+)", _FLAGS), "Born"),
     (re.compile(r"(.+) works for which (?:company|firm)", _FLAGS), "Employer"),
     (re.compile(r"which firm employs (.+)", _FLAGS), "Employer"),
@@ -176,7 +176,10 @@ def _specs(question: str, bare: bool) -> list[dict]:
             if not m:
                 continue
             for entity, path in _parse_entity(m.group(1), bare):
-                spec = {"entity": entity, "path": path, "field": field}
+                if field.endswith("+Employer"):  # "in which city does X work": the headquarters of X's employer
+                    spec = {"entity": entity, "path": path + ["Employer"], "field": field.split("+")[0]}
+                else:
+                    spec = {"entity": entity, "path": path, "field": field}
                 if spec not in specs:
                     specs.append(spec)
     return specs
@@ -326,10 +329,6 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
             if _norm(nxt) not in index:
                 return SolveResult("infeasible", note=f"entity not found: {nxt!r}")
             current = nxt
-        if _norm(field) in _COMPANY_ONLY and _company_only(index, field):
-            employer = lookup(current, "Employer")  # a person asked for a company field: go through the employer
-            if employer is not None and _norm(employer) in index:
-                current = employer
         value = lookup(current, field)
         if value is None:
             return SolveResult("infeasible", note=f"{current!r} has no {field!r}")
@@ -338,17 +337,13 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
         return _unparsed(f"bad spec: {e!r}")
 
 
-def _company_only(index: dict, field: str) -> bool:
-    """True if some entity has `field` and none of the entities that have an Employer field does."""
-    owners = [fields for fields in index.values() if any(_norm(k) == _norm(field) for k in fields)]
-    if not owners:
-        return False
-    return not any(any(_norm(k) == "employer" for k in f) for f in owners)
-
-
 def _run(specs: list[dict], workspace: Path) -> SolveResult:
     results = [execute(spec, workspace) for spec in specs]
     answers = {r.answer for r in results if r.status == "solved"}
+    if answers and any(r.status == "infeasible" and "has no" in r.note for r in results):
+        # one reading applies a relation to the wrong kind of entity ("the mentor of X's employer"): do not let the
+        # other reading win silently
+        return _unparsed("ambiguous question: a reading asks a relation the entity does not have",)
     if len(answers) == 1:
         return SolveResult("solved", answers.pop())
     if len(answers) > 1:
