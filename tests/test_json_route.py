@@ -441,3 +441,46 @@ def test_reverse_mentor_of_whom(q):
 def test_forward_mentor_of_is_not_flagged(q):
     from harness.json_route import _reverse_relation
     assert _reverse_relation(templatize(q.format(n="Ann Lee"), "search")[0]) is None
+
+
+# ---- task 27: bare placeholders in data specs (round 5, LLM-paraphrased data tasks)
+_R5 = json.loads((Path(__file__).parent / "fixtures" / "round5_data_placeholders.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", _R5, ids=[c["id"] for c in _R5])
+def test_bare_placeholder_reply_parses_and_fills(case):
+    from harness.json_route import _parse_json
+    spec, err = _parse_json(case["bare_reply"])
+    assert spec is not None, err
+    assert fill(spec, case["slots"]) == case["spec"]
+
+
+def test_quoting_leaves_strings_keys_and_valid_json_alone():
+    from harness.json_route import _parse_json, _quote_bare_placeholders as q
+    assert q('{"a":"x {N1} y","b":"{N2}","steps":["x-{N3}"]}') == '{"a":"x {N1} y","b":"{N2}","steps":["x-{N3}"]}'
+    assert q('{"a":"say \\"{N1}\\" ok","b":{N2}}') == '{"a":"say \\"{N1}\\" ok","b":"{N2}"}'
+    assert q('{"a": [ {N1}, {S2} ,{E3}], "b" : {N4}}') == '{"a": [ "{N1}", "{S2}" ,"{E3}"], "b" : "{N4}"}'
+    assert q('{"a":1,{N1}:2}') == '{"a":1,{N1}:2}'  # key position: not a value, left as is
+    assert q('{"a":{"N2":null}}') == '{"a":{"N2":null}}'  # a real object stays an object
+    assert q('{"a":{X1}}') == '{"a":{X1}}'  # only N/S/E slots
+    assert _parse_json('{"a":1,{N1}:2}')[0] is None
+
+
+def test_bare_placeholder_spec_solves_via_2a():
+    t, ins = _data_task()
+    bare = ('{"file":"sales.csv","metric":"sum_units","product":{S1},"region":null,'
+            '"month_from":{N1},"month_to":{N2}}')
+    slots = {"S1": "widget", "N1": "7", "N2": "8"}
+    out = asyncio.run(solve_group("data_analysis", "tpl", [(t, slots)], FakeClient(bare)))
+    assert out["d1"].status == "solved" and out["d1"].answer == "158", out  # = the jury example's expected
+
+
+def test_data_schema_quotes_placeholders_with_one_line_example():
+    import re
+    from harness.json_route import _system_prompt
+    p = _system_prompt("data_analysis")
+    assert '"month_from":"{N2}"' in p and "never" in p and '"month_from":{N2}' in p
+    assert '"decimals"' in p.split("Schema:", 1)[1].split("\n", 1)[0]  # declared in the schema line
+    example = re.search(r"Full example on one line: (\{.*?\})\.", p).group(1)
+    spec = json.loads(example)
+    assert fill(spec, {"S1": "widget", "N2": "8", "N3": "2"})["month_from"] == 8

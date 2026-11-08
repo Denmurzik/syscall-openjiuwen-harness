@@ -42,7 +42,13 @@ _SCHEMAS = {
         "You turn a question about a CSV file into a JSON specification.\n"
         "Schema: {\"file\": <csv file name string>, \"metric\": <metric>, "
         "\"product\": <string or null>, \"region\": <string or null>, "
-        "\"month_from\": <integer or null>, \"month_to\": <integer or null>}\n"
+        "\"month_from\": <integer or null>, \"month_to\": <integer or null>, \"decimals\": <integer, optional>}\n"
+        # round 5: a bare {N2} where the schema says <integer> opens an object under guided json_object
+        # decoding and the reply degenerates into {"N2":{"N2":...}}; a quoted one-line example prevents it
+        "Every placeholder is written as a quoted JSON string, also where an integer is expected: "
+        "\"month_from\":\"{N2}\", never \"month_from\":{N2}. Full example on one line: "
+        "{\"file\":\"sales.csv\",\"metric\":\"avg_price\",\"product\":\"{S1}\",\"region\":null,"
+        "\"month_from\":\"{N2}\",\"month_to\":\"{N2}\",\"decimals\":\"{N3}\"}.\n"
         "metric is one of: \"sum_units\" (total units sold or ordered), \"sum_revenue\" (total of units*price), "
         "\"count_orders\" (number of rows), \"avg_price\" (average price), \"avg_units\" (average units per order), "
         "\"max_units\" (the largest number of units in a single order), "
@@ -168,6 +174,41 @@ def fill(spec: object, slots: dict[str, str]) -> object:
     return spec
 
 
+_BARE_SLOT = re.compile(r"\{[SEN]\d+\}")
+
+
+def _quote_bare_placeholders(body: str) -> str:
+    """Wrap bare {N#}/{S#}/{E#} in quotes where a JSON value stands: after ':' in an object, or after '['
+    or ',' in an array. Text inside strings, keys and real objects is never touched."""
+    out, stack, prev, i, n = [], [], "", 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == '"':  # copy the whole string literal, escapes included
+            j = i + 1
+            while j < n and body[j] != '"':
+                j += 2 if body[j] == "\\" else 1
+            out.append(body[i:j + 1])
+            i, prev = j + 1, '"'
+            continue
+        if ch == "{":
+            m = _BARE_SLOT.match(body, i)
+            value_pos = prev == ":" or (bool(stack) and stack[-1] == "[" and prev in ("[", ","))
+            if m and value_pos:
+                out.append(f'"{m.group(0)}"')
+                i, prev = m.end(), '"'
+                continue
+            stack.append("{")
+        elif ch == "[":
+            stack.append("[")
+        elif ch in "]}" and stack:
+            stack.pop()
+        out.append(ch)
+        if not ch.isspace():
+            prev = ch
+        i += 1
+    return "".join(out)
+
+
 def _parse_json(text: str) -> tuple[dict | None, str]:
     body = text.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", body, re.S | re.I)
@@ -176,7 +217,10 @@ def _parse_json(text: str) -> tuple[dict | None, str]:
     try:
         value = json.loads(body)
     except ValueError as e:
-        return None, f"invalid JSON: {e}"
+        try:  # a bare placeholder value ({"month_from":{N2}}) is invalid JSON; quoted it is the intended spec
+            value = json.loads(_quote_bare_placeholders(body))
+        except ValueError:
+            return None, f"invalid JSON: {e}"
     if not isinstance(value, dict):
         return None, "the JSON value must be an object"
     return value, ""

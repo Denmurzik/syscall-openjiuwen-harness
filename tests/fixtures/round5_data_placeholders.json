@@ -1,0 +1,217 @@
+[
+ {
+  "id": "data_analysis_0038",
+  "template": "Quick question: looking at sales.csv (order_id, region, product, month, units, price; {N1} rows), what’s the mean units per order, rounded to {N2} decimal places?",
+  "slots": {
+   "N1": "1422",
+   "N2": "2"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_units\",\"product\":null,\"region\":null,\"month_from\":null,\"month_to\":null,\"decimals\":{\n\"N2\"\n    : {\n\"N2\"\n    : null\n}\n}\n}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_units\",\"product\":null,\"region\":null,\"month_from\":null,\"month_to\":null,\"decimals\":{N2}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "avg_units",
+   "product": null,
+   "region": null,
+   "month_from": null,
+   "month_to": null,
+   "decimals": 2
+  }
+ },
+ {
+  "id": "data_analysis_0134",
+  "template": "Regarding the sales.csv file ({N1} rows, columns: order_id,region,product,month,units,price), could you provide the aggregate unit count for month {N2}?",
+  "slots": {
+   "N1": "565",
+   "N2": "9"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"sum_units\",\"product\":null,\"region\":null,\"month_from\":{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t: \t{ \"N2\" \t:",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"sum_units\",\"product\":null,\"region\":null,\"month_from\":{N2},\"month_to\":{N2}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "sum_units",
+   "product": null,
+   "region": null,
+   "month_from": 9,
+   "month_to": 9
+  }
+ },
+ {
+  "id": "data_analysis_0042",
+  "template": "Given that the file sales.csv contains {N1} rows with columns order_id, region, product, month, units, and price, could you calculate the average price rounded to {N2} decimal places?",
+  "slots": {
+   "N1": "1371",
+   "N2": "2"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_price\",\"product\":null,\"region\":null,\"month_from\":null,\"month_to\":null,\"decimals\":\"{N2}\"}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_price\",\"product\":null,\"region\":null,\"month_from\":null,\"month_to\":null,\"decimals\":{N2}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "avg_price",
+   "product": null,
+   "region": null,
+   "month_from": null,
+   "month_to": null,
+   "decimals": 2
+  }
+ },
+ {
+  "id": "data_analysis_0070",
+  "template": "We need to analyze sales.csv (order_id, region, product, month, units, price; {N1} rows). Specifically, what is the total revenue (units multiplied by price) for region {S1} in month {N2}?",
+  "slots": {
+   "S1": "north",
+   "N1": "793",
+   "N2": "2"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"sum_revenue\",\"product\":null,\"region\":\"{S1}\",\"month_from\":{ \"{N2}\" : \"{N2}\" },\"month_to\":{ \"{N2}\" : \"{N2}\" }}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"sum_revenue\",\"product\":null,\"region\":{S1},\"month_from\":{N2},\"month_to\":{N2}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "sum_revenue",
+   "product": null,
+   "region": "north",
+   "month_from": 2,
+   "month_to": 2
+  }
+ },
+ {
+  "id": "data_analysis_0022",
+  "template": "Regarding sales.csv (columns: order_id,region,product,month,units,price; {N1} rows), please calculate the gross income for the northern region in month {N2}. What is the total revenue (units multiplied by price) in region {S1} in month {N3}?",
+  "slots": {
+   "S1": "north",
+   "N1": "1361",
+   "N2": "11",
+   "N3": "11"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"sum_revenue\",\"product\":null,\"region\":\"{S1}\",\"month_from\":{\n\"N3}],\"\n    \t:\n\"month_to\"\n}\n}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"sum_revenue\",\"product\":null,\"region\":{S1},\"month_from\":{N3},\"month_to\":{N3}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "sum_revenue",
+   "product": null,
+   "region": "north",
+   "month_from": 11,
+   "month_to": 11
+  }
+ },
+ {
+  "id": "data_analysis_0010",
+  "template": "Quick query on the sales.csv file (columns: order_id,region,product,month,units,price; {N1} rows). We need the max units count for {S1} orders in month {N2}. What is the largest number of units in a single order in month {N3} for product {S1}?",
+  "slots": {
+   "S1": "gizmo",
+   "N1": "1278",
+   "N2": "10",
+   "N3": "10"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"max_units\",\"product\":\"{S1}\",\"region\":null,\"month_from\":{\n\"N3},\"\n  \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"max_units\",\"product\":{S1},\"region\":null,\"month_from\":{N3},\"month_to\":{N3}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "max_units",
+   "product": "gizmo",
+   "region": null,
+   "month_from": 10,
+   "month_to": 10
+  }
+ },
+ {
+  "id": "data_analysis_0074",
+  "template": "- File: sales.csv\n- Columns: order_id, region, product, month, units, price\n- Rows: {N1}\n\nWhat is the largest number of units in a single order for product {S1}?",
+  "slots": {
+   "S1": "doohickey",
+   "N1": "905"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"max_units\",\"product\":\"{S1}\",\"region\":null,\"month_from\":null,\"month_to\":null}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"max_units\",\"product\":{S1},\"region\":null,\"month_from\":null,\"month_to\":null}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "max_units",
+   "product": "doohickey",
+   "region": null,
+   "month_from": null,
+   "month_to": null
+  }
+ },
+ {
+  "id": "data_analysis_0002",
+  "template": "Here is a brief overview of the dataset structure. The file sales.csv has columns order_id,region,product,month,units,price ({N1} rows). What is the average price in month {N2}, rounded to {N3} decimal places?",
+  "slots": {
+   "N1": "636",
+   "N2": "8",
+   "N3": "2"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_price\",\"product\":null,\"region\":null,\"month_from\":{ \"value\": \"{N2}\" },\"month_to\":{ \"value\": \"{N2}\" },\"decimals\":\"{N3}\"}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_price\",\"product\":null,\"region\":null,\"month_from\":{N2},\"month_to\":{N2},\"decimals\":{N3}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "avg_price",
+   "product": null,
+   "region": null,
+   "month_from": 8,
+   "month_to": 8,
+   "decimals": 2
+  }
+ },
+ {
+  "id": "data_analysis_0090",
+  "template": "Reviewing sales.csv (order_id, region, product, month, units, price; {N1} rows), what is the largest number of units in a single order in months {N2} through {N3} inclusive?",
+  "slots": {
+   "N1": "1883",
+   "N2": "5",
+   "N3": "5"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"max_units\",\"product\":null,\"region\":null,\"month_from\":\"{N2}\",\"month_to\":\"{N3}\"}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"max_units\",\"product\":null,\"region\":null,\"month_from\":{N2},\"month_to\":{N3}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "max_units",
+   "product": null,
+   "region": null,
+   "month_from": 5,
+   "month_to": 5
+  }
+ },
+ {
+  "id": "data_analysis_0030",
+  "template": "- The file sales.csv has columns order_id,region,product,month,units,price ({N1} rows). - Focus on {S1} units in month {N2}. - Compute the mean value. What is the average number of units per order in month {N3} for product {S1}, rounded to {N4} decimal places?",
+  "slots": {
+   "S1": "sprocket",
+   "N1": "327",
+   "N2": "4",
+   "N3": "4",
+   "N4": "2"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_units\",\"product\":\"{S1}\",\"region\":null,\"month_from\":{ \"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\" \t: \t{ \t\"N3\"",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_units\",\"product\":{S1},\"region\":null,\"month_from\":{N3},\"month_to\":{N3},\"decimals\":{N4}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "avg_units",
+   "product": "sprocket",
+   "region": null,
+   "month_from": 4,
+   "month_to": 4,
+   "decimals": 2
+  }
+ },
+ {
+  "id": "data_analysis_0062",
+  "template": "FYI: sales.csv (order_id, region, product, month, units, price; {N1} rows). What is the mean price for product {S1} in region {S2}, rounded to {N2} decimal places?",
+  "slots": {
+   "S1": "sprocket",
+   "S2": "east",
+   "N1": "1507",
+   "N2": "2"
+  },
+  "degenerate_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_price\",\"product\":\"{S1}\",\"region\":\"{S2}\",\"month_from\":null,\"month_to\":null,\"decimals\":\"{N2}\"}",
+  "bare_reply": "{\"file\":\"sales.csv\",\"metric\":\"avg_price\",\"product\":{S1},\"region\":{S2},\"month_from\":null,\"month_to\":null,\"decimals\":{N2}}",
+  "spec": {
+   "file": "sales.csv",
+   "metric": "avg_price",
+   "product": "sprocket",
+   "region": "east",
+   "month_from": null,
+   "month_to": null,
+   "decimals": 2
+  }
+ }
+]

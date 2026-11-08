@@ -318,3 +318,29 @@ def test_decimals_tail_form_without_round():
 
 def test_decimals_only_in_the_last_sentence():
     assert normalize_answer("12", "exact_str", "Round the prices to 2 decimals first. How many items cost more than 5?") == "12"
+
+
+# ---- task 27: the rounding phrase in any asking sentence
+_CSV = " The file sales.csv has columns order_id,region,product,month,units,price (636 rows)."
+_TAIL = " Use bash with python3 to compute it. Work only inside the current directory."
+
+
+def test_decimals_question_first():
+    q = "What is the average price in month 8, rounded to 2 decimal places?" + _CSV + _TAIL
+    assert normalize_answer("30.1", "exact_str", q) == "30.10"
+    q = "Could you compute the mean price, to two decimals?" + _CSV + " Thanks a lot." + _TAIL
+    assert normalize_answer("30.1", "exact_str", q) == "30.10"
+
+
+def test_decimals_separate_rounding_sentence_anywhere():
+    for lead in ("Please round the result to 2 decimal places.", "Round the answer to 2 decimal places.",
+                 "Round to 2 decimal places.", "Give your final answer to two decimal places."):
+        q = lead + " What is the average price in month 8?" + _CSV + _TAIL
+        assert normalize_answer("30.1", "exact_str", q) == "30.10", lead
+
+
+def test_decimals_not_from_data_sentences():
+    assert normalize_answer("12", "exact_str", "How many items cost more than 5? Prices are rounded to 2 decimal places.") == "12"
+    assert normalize_answer("12", "exact_str", "Prices are given to 2 decimal places. How many items cost more than 5?") == "12"
+    assert normalize_answer("12", "exact_str", "Round the prices to 2 decimals first. How many items cost more than 5?") == "12"
+    assert normalize_answer("12", "exact_str", "How many orders?" + _CSV + " Prices use 2 decimals." + _TAIL) == "12"

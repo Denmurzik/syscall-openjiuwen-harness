@@ -63,11 +63,26 @@ _TAIL_DECIMALS = re.compile(r"(?<!given )\bto\s+(?P<n>\d+|one|two|three|four|fiv
 _PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
+# a sentence of its own that rounds the ANSWER ("Round (the answer) to 2 decimal places."), never the inputs
+_ROUND_ANSWER = re.compile(
+    r"^(?:please\s+)?(?:round|give|report|express|return|provide|present|write)\b"
+    r"(?:\s+(?:the|your)\s+(?:final\s+)?(?:answer|result|value|number))?(?:\s+(?:rounded|correct))?"
+    r"\s+to\s+(?P<n>\d+|one|two|three|four|five|six)\s+(?:decimal(?:\s+places?|s)?|d\.?p\.?)\s*[.!]?$", re.I)
+
+
 def _requested_decimals(instruction: str | None) -> int | None:
+    """Places asked for the answer: the rounding phrase of an asking sentence (one ending in '?'; with none,
+    the last sentence), else a separate 'Round (the answer) to N decimal places.' sentence anywhere.
+    Sentences about the inputs ('Prices are given to 2 decimal places') never count."""
     sentences = split_sentences(strip_boilerplate(instruction or ""))
     found = None
-    if sentences:  # the asking sentence only
-        found = _DECIMALS.search(sentences[-1]) or _TAIL_DECIMALS.search(sentences[-1])
+    asking = [s for s in sentences if s.rstrip().endswith("?")] or sentences[-1:]
+    for s in asking:
+        found = _DECIMALS.search(s) or _TAIL_DECIMALS.search(s)
+        if found:
+            break
+    if not found:
+        found = next((m for m in (_ROUND_ANSWER.match(s.strip()) for s in sentences) if m), None)
     if not found:
         return None
     word = found.group("n").lower()
