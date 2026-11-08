@@ -345,12 +345,18 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         def make(ttype=ttype, template=template, members=members):
             async def go():
                 start = time.monotonic()
-                results = await solve_group(ttype, template, members, client)
+                exhausted = None
+                try:
+                    results = await solve_group(ttype, template, members, client)
+                except BudgetExhausted as e:  # may carry the answers computed before it (shape retry)
+                    results, exhausted = getattr(e, "results", None) or {}, e
                 el = time.monotonic() - start
                 for task, _ in members:
                     res = results.get(task.task_id)
                     if res is not None and _final_2a(res):
                         settle(2, task, res, el)
+                if exhausted is not None:
+                    raise exhausted
             return go
         reward = sum(t.reward for t, _ in members)
         units.append({"prio": reward / est, "estimate": est, "run": make(),

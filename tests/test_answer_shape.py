@@ -185,3 +185,90 @@ def test_2b_right_shape_one_call(tmp_path):
     c = FakeClient("print(1983)")
     r = asyncio.run(solve_with_program(t, c))
     assert r.answer == "1983" and len(c.calls) == 1
+
+
+# ------------------------------------------------------------------ fix round 1
+
+def test_year_word_with_name_cue_and_no_when_is_unchecked():
+    assert expected_shape(_search("Which person was born in the same year as Ann Lee?")) is None
+    assert expected_shape(_search("Which company was founded in the same year as Cobalt Works?")) is None
+    assert expected_shape(_search("When was the company employing Ann Lee founded?")) == YEAR
+    assert expected_shape(_search("In which year was Ann Lee born?")) == YEAR
+
+
+class BudgetOnSecond(FakeClient):
+    async def chat(self, model, messages, max_tokens, **extra):
+        if self.calls:
+            self.calls.append({"model": model, "messages": messages})
+            from harness.llm import BudgetExhausted
+            raise BudgetExhausted("out")
+        return await super().chat(model, messages, max_tokens, **extra)
+
+
+def _fake_execute(answers):
+    from harness.result import SolveResult
+
+    def execute(task, spec):
+        return SolveResult("solved", answer=answers[task.task_id])
+    return execute
+
+
+def test_2a_budget_exhausted_in_retry_keeps_good_members(monkeypatch):
+    from harness import json_route
+    from harness.llm import BudgetExhausted
+    t1, t2 = _search("Which firm employs Ann Lee?", tid="s1"), _search("Which firm employs Bob Stone?", tid="s2")
+    template = templatize(t1.instruction)[0]
+    assert template == templatize(t2.instruction)[0]
+    members = [(t, templatize(t.instruction)[1]) for t in (t1, t2)]
+    monkeypatch.setattr(json_route, "_execute", _fake_execute({"s1": "Porto Labs", "s2": "1994"}))
+    client = BudgetOnSecond('{"entity": "{E1}", "path": [], "field": "Employer"}')
+    with pytest.raises(BudgetExhausted) as ei:
+        asyncio.run(solve_group("search", template, members, client))
+    out = ei.value.results
+    assert out["s1"].status == "solved" and out["s1"].answer == "Porto Labs"
+    assert out["s2"].status == "unparsed" and "shape" in out["s2"].note
+    assert len(client.calls) == 2
+
+
+def test_scheduler_writes_good_member_when_retry_exhausts_budget(tmp_path, monkeypatch):
+    from harness import json_route, scheduler
+    from tests.test_scheduler import _make, unparsed_target
+    monkeypatch.setenv("HARNESS_LOG_DIR", str(tmp_path / "logs"))
+    tasks = tmp_path / "tasks"
+    for tid, who in (("search_a", "Ann Lee"), ("search_b", "Bob Stone")):
+        _make(tasks, tid, "search", INTRO + f"Which firm employs {who}?" + TAIL)
+    later = []
+
+    async def prog(task, client):
+        later.append(task.task_id)
+        from harness.result import SolveResult
+        return SolveResult("unparsed")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(json_route, "_execute", _fake_execute({"search_a": "Porto Labs", "search_b": "1994"}))
+    client = BudgetOnSecond('{"entity": "{E1}", "path": [], "field": "Employer"}')
+    summary = scheduler.run(tasks, 100000, client)
+    assert (tasks / "search_a" / "answer.txt").read_text(encoding="utf-8").strip() == "Porto Labs"
+    assert not (tasks / "search_b" / "answer.txt").exists()
+    assert summary["solved"] == 1 and later == []  # the run stopped: no 2b after exhaustion
+    recs = [json.loads(x) for x in (tmp_path / "logs" / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert any(r["status"] == "budget_exhausted" for r in recs)
+
+
+def test_feedback_answers_are_truncated(tmp_path, monkeypatch):
+    from harness import json_route
+    long = "1" * 500
+    t = _search("Which firm employs Ann Lee?", tid="s1")
+    template, slots = templatize(t.instruction)
+    monkeypatch.setattr(json_route, "_execute", _fake_execute({"s1": long}))
+    client = FakeClient('{"entity": "{E1}", "path": [], "field": "Born"}', '{"impossible": true}')
+    asyncio.run(solve_group("search", template, [(t, slots)], client))
+    assert long not in client.calls[1]["messages"][-1]["content"]
+    assert "1" * 60 in client.calls[1]["messages"][-1]["content"]
+
+    pt = _program_task(tmp_path, "Which firm employs Ann Lee?")
+    c = FakeClient(f"print({long})", "print('Bluefin Systems')")
+    asyncio.run(solve_with_program(pt, c))
+    fb = c.calls[1]["messages"][-1]["content"]
+    assert long not in fb and "1" * 60 in fb

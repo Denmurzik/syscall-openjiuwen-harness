@@ -148,7 +148,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
                 return SolveResult("unparsed", note=f"answer shape: {bad}")
             shape_retried, model, attempts = True, MODEL_ALT, attempt + 2  # exactly one more call
             note = f"answer shape: {bad}"
-            feedback = (f"Your program printed {answer!r}, but the question asks for "
+            feedback = (f"Your program printed {answer[:60]!r}, but the question asks for "
                         f"{DESCRIBE[expected_shape(task)]}. Re-read the question and fix the program.")
         else:
             why = "timed out" if res.timed_out else (

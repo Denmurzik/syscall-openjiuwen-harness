@@ -19,6 +19,9 @@ _WORD = re.compile(r"[a-z]+")
 # question words that name the asked kind outright
 _YEAR_ASK = {"year", "when"}
 _NAME_ASK = {"who", "whom", "where", "city"}
+# with a bare "year" (no "when"), these make "year" possibly part of a clue, not the asked kind:
+# "Which person was born in the same year as X?"
+_NAME_NOUNS = {"person", "individual", "company", "firm", "organisation", "organization"}
 # field words (Born/Founded vs Headquarters/Employer/Mentor and their paraphrases)
 _YEAR_CUES = {"born", "birth", "birthday", "founded", "founding", "foundation", "established"}
 _NAME_CUES = {"headquarters", "headquarter", "headquartered", "head", "office", "based", "located",
@@ -34,6 +37,8 @@ _IS_NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 def _search_shape(instruction: str) -> str | None:
     words = set(_WORD.findall(_INTRO.sub(" ", strip_boilerplate(instruction)).casefold()))
     year_ask, name_ask = bool(words & _YEAR_ASK), bool(words & _NAME_ASK)
+    if year_ask and not name_ask and "when" not in words and words & _NAME_NOUNS:
+        return None
     if year_ask != name_ask:
         return YEAR if year_ask else NAME
     if year_ask:

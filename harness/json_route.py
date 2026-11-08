@@ -188,14 +188,17 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
     first = next(t for t, _ in members if t.task_id in bad)
     shape = expected_shape(first)
     feedback = (f"With that specification the answer has the wrong kind: the question asks for "
-                f"{DESCRIBE[shape]}, but the result was {out[first.task_id].answer!r}. Re-read the question "
+                f"{DESCRIBE[shape]}, but the result was {str(out[first.task_id].answer)[:60]!r}. Re-read the question "
                 "and reply with only a corrected JSON object.")
     history = [{"role": "assistant", "content": json.dumps(spec, ensure_ascii=False)},
                {"role": "user", "content": feedback}]
+    exhausted = None
     try:
         retry = await request_spec(task_type, template, client, MODEL_ALT, history)
     except LLMUnavailable:
         retry = None
+    except BudgetExhausted as e:  # keep the good members' answers: the caller settles them, then stops
+        retry, exhausted = None, e
     redo = [(t, s) for t, s in members if t.task_id in bad]
     again = (_execute_all(redo, retry) if isinstance(retry, dict) and retry.get("impossible") is not True
              else {})
@@ -205,6 +208,9 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
             out[task.task_id] = res
         else:
             out[task.task_id] = SolveResult("unparsed", note=f"answer shape: {bad[task.task_id]}")
+    if exhausted is not None:
+        exhausted.results = out
+        raise exhausted
     return out
 
 
