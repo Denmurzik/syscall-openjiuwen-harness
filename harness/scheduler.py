@@ -274,7 +274,9 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
             elif res.status == "infeasible" and phase >= 2:
                 guesses.pop(task.task_id, None)   # a phase-2 verdict withdraws the stored guess
             elif (res.extra or {}).get("best_guess") is not None:
-                guesses[task.task_id] = res
+                # a value that failed the shape check only fills an empty slot: it never replaces a stored guess
+                if task.task_id not in guesses or not (res.extra or {}).get("shape_mismatch"):
+                    guesses[task.task_id] = res
             status[task.task_id] = st
             # the unit's own model calls (a group's go to its first settled member), not a ledger delta
             traj.record({"phase": phase, "task_id": task.task_id, "status": st, **_take_calls(),

@@ -147,7 +147,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
                 return SolveResult("solved", answer=answer, note="model program")
             guess = answer
             if shape_retried:
-                return SolveResult("unparsed", note=f"answer shape: {bad}", extra={"best_guess": guess})
+                return SolveResult("unparsed", note=f"answer shape: {bad}", extra={"best_guess": guess, "shape_mismatch": True})
             shape_retried, model, attempts = True, MODEL_ALT, attempt + 2  # exactly one more call
             note = f"answer shape: {bad}"
             feedback = (f"Your program printed {answer[:60]!r}, but the question asks for "
@@ -162,7 +162,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
                                {"role": "user", "content": feedback + "\nFix it. Print the final answer with print(); "
                                            "do not write it to a file. Output only code."}]
         attempt += 1
-    return SolveResult("unparsed", note=note, extra=None if guess is None else {"best_guess": guess})
+    return SolveResult("unparsed", note=note, extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})
 
 
 # ---------------------------------------------------------------- coding

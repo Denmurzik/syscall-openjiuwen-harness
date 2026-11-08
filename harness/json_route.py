@@ -99,6 +99,8 @@ _REVERSE = re.compile("|".join([
     rf"{_SLOT} mentor(?:s|ed)?\b(?! by)",                       # does X mentor / X mentors / X mentored
     rf"{_SLOT} (?:is|was|has been) mentoring\b", rf"\b(?:is|was) {_SLOT} mentoring\b",
     rf"\b(?:has|had|have) {_SLOT} as (?:(?:his|her|their|its|a|an|the) )?(?:mentor|employer)\b",  # X is the mentor
+    rf"{_SLOT} (?:is|was) (?:(?:the|a|an) )?mentor of\b",          # X is the mentor of whom
+    r"\bwhose (?:mentor|employer)\b",                              # whose mentor is X: always asks for the mentee
     rf"\b(?:works?|working|worked) (?:for|at) {_SLOT}",
     rf"\bemployed (?:by|at) {_SLOT}", rf"{_SLOT} employs?\b", r"\bemployees?\b", rf"\bstaff (?:of|at) {_SLOT}",
 ]), re.I)
@@ -281,7 +283,7 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
             # not final, but the latest wrong-shape value stays a best guess for the scheduler's last pass
             guess = res.answer if res is not None and res.status == "solved" else out[task.task_id].answer
             out[task.task_id] = SolveResult("unparsed", note=f"answer shape: {bad[task.task_id]}",
-                                            extra={"best_guess": guess})
+                                            extra={"best_guess": guess, "shape_mismatch": True})
     if exhausted is not None:
         exhausted.results = out
         raise exhausted

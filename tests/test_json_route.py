@@ -427,3 +427,17 @@ def test_start_entity_not_found_is_final_only_for_a_task_value(tmp_path):
     out = asyncio.run(solve_group("search", template, [(t, slots)],
                                   FakeClient('{"entity": "Zzyzx Nobodi", "hops": ["Born"]}')))
     assert out["s1"].status == "unparsed" and "not a task value" in out["s1"].note
+
+
+@pytest.mark.parametrize("q", ["Whose mentor is {n}?", "{n} is the mentor of whom?", "{n} was a mentor of which person?",
+                               "Whose mentor is the mentor of {n}?", "Whose employer is {n}?"])
+def test_reverse_mentor_of_whom(q):
+    from harness.json_route import _reverse_relation
+    assert _reverse_relation(templatize(q.format(n="Ann Lee"), "search")[0]) is not None
+
+
+@pytest.mark.parametrize("q", ["Who is the mentor of {n}?",
+                               "Who is the mentor of the mentor of {n}?", "The mentor of {n} is who?"])
+def test_forward_mentor_of_is_not_flagged(q):
+    from harness.json_route import _reverse_relation
+    assert _reverse_relation(templatize(q.format(n="Ann Lee"), "search")[0]) is None

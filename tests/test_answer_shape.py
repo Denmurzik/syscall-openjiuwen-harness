@@ -294,21 +294,21 @@ def test_2a_final_shape_mismatch_keeps_best_guess(tmp_path):
     client = FakeClient(*['{"entity": "{E1}", "hops": ["Born"]}'] * 2)
     out = asyncio.run(solve_group("search", template, members, client))
     assert out["s1"].status == "unparsed" and out["s1"].answer is None
-    assert out["s1"].extra == {"best_guess": kb[name]["Born"]}
+    assert out["s1"].extra == {"best_guess": kb[name]["Born"], "shape_mismatch": True}
 
 
 def test_2b_final_shape_mismatch_keeps_best_guess(tmp_path):
     t = _program_task(tmp_path, "Which firm employs Ann Lee?")
     client = FakeClient("print(1990)", "print(1991)")
     res = asyncio.run(solve_with_program(t, client))
-    assert res.status == "unparsed" and res.extra == {"best_guess": "1991"}
+    assert res.status == "unparsed" and res.extra == {"best_guess": "1991", "shape_mismatch": True}
 
 
 def test_2b_shape_mismatch_then_crash_keeps_the_wrong_shape_guess(tmp_path):
     t = _program_task(tmp_path, "Which firm employs Ann Lee?")
     client = FakeClient("print(1990)", "raise SystemExit(3)")
     res = asyncio.run(solve_with_program(t, client))
-    assert res.status == "unparsed" and res.extra == {"best_guess": "1990"}
+    assert res.status == "unparsed" and res.extra == {"best_guess": "1990", "shape_mismatch": True}
 
 
 def test_scheduler_writes_2a_best_guess_when_2b_fails(tmp_path, monkeypatch):
@@ -328,3 +328,24 @@ def test_scheduler_writes_2a_best_guess_when_2b_fails(tmp_path, monkeypatch):
     client = FakeClient(*['{"entity": "{E1}", "hops": ["Born"]}'] * 2)
     scheduler.run(tasks, 100000, client)
     assert (tasks / "search_a" / "answer.txt").read_text(encoding="utf-8").strip() == "12 March 1983"
+
+
+def year_guess_target(queue, task, solver_name=None):
+    from harness.result import SolveResult
+    queue.put((task.task_id, SolveResult("unparsed", note="readings disagree", extra={"best_guess": "1983"})))
+
+
+def test_wrong_shape_guess_never_replaces_a_stored_guess(tmp_path, monkeypatch):
+    """Phase 1 stores a right-shape guess; 2a and 2b only produce wrong-shape values: the phase-1 guess wins."""
+    from harness import json_route, scheduler
+    from tests.test_scheduler import _make
+    monkeypatch.setenv("HARNESS_LOG_DIR", str(tmp_path / "logs"))
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_a", "search", INTRO + "In which year was Ann Lee born?" + TAIL)
+    monkeypatch.setattr(scheduler, "_phase1_target", year_guess_target)
+    monkeypatch.setattr(json_route, "_execute", _fake_execute({"search_a": "12 March 1983"}))
+    client = FakeClient('{"entity": "{E1}", "hops": ["Born"]}', '{"entity": "{E1}", "hops": ["Born"]}',
+                        "print('12 March 1983')", "raise SystemExit(3)")  # 2b: wrong shape, then a crash
+    scheduler.run(tasks, 100000, client)
+    assert len(client.calls) == 4
+    assert (tasks / "search_a" / "answer.txt").read_text(encoding="utf-8").strip() == "1983"
