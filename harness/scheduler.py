@@ -363,11 +363,16 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
             if res is not None and (_final_2a(res) or (res.extra or {}).get("best_guess") is not None):
                 settle(2, task, res, el)
 
-    def make_unit(call, members, est, name):
-        """`call()` returns {task_id: result}; its model calls and cost go to the first settled member."""
+    def make_unit(call, members, est, name, stream=False):
+        """`call()` returns {task_id: result}; its model calls and cost go to the first settled member.
+        With `stream` the call settles each group itself as soon as it is ready (call(on_group)), so a
+        cancelled unit keeps the groups that were done."""
         async def go():
             start = time.monotonic()
             exhausted = None
+            if stream:
+                await call(lambda members, results: settle_group(members, results, time.monotonic() - start))
+                return
             try:
                 results = await call()
             except BudgetExhausted as e:  # may carry the answers computed before it (shape retry)
@@ -392,8 +397,8 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                 continue
             allm = [m for _, ms in chunk for m in ms]
             est = sum(estimate_json_tokens(t) for t, _ in chunk)  # the shared system prompt makes it an upper bound
-            units.append(make_unit(lambda ttype=ttype, chunk=chunk: solve_batch(ttype, chunk, client), allm, est,
-                                   f"batch:{ttype}:{len(chunk)}"))
+            units.append(make_unit(lambda on_group, ttype=ttype, chunk=chunk: solve_batch(ttype, chunk, client, on_group=on_group),
+                                   allm, est, f"batch:{ttype}:{len(chunk)}", stream=True))
     for ttype, template, members in singles:
         # expected cost of one spec call; the rare shape retry on MODEL_ALT (up to 2 more) is left to the reserve
         est = estimate_json_tokens(template)
