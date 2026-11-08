@@ -6,7 +6,9 @@ import os
 MODEL_FAST = "qwen3.8-27b-noreason"
 MODEL_ALT = "qwen3.6-35b-a3b-noreason"
 MODEL_REASON = "qwen3.8-27b"
-MODEL_ARBITRATE = MODEL_FAST  # re-measured round 2 final: 146/146 hidden-correct, 0 regressions, same as MODEL_ALT
+# 2c arbitration: both are asked independently, the phase-1 choice changes only if they agree
+# (round 3: one model alone broke 4 of 42 correct choices on hard coding)
+ARBITRATE_MODELS = (MODEL_FAST, MODEL_ALT)
 
 PHASE1_WORKERS = 8
 CODING_TIME_LIMIT = 85

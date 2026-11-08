@@ -248,9 +248,9 @@ def test_data_schema_lists_new_metrics():
     assert "six keys" not in p
 
 
-def test_arbitrate_model_comes_from_config():
+def test_arbitrate_models_come_from_config():
     from harness import arbitrate, config
-    assert arbitrate.MODEL_ARBITRATE == config.MODEL_ARBITRATE
+    assert arbitrate.ARBITRATE_MODELS == config.ARBITRATE_MODELS == (config.MODEL_FAST, config.MODEL_ALT)
 
 
 def test_model_names_come_from_config():

@@ -260,3 +260,82 @@ def test_partial_repair_leaves_tests_byte_identical(tmp_path):
     before = tp.read_bytes()
     res = solve(t, time_limit=60)
     assert res.tentative and tp.read_bytes() == before
+
+
+# ---------------------------------------------------------------- tie preference among green fixes
+
+from harness.solvers.coding_solver import _edit_rank  # noqa: E402
+
+
+def _r(buggy_body, cand_body):
+    return _edit_rank(f"def f(x, y):\n    {buggy_body}\n", f"def f(x, y):\n    {cand_body}\n")
+
+
+def test_edit_rank_comparison_direction_then_strictness_then_negation():
+    flip, strict, neg = _r("return x < y", "return x > y"), _r("return x > y", "return x >= y"), \
+        _r("return x > y", "return x <= y")
+    assert flip < strict < neg
+    assert _r("return x == y", "return x != y") > flip
+
+
+def test_edit_rank_plus_minus_beats_other_operators():
+    assert _r("return x + y", "return x - y") < _r("return x + y", "return x % y")
+    assert _r("return x / y", "return x // y") < _r("return x / y", "return x % y")
+    assert _r("x += y\n    return x", "x -= y\n    return x") < _r("x += y\n    return x", "x *= y\n    return x")
+
+
+def test_edit_rank_constant_towards_smaller_magnitude():
+    assert _r("return x - 2", "return x - 1") < _r("return x - 2", "return x - 3")
+    assert _r("return sum(2 for v in x)", "return sum(1 for v in x)") < \
+        _r("return sum(1 for v in x)", "return sum(2 for v in x)")
+
+
+def test_edit_rank_constant_beats_flip_only_through_the_mutant_order():
+    # equal rank: the solver falls back to the mutant order (constants first)
+    assert _r("return sum(2 for v in x if v > y)", "return sum(1 for v in x if v > y)") == \
+        _r("return sum(2 for v in x if v > y)", "return sum(2 for v in x if v < y)")
+
+
+def test_edit_rank_degenerate_code_removed_or_created():
+    assert _r("return x % 1 == y", "return x % 2 == y") < _r("return x % 1 == y", "return x % 1 != y")
+    assert _r("return x[::-0]", "return x[::-1]") < _r("return x[::-0]", "return x[::--1]")
+    assert _r("return x[-1]", "return x[-2]") < _r("return x[-1]", "return x[-0]")
+    assert _r("return x % y == -1", "return x % y == -0") < _r("return x % y == -1", "return x % y != -1")
+
+
+TIE_TESTS = "import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n    def test_v(self):\n"
+
+
+def _chosen_src(res):
+    it = res.extra["ambiguous"][0]
+    return it["candidates"][it["chosen"]], it
+
+
+def test_tie_prefers_constant_fix_over_comparison_flip(tmp_path):
+    lib = "def count_positive(xs):\n    return sum(2 for x in xs if x > 0)\n"
+    t = _custom(tmp_path, lib, TIE_TESTS + "        self.assertEqual(mylib.count_positive([0, 0, 4, -4, 9]), 2)\n")
+    res = solve(t)
+    src, it = _chosen_src(res)
+    assert "sum(1 for x in xs if x > 0)" in src.replace("((", "(").replace("))", ")")
+    assert it["chosen"] == 0   # the preferred fix is option 1 for the arbitration
+    text = (t.workspace / "mylib.py").read_text(encoding="utf-8")
+    assert "1 for x in xs if x > 0" in text and run_tests(t.workspace).ok
+
+
+def test_tie_prefers_keeping_comparison_direction(tmp_path):
+    lib = "def filter_values(d, t):\n    return {k: v for k, v in d.items() if v > t}\n"
+    t = _custom(tmp_path, lib, TIE_TESTS + "        self.assertEqual(mylib.filter_values({'a': 2, 'b': 2}, 2), {'a': 2, 'b': 2})\n")
+    res = solve(t)
+    src, it = _chosen_src(res)
+    assert "v >= t" in src and it["chosen"] == 0
+    assert "v >= t" in (t.workspace / "mylib.py").read_text(encoding="utf-8")
+
+
+def test_tie_keeps_strict_comparison_first_occurrence(tmp_path):
+    lib = ("def longest_word(s):\n    best = ''\n    for w in s.split():\n"
+           "        if len(w) < len(best):\n            best = w\n    return best\n")
+    t = _custom(tmp_path, lib, TIE_TESTS + "        self.assertEqual(mylib.longest_word('a bbb cc'), 'bbb')\n")
+    res = solve(t)
+    src, it = _chosen_src(res)
+    assert "len(w) > len(best)" in src and it["chosen"] == 0
+    assert "len(w) > len(best)" in (t.workspace / "mylib.py").read_text(encoding="utf-8")

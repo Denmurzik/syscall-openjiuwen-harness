@@ -1,8 +1,10 @@
 """Model arbitration among behaviourally different green fixes of a coding task.
 
-One call per task, all ambiguous functions in one prompt, the answer is option numbers.
-The deterministic choice is already on disk; it is replaced only after the chosen variant
-passes the full visible test run (tests are never touched).
+One call per model per task (MODEL_FAST and MODEL_ALT, concurrently, independently), all
+ambiguous functions in one prompt, the answer is option numbers. A function's phase-1 choice
+changes only when both models name the same other option; any disagreement, unusable reply or
+unavailable model keeps it. The deterministic choice is already on disk; it is replaced only
+after the agreed variant passes the full visible test run (tests are never touched).
 """
 import ast
 import asyncio
@@ -13,7 +15,7 @@ import textwrap
 from pathlib import Path
 
 from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
-from harness.config import MODEL_ARBITRATE
+from harness.config import ARBITRATE_MODELS
 from harness.llm_routes import _run_candidate, write_mylib
 from harness.result import SolveResult
 from harness.solvers.coding_solver import _segment, _splice, _units
@@ -84,20 +86,40 @@ def parse_choice(text: str, items: list[dict]) -> list[int] | None:
     return picks
 
 
-async def _ask(client, items: list[dict], asserts: list[str]) -> list[int] | None:
+async def _ask(client, model: str, items: list[dict], asserts: list[str]) -> list[int] | None:
     """Structured output and its 400 fallback live in LLMClient; here only a garbage reply
     under the regex gets one more try without it."""
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": _prompt(items, asserts)}]
     structured = getattr(client, "structured_ok", True)
     if structured:
-        r = await client.chat(MODEL_ARBITRATE, messages, MAX_TOKENS,
+        r = await client.chat(model, messages, MAX_TOKENS,
                               extra_body={"guided_regex": _regex(items)})
         picks = parse_choice(r.text, items)
         if picks is not None or not getattr(client, "structured_ok", True):
             return picks
-    r = await client.chat(MODEL_ARBITRATE, messages, MAX_TOKENS)
+    r = await client.chat(model, messages, MAX_TOKENS)
     return parse_choice(r.text, items)
+
+
+async def _agreed(client, items: list[dict], asserts: list[str]) -> list[int]:
+    """Per function: the option every model named, else the phase-1 choice. LLMUnavailable only
+    when no model was reachable; BudgetExhausted (and anything unexpected) propagates."""
+    replies = await asyncio.gather(*(_ask(client, m, items, asserts) for m in ARBITRATE_MODELS),
+                                   return_exceptions=True)
+    for r in replies:
+        if isinstance(r, BaseException) and not isinstance(r, LLMUnavailable):
+            raise r
+    if all(isinstance(r, LLMUnavailable) for r in replies):
+        raise replies[0]
+    picks = [it["chosen"] for it in items]
+    if any(r is None or isinstance(r, BaseException) for r in replies):
+        return picks
+    for i, it in enumerate(items):
+        named = {r[i] for r in replies}
+        if len(named) == 1:
+            picks[i] = named.pop()
+    return picks
 
 
 def _apply(src: str, items: list[dict], picks: list[int]) -> str | None:
@@ -119,11 +141,9 @@ async def arbitrate(task: Task, extra: dict, client) -> SolveResult:
     if not items:
         return SolveResult("solved", answer="DONE", note="nothing to arbitrate")
     try:
-        picks = await _ask(client, items, list(extra.get("visible_asserts") or []))
+        picks = await _agreed(client, items, list(extra.get("visible_asserts") or []))
     except LLMUnavailable as e:
         return SolveResult("unparsed", note=f"llm unavailable: {e}")
-    if picks is None:
-        return SolveResult("solved", answer="DONE", note="arbitration reply unusable, kept")
     if all(p == it["chosen"] for p, it in zip(picks, items)):
         return SolveResult("solved", answer="DONE", note="arbitration kept the choice")
     ws = Path(task.workspace)

@@ -346,11 +346,114 @@ def _norm(seg: str) -> str:
         return seg
 
 
+# ---- tie preference: which of several green fixes looks like the undone bug ----------------
+# Ranks one fix against the buggy function (lower = preferred). Used only among fixes that all
+# pass every visible test, so it decides ties, never correctness: a comparison flip (< <-> >)
+# beats a strictness change (> -> >=, the "first occurrence" side stays strict) beats a negation
+# (> -> <=, == -> !=); + <-> - and / <-> // beat other operator swaps; a constant moving towards
+# zero beats one moving away; fixes that remove a no-op (x % 1, x // 1, x * 1, --x) win, fixes
+# that create one lose. Equal ranks keep the mutant order (constants first).
+
+_CMP_SIDE = {ast.Lt: "<", ast.LtE: "<", ast.Gt: ">", ast.GtE: ">"}
+_NATURAL_SWAPS = ({ast.Add, ast.Sub}, {ast.Div, ast.FloorDiv})
+_NATURAL_CALLS = {"sorted", "reversed"}
+
+
+def _int_const(node) -> int | None:
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        v = _int_const(node.operand)
+        return None if v is None else -v
+    return None
+
+
+def _diff_pairs(a, b, out: list) -> None:
+    if type(a) is not type(b):
+        out.append((a, b))
+        return
+    if not isinstance(a, ast.AST):
+        if a != b:
+            out.append((a, b))
+        return
+    for f in a._fields:
+        va, vb = getattr(a, f, None), getattr(b, f, None)
+        if isinstance(va, list) and isinstance(vb, list):
+            if len(va) != len(vb):
+                out.append((a, b))
+                continue
+            for x, y in zip(va, vb):
+                _diff_pairs(x, y, out)
+        elif isinstance(va, ast.AST) or isinstance(vb, ast.AST):
+            _diff_pairs(va, vb, out)
+        elif type(va) is not type(vb) or va != vb:
+            out.append((a, b))
+            return
+
+
+def _pair_rank(a, b) -> float:
+    va, vb = _int_const(a), _int_const(b)
+    if va is not None and vb is not None:
+        return 0.5 if abs(vb) > abs(va) else 0.0
+    if isinstance(a, ast.Constant) and isinstance(b, ast.Constant):
+        return 1.0
+    ta, tb = type(a), type(b)
+    if ta in _CMP_SIDE and tb in _CMP_SIDE:
+        same_side = _CMP_SIDE[ta] == _CMP_SIDE[tb]
+        same_strict = (ta in (ast.Lt, ast.Gt)) == (tb in (ast.Lt, ast.Gt))
+        if same_strict and not same_side:
+            return 0.0      # flip
+        return 1.0 if same_side else 2.0   # strictness change / negation
+    if isinstance(a, ast.operator) and isinstance(b, ast.operator):
+        return 0.0 if {ta, tb} in _NATURAL_SWAPS else 2.0
+    if isinstance(a, ast.Name) and isinstance(b, ast.Name):
+        return 0.0 if {a.id, b.id} <= _NATURAL_CALLS else 1.0
+    return 2.0
+
+
+def _degenerate(tree: ast.AST) -> float:
+    """Weight of no-op code: x * 1, x * 0, x // 1, x % 1, x / 1, x ** 1, += 0, sum(0 for ...),
+    --x (3 each) and -0 (1)."""
+    n = 0.0
+    for x in ast.walk(tree):
+        if isinstance(x, ast.UnaryOp) and isinstance(x.op, ast.USub):
+            if isinstance(x.operand, ast.UnaryOp) and isinstance(x.operand.op, ast.USub):
+                n += 3
+            elif _int_const(x.operand) == 0:
+                n += 1
+        elif isinstance(x, (ast.BinOp, ast.AugAssign)):
+            right = _int_const(x.right if isinstance(x, ast.BinOp) else x.value)
+            left = _int_const(x.left) if isinstance(x, ast.BinOp) else None
+            if isinstance(x.op, ast.Mult) and (right in (0, 1) or left in (0, 1)):
+                n += 3
+            elif isinstance(x.op, (ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)) and right == 1:
+                n += 3
+            elif isinstance(x, ast.AugAssign) and isinstance(x.op, (ast.Add, ast.Sub)) and right == 0:
+                n += 3
+        elif (isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == "sum"
+              and len(x.args) == 1 and isinstance(x.args[0], ast.GeneratorExp)
+              and _int_const(x.args[0].elt) == 0):
+            n += 3
+    return n
+
+
+def _edit_rank(buggy: str, cand: str) -> float:
+    try:
+        a, b = ast.parse(textwrap.dedent(buggy)), ast.parse(textwrap.dedent(cand))
+    except SyntaxError:
+        return 99.0
+    pairs: list = []
+    _diff_pairs(a, b, pairs)
+    return sum(_pair_rank(x, y) for x, y in pairs) + _degenerate(b) - _degenerate(a)
+
+
 def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
-               failing: list[str]) -> dict | None:
+               failing: list[str]) -> tuple[dict | None, str]:
     """Fixed top-level functions with several green fixes that behave differently on probe
     inputs. Candidates are single mutants of the buggy function spliced into the chosen
-    solution (other functions stay as chosen); one representative per behaviour cluster."""
+    solution (other functions stay as chosen); one representative per behaviour cluster, best
+    `_edit_rank` first. When another cluster ranks better than the phase-1 choice it becomes the
+    choice (after a full green run). Returns (hint or None, the source to keep on disk)."""
     orig_units = {u.qualname: u for u in _units(original)}
     found: list[dict] = []
     asserts: list[str] = []
@@ -361,21 +464,23 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
             raise _OutOfTime()
         return min(5.0, left - 2)
 
-    for u in _units(cur):
-        old = orig_units.get(u.qualname)
-        if old is None or "." in u.qualname or _segment(cur, u) == _segment(original, old):
+    for qual in [u.qualname for u in _units(cur)]:
+        u = {x.qualname: x for x in _units(cur)}.get(qual)   # fresh: an earlier switch may move lines
+        old = orig_units.get(qual)
+        if u is None or old is None or "." in qual or _segment(cur, u) == _segment(original, old):
             continue
-        call = visible_call(test_src, u.qualname)
+        call = visible_call(test_src, qual)
         if call is None:
             continue
         args, stmt = call
         inputs = inputs_from_call(args)
-        chosen_seg = _segment(cur, u)
-        clusters: dict[tuple, str] = {}
-        chosen_seg = _segment(cur, u)
+        buggy = textwrap.dedent(_segment(original, old)).strip("\n")
+        chosen_seg = textwrap.dedent(_segment(cur, u)).strip("\n")
+        clusters: dict[tuple, list] = {}   # behaviour -> [rank, first order, source]
         try:
-            chosen_key = tuple(behaviour(cur, u.qualname, inputs, probe_timeout()))
-            seen = {_norm(chosen_seg)}
+            chosen_key = tuple(behaviour(cur, qual, inputs, probe_timeout()))
+            chosen_norm, chosen_order = _norm(chosen_seg), None
+            seen: set[str] = set()
             tried = 0
             for m in tagged_mutants(_segment(original, old)):
                 if tried >= AMBIG_MUTANT_CAP:
@@ -385,32 +490,49 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
                     continue
                 seen.add(seg)
                 tried += 1
+                if seg == chosen_norm:   # the phase-1 choice itself: its place in the mutant order
+                    chosen_order = tried
+                    continue
                 cand = _splice(cur, u, m.source)
                 if not ctx.candidate(cand, failing).ok or not ctx.run(cand, None, ctx.verify_timeout).ok:
                     continue
-                key = tuple(behaviour(cand, u.qualname, inputs, probe_timeout()))
+                key = tuple(behaviour(cand, qual, inputs, probe_timeout()))
+                src = textwrap.dedent(m.source).strip("\n")
+                rank = _edit_rank(buggy, src)
                 if key not in clusters:
-                    clusters[key] = textwrap.dedent(m.source).strip("\n")
+                    clusters[key] = [rank, tried, src]
+                elif rank < clusters[key][0]:
+                    clusters[key][0], clusters[key][2] = rank, src
+            chosen_rank = _edit_rank(buggy, chosen_seg)
+            if chosen_order is None:
+                chosen_order = tried + 1
+            if chosen_key in clusters:
+                clusters[chosen_key] = [min(chosen_rank, clusters[chosen_key][0]),
+                                        min(chosen_order, clusters[chosen_key][1]), chosen_seg]
+            else:
+                clusters[chosen_key] = [chosen_rank, chosen_order, chosen_seg]
+            if len(clusters) < 2:
+                continue
+            ranked = sorted(clusters, key=lambda k: (clusters[k][0], clusters[k][1]))
+            if ranked[0] != chosen_key:
+                new = _splice(cur, u, clusters[ranked[0]][2])
+                if ctx.run(new, None, ctx.verify_timeout).ok:
+                    cur, chosen_key = new, ranked[0]
         except _OutOfTime:
             break   # keep what earlier functions already yielded
-        clusters[chosen_key] = textwrap.dedent(chosen_seg).strip("\n")
-        if len(clusters) < 2:
-            continue
-        reps = [(k, s) for k, s in clusters.items() if k != chosen_key][:AMBIG_MAX_OPTIONS - 1]
-        reps.append((chosen_key, clusters[chosen_key]))
-        # the chosen one keeps its natural place among the mutants' clusters, not always last
-        order = list(clusters)
-        reps.sort(key=lambda r: order.index(r[0]))
-        found.append({"func": u.qualname,
-                      "buggy": textwrap.dedent(_segment(original, old)).strip("\n"),
-                      "candidates": [s for _k, s in reps],
-                      "chosen": [k for k, _s in reps].index(chosen_key),
-                      "calls": [f"{u.qualname}({', '.join(map(repr, a))})" for a in inputs],
-                      "outputs": [list(k) for k, _s in reps]})
+        keys = ranked[:AMBIG_MAX_OPTIONS]
+        if chosen_key not in keys:
+            keys[-1] = chosen_key
+        found.append({"func": qual,
+                      "buggy": buggy,
+                      "candidates": [clusters[k][2] for k in keys],
+                      "chosen": keys.index(chosen_key),
+                      "calls": [f"{qual}({', '.join(map(repr, a))})" for a in inputs],
+                      "outputs": [list(k) for k in keys]})
         asserts.append(stmt)
     if not found:
-        return None
-    return {"ambiguous": found, "visible_asserts": asserts}
+        return None, cur
+    return {"ambiguous": found, "visible_asserts": asserts}, cur
 
 
 def _partial(ws: Path, mylib: Path, cur: str, report: TestReport) -> SolveResult:
@@ -469,10 +591,14 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             raise
         _write_mylib(mylib, cur)
         shutil.rmtree(ws / "__pycache__", ignore_errors=True)
-        try:  # the deterministic choice is already on disk; ambiguity only adds a hint
-            extra = _ambiguity(ctx, original, cur, test_src, initially_failing)
+        try:  # the deterministic choice is already on disk; ambiguity adds a hint and may
+            # swap in a better-ranked green fix (tie preference)
+            extra, preferred = _ambiguity(ctx, original, cur, test_src, initially_failing)
         except Exception:
-            extra = None
+            extra, preferred = None, cur
+        if preferred != cur:
+            _write_mylib(mylib, preferred)
+            shutil.rmtree(ws / "__pycache__", ignore_errors=True)
         if extra:
             return SolveResult("solved", answer="DONE", note="repaired by mutation, ambiguous",
                                tentative=True, extra=extra)
