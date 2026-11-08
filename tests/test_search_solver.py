@@ -162,9 +162,9 @@ def test_ambiguous_scope_solve(tmp_path):
         "a.md": "# Ann\nEmployer: Acme\n",
         "c.md": "# Acme\nMentor: Dan\n",
     })
-    # reading 1: mentor of (Ann's employer) = Dan; reading 2: (mentor of Ann)'s employer has no answer. A reading
-    # that asks the wrong kind of entity for a relation never wins silently: unparsed.
-    assert solve(_task(_q("Who is the mentor of Ann's employer?"), ws)).status == "unparsed"
+    # reading 1: mentor of (Ann's employer) = Dan; reading 2: (mentor of Ann)'s employer has no answer
+    # (Acme has only a Mentor field, so it is not recognisably a company: no kind mismatch)
+    assert solve(_task(_q("Who is the mentor of Ann's employer?"), ws)) == SolveResult("solved", "Dan")
     assert solve(_task(_q("Who is the mentor of Nobody's employer?"), ws)).status == "infeasible"
     # both readings answer with different values -> unparsed
     ws2 = _kb(tmp_path / "x", {
@@ -220,10 +220,10 @@ def _spec(entity, path, field):
 def test_execute_inserts_employer_for_company_field(tmp_path):
     ws = _kb(tmp_path, _KB)
     # a company field asked of a person is not coerced through the employer
-    assert execute(_spec("Alice Novak", [], "Headquarters"), ws).status == "infeasible"
-    assert execute(_spec("Alice Novak", ["Mentor"], "Founded"), ws).status == "infeasible"
-    assert execute(_spec("Arktika Labs", [], "Born"), ws).status == "infeasible"
-    assert execute(_spec("Arktika Labs", ["Mentor"], "Born"), ws).status == "infeasible"
+    assert execute(_spec("Alice Novak", [], "Headquarters"), ws).status == "unparsed"
+    assert execute(_spec("Alice Novak", ["Mentor"], "Founded"), ws).status == "unparsed"
+    assert execute(_spec("Arktika Labs", [], "Born"), ws).status == "unparsed"
+    assert execute(_spec("Arktika Labs", ["Mentor"], "Born"), ws).status == "unparsed"
     assert solve(_task(_q("In which city does Alice Novak work?"), ws)) == SolveResult("solved", "Medan")
 
 
@@ -237,7 +237,7 @@ def test_execute_no_coercion_when_already_company_or_other_field(tmp_path):
 def test_execute_no_coercion_when_field_also_on_people(tmp_path):
     files = dict(_KB, **{"person_d.md": "# Dan Roe\n\nBorn: 1990\nEmployer: Arktika Labs\nFounded: 2001\n"})
     ws = _kb(tmp_path, files)
-    assert execute(_spec("Alice Novak", [], "Founded"), ws).status == "infeasible"
+    assert execute(_spec("Alice Novak", [], "Founded"), ws).status == "unparsed"
 
 
 LOOSE = {

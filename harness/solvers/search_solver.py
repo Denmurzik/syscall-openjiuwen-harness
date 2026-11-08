@@ -324,12 +324,16 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
         current = entity
         for key in path:
             nxt = lookup(current, key)
+            if nxt is None and _kind_mismatch(index, current, key):
+                return _unparsed(f"kind mismatch: {current!r} and {key!r}")
             if nxt is None:
                 return SolveResult("infeasible", note=f"{current!r} has no {key!r}")
             if _norm(nxt) not in index:
                 return SolveResult("infeasible", note=f"entity not found: {nxt!r}")
             current = nxt
         value = lookup(current, field)
+        if value is None and _kind_mismatch(index, current, field):
+            return _unparsed(f"kind mismatch: {current!r} and {field!r}")
         if value is None:
             return SolveResult("infeasible", note=f"{current!r} has no {field!r}")
         return SolveResult("solved", value)
@@ -337,10 +341,23 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
         return _unparsed(f"bad spec: {e!r}")
 
 
+_PERSON_KEYS = {"mentor", "employer", "born"}
+_COMPANY_KEYS = {"headquarters", "founded"}
+
+
+def _kind_mismatch(index: dict, name: str, key: str) -> bool:
+    """A person key asked of a company or a company key asked of a person: more likely our misreading of the
+    wording than a genuinely infeasible task, so the caller answers `unparsed`."""
+    keys = {_norm(k) for k in index.get(_norm(name), {})}
+    person, company = bool(keys & _PERSON_KEYS), bool(keys & _COMPANY_KEYS)
+    key = _norm(key)
+    return (key in _PERSON_KEYS and company and not person) or (key in _COMPANY_KEYS and person and not company)
+
+
 def _run(specs: list[dict], workspace: Path) -> SolveResult:
     results = [execute(spec, workspace) for spec in specs]
     answers = {r.answer for r in results if r.status == "solved"}
-    if answers and any(r.status == "infeasible" and "has no" in r.note for r in results):
+    if answers and any(r.status == "unparsed" and "kind mismatch" in r.note for r in results):
         # one reading applies a relation to the wrong kind of entity ("the mentor of X's employer"): do not let the
         # other reading win silently
         return _unparsed("ambiguous question: a reading asks a relation the entity does not have",)
