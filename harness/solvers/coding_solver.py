@@ -419,6 +419,7 @@ def _callee_is_pure(tree: ast.Module, name: str) -> bool:
 
 
 _PATCHY = {"mock", "patch", "monkeypatch", "patch_object", "MagicMock", "Mock"}
+_REFLECT = {"setattr", "delattr", "reload", "import_module", "__import__", "__dict__", "skipTest", "skip"}
 _SETUPS = {"setUp", "setUpClass", "setUpModule", "tearDown", "tearDownClass", "tearDownModule"}
 
 
@@ -438,6 +439,10 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
         if isinstance(node, ast.Name) and node.id in _PATCHY:
             return False
         if isinstance(node, ast.Attribute) and node.attr in _PATCHY:
+            return False
+        if isinstance(node, ast.Name) and node.id in _REFLECT:
+            return False
+        if isinstance(node, ast.Attribute) and node.attr in _REFLECT:
             return False
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             mods = [getattr(node, "module", None) or ""] + [a.name for a in node.names]
@@ -464,10 +469,12 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
             return f.id
         return None
 
-    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef)]:
+    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and not n.decorator_list]:
         for fn in cls.body:
-            if not isinstance(fn, ast.FunctionDef):
+            if not isinstance(fn, ast.FunctionDef) or fn.decorator_list:
                 continue
+            if any(isinstance(n, (ast.Return, ast.Raise)) for n in ast.walk(fn)):
+                continue  # asserts may never run
             seen: dict[tuple, object] = {}
             for st in fn.body:  # direct children only: no if/try/with/for around the asserts
                 if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Call)):

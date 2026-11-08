@@ -423,3 +423,19 @@ def test_proof_stateful_callee_means_no_proof():
 def test_stateful_no_arg_and_missing_function():
     assert not _pc(_t(_TWO), "def h(x):\n    return x\n")
     assert not _pc(_t("self.assertEqual(m.f(), 1)\nself.assertEqual(m.f(), 2)"), "def f():\n    return 1\n")
+
+
+def test_proof_decorators_returns_and_reflection():
+    two = "self.assertEqual(m.f(7), 7)" + chr(10) + "self.assertEqual(m.f(7), 8)"
+    assert _pc(_t(two), _PURE)
+    for deco in ("@unittest.skip('x')", "@unittest.expectedFailure", "@some.thing"):
+        t = _t(two).replace("    def test_a", "    " + deco + chr(10) + "    def test_a")
+        assert not _pc(t, _PURE), deco
+    t = _t(two).replace("class T(", "@unittest.skip('x')" + chr(10) + "class T(")
+    assert not _pc(t, _PURE)
+    assert not _pc(_t("return" + chr(10) + two), _PURE)
+    assert not _pc(_t("raise RuntimeError()" + chr(10) + two), _PURE)
+    assert not _pc(_t("self.skipTest('x')" + chr(10) + two), _PURE)
+    assert not _pc(_t("if self.id():" + chr(10) + "    return" + chr(10) + two), _PURE)
+    for hook in ("setattr(m, 'f', len)", "delattr(m, 'f')", "importlib.reload(m)", "m.__dict__.update({})"):
+        assert not _pc(_t(hook + chr(10) + two), _PURE), hook
