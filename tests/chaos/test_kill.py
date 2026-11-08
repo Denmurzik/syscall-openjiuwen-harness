@@ -50,7 +50,7 @@ def test_kill_during_phase2(tasks, tmp_path, make_proxy, baseline):
     proxy = make_proxy(lambda n, b: "hang", sleep_s=60)
     tmp = tmp_path / "run"
     tmp.mkdir()
-    proc, out, t0 = start(tasks, tmp, proxy, {"BUDGET": 50000, "CHAOS_LLM_TIMEOUT": 60})
+    proc, out, t0 = start(tasks, tmp, proxy, {"BUDGET": 50000, "HARNESS_LLM_TIMEOUT": 60})
     deadline = time.monotonic() + 120
     try:
         while time.monotonic() < deadline and proc.poll() is None and proxy.requests < 2:

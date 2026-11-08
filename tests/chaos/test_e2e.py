@@ -82,7 +82,7 @@ def test_deadline_ends_run_while_proxy_hangs(tasks, tmp_path, make_proxy, baseli
     """Short run deadline + a proxy that hangs far longer than the client timeout."""
     proxy = make_proxy(lambda n, b: "hang", sleep_s=60)
     run = run_harness(tasks, tmp_path / "run", proxy,
-                      {"BUDGET": 50000, "CHAOS_LLM_TIMEOUT": 30, "CHAOS_DEADLINE_S": 45,
-                       "CHAOS_STOP_BEFORE_S": 10},
+                      {"BUDGET": 50000, "HARNESS_LLM_TIMEOUT": 30, "HARNESS_DEADLINE_S": 45,
+                       "HARNESS_STOP_NEW_BEFORE_DEADLINE_S": 10},
                       timeout=150)
     check_common(run, tasks, baseline, bound=90)

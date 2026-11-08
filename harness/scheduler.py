@@ -120,7 +120,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
                 pending.clear()
             drain()
             for tid, (proc, start, task) in list(running.items()):
-                limit = config.PHASE1_TIMEOUT.get(task.task_type, config.PHASE1_TIMEOUT["default"])
+                limit = config.phase1_timeout(task.task_type)
                 if not proc.is_alive():
                     drain(0.3)  # the result may still be in the pipe
                     if tid in running:
@@ -165,7 +165,7 @@ async def _drive(units: list, t0: float, deadline_s: float, ledger: TokenLedger,
 
     async def worker() -> None:
         while not state["stop"]:
-            if time.monotonic() - t0 > deadline_s - config.STOP_NEW_BEFORE_DEADLINE_S:
+            if time.monotonic() - t0 > deadline_s - config.stop_new_before_deadline_s():
                 state["stop"] = True
                 return
             unit = next(it, None)
@@ -197,8 +197,10 @@ async def _drive(units: list, t0: float, deadline_s: float, ledger: TokenLedger,
     await asyncio.gather(*(worker() for _ in range(max(1, LLM_WORKERS))))
 
 
-def run(tasks_dir: Path, budget: float, client, deadline_s: float = config.DEADLINE_S,
+def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
         phase1_workers: int = config.PHASE1_WORKERS) -> dict:
+    if deadline_s is None:
+        deadline_s = config.deadline_s()
     t0 = time.monotonic()
     traj = Trajectory(_log_dir())
     ledger = getattr(client, "ledger", None) or TokenLedger(budget, budget * config.RESERVE_FRACTION)

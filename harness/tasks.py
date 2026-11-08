@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,16 +37,27 @@ def _task_dirs(root: Path) -> list[Path]:
     return nested or top
 
 
+def _reward(data: dict, d: Path) -> float:
+    try:
+        v = float(data["reward"])
+        if v == v and abs(v) != float("inf"):
+            return v
+    except (KeyError, TypeError, ValueError):
+        pass
+    log.warning("task dir %s: missing or non-numeric reward, using 1.0", d)
+    return 1.0
+
+
 def load_tasks(tasks_dir: Path) -> list[Task]:
     tasks = []
     for d in _task_dirs(Path(tasks_dir)):
         try:
-            data = json.loads((d / "task.json").read_text(encoding="utf-8"))
+            data = json.loads((d / "task.json").read_text(encoding="utf-8-sig"))
             tasks.append(Task(
                 task_id=str(data["task_id"]),
                 task_type=str(data["task_type"]),
                 instruction=str(data["instruction"]),
-                reward=float(data["reward"]),
+                reward=_reward(data, d),
                 check=data.get("check"),
                 dir=d,
                 workspace=d / "workspace",
@@ -124,7 +136,11 @@ def _write_answer(task: Task, answer: str) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, target)
+        try:
+            os.replace(tmp, target)
+        except PermissionError:
+            os.chmod(target, stat.S_IWRITE | stat.S_IREAD)  # stale read-only answer.txt (Windows)
+            os.replace(tmp, target)
         if os.name == "posix":
             _fsync_path(task.dir)
         return

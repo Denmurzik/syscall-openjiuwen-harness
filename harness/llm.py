@@ -7,7 +7,8 @@ import tempfile
 from dataclasses import dataclass
 
 from harness.budget import TokenLedger
-from harness.config import LLM_CONCURRENCY, LLM_TIMEOUT, TIMEOUT_CHARGE
+from harness import config
+from harness.config import LLM_CONCURRENCY, TIMEOUT_CHARGE
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,6 @@ def _quiet_openjiuwen_logs() -> None:
 
 _logs_quieted = False
 
-RETRY_DELAYS = (2, 4, 8, 16, 30)  # the shared account ceiling resets within ~40 s
 MAX_CONSECUTIVE_FAILURES = 3
 
 
@@ -115,11 +115,11 @@ def _is_transport_failure(exc: BaseException) -> bool:
 
 class LLMClient:
     def __init__(self, base_url: str, api_key: str, ledger: TokenLedger,
-                 max_concurrency: int = LLM_CONCURRENCY, timeout: float = LLM_TIMEOUT):
+                 max_concurrency: int = LLM_CONCURRENCY, timeout: float | None = None):
         self.base_url = base_url
         self.api_key = api_key
         self.ledger = ledger
-        self.timeout = timeout
+        self.timeout = config.llm_timeout() if timeout is None else timeout
         self._max_concurrency = max_concurrency
         self._sem: asyncio.Semaphore | None = None
         self._models: dict = {}
@@ -183,8 +183,9 @@ class LLMClient:
                     stripped = True
                     continue
                 connect = status is None and _is_connect_error(exc)
-                if (status == 429 or connect) and attempt < len(RETRY_DELAYS):
-                    await asyncio.sleep(RETRY_DELAYS[attempt])
+                delays = config.retry_delays()
+                if (status == 429 or connect) and attempt < len(delays):
+                    await asyncio.sleep(delays[attempt])
                     attempt += 1
                     continue
                 msg = f"{type(exc).__name__}: {exc}"[:300]

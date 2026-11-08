@@ -102,8 +102,6 @@ def test_binary_sales_csv(tasks, tmp_path):
     assert not a.exists() or a.read_text(encoding="utf-8").strip() != "", "empty answer for binary csv"
 
 
-@pytest.mark.xfail(strict=True, reason="load_tasks reads task.json as plain utf-8: a BOM makes json.loads fail "
-                   "and the whole task is skipped (fix: encoding='utf-8-sig')")
 def test_task_json_bom(tasks, tmp_path):
     sub, name = _patch_task(tasks, tmp_path, "math",
                             lambda p: p.write_bytes(b"\xef\xbb\xbf" + p.read_bytes()))
@@ -120,8 +118,6 @@ def test_task_json_extra_fields(tasks, tmp_path):
     assert (sub / name / "answer.txt").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="load_tasks requires data['reward']: a missing key skips the task "
-                   "although reward only orders phase 2 (fix: default 1.0)")
 def test_task_json_missing_reward(tasks, tmp_path):
     sub, name = _patch_task(tasks, tmp_path, "math", _edit_json(reward=KeyError))
     r = run_harness(sub, tmp_path / "run", timeout=60)
@@ -137,8 +133,6 @@ def test_task_json_reward_string(tasks, tmp_path):
     assert (sub / name / "answer.txt").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="float(data['reward']) raises on non-numeric text and the task is "
-                   "skipped, losing a free phase-1 answer (fix: fall back to 1.0)")
 def test_task_json_reward_garbage(tasks, tmp_path):
     sub, name = _patch_task(tasks, tmp_path, "math", _edit_json(reward="high"))
     r = run_harness(sub, tmp_path / "run", timeout=60)
@@ -183,9 +177,6 @@ def test_read_only_workspace(tasks, tmp_path):
                 os.chmod(d / "workspace", 0o755)
 
 
-@pytest.mark.xfail(os.name == "nt", strict=True,
-                   reason="Windows only: read-only attribute on a stale answer.txt makes the fallback open() "
-                          "fail (os.replace over it is refused); POSIX replaces it fine")
 def test_stale_read_only_answer_file(tasks, tmp_path):
     """answer.txt pre-exists and is read-only (left by an earlier attempt)."""
     name = _first(tasks, "math")

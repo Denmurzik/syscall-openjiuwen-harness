@@ -88,3 +88,39 @@ def test_answer_sink_error_keeps_answer_txt(tmp_path):
     finally:
         set_answer_sink(None)
     assert (t.dir / "answer.txt").read_text() == "7\n"
+
+
+def _mk(tmp_path, raw: bytes, name="t"):
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "task.json").write_bytes(raw)
+
+
+def test_load_tasks_bom_and_reward_fallback(tmp_path):
+    base = '"task_id":"%s","task_type":"math","instruction":"x"'
+    _mk(tmp_path, b"\xef\xbb\xbf{" + (base % "bom").encode() + b',"reward":2}', "a")
+    _mk(tmp_path, ("{" + base % "nokey" + "}").encode(), "b")
+    _mk(tmp_path, ("{" + base % "junk" + ',"reward":"high"}').encode(), "c")
+    _mk(tmp_path, ("{" + base % "null" + ',"reward":null}').encode(), "d")
+    by = {t.task_id: t.reward for t in load_tasks(tmp_path)}
+    assert by == {"bom": 2.0, "nokey": 1.0, "junk": 1.0, "null": 1.0}
+
+
+def test_write_answer_replaces_read_only_file(tmp_path):
+    import stat
+    t = copy_task(load_tasks(FIX)[0], tmp_path)
+    a = t.dir / "answer.txt"
+    a.write_text("stale\n")
+    os.chmod(a, stat.S_IREAD)
+    write_answer(t, "9")
+    assert a.read_text() == "9\n"
+
+
+def test_write_answer_read_only_when_replace_denied(tmp_path, monkeypatch):
+    import stat
+    t = copy_task(load_tasks(FIX)[0], tmp_path)
+    a = t.dir / "answer.txt"
+    a.write_text("stale\n")
+    os.chmod(a, stat.S_IREAD)
+    monkeypatch.setattr(os, "replace", lambda *a_: (_ for _ in ()).throw(PermissionError()))
+    write_answer(t, "9")
+    assert a.read_text() == "9\n"
