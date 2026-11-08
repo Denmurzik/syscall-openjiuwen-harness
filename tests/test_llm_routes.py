@@ -279,7 +279,7 @@ def test_normalize_answer_pads_requested_decimals():
     assert normalize_answer("12.34", "exact_str", q) == "12.34"
     assert normalize_answer("3.14159", "exact_str", q) == "3.14"
     assert normalize_answer("2.675", "exact_str", q) == "2.68"  # same ROUND_HALF_UP as phase 1
-    assert normalize_answer("7.5", "exact_str", "Give it to three decimals.") == "7.500"
+    assert normalize_answer("7.5", "exact_str", "Round it to three decimals.") == "7.500"
     assert normalize_answer("7.5", "exact_str", "rounded to one decimal place") == "7.5"
 
 
@@ -298,3 +298,12 @@ def test_phase1_executor_keeps_requested_decimals():
     from harness.solvers.data_solver import _fmt
     assert _fmt(Decimal("30.9"), "exact_str", 2) == "30.90"
     assert _fmt(Decimal("23"), "exact_str", 2) == "23.00"
+
+
+def test_decimals_only_when_rounding_the_answer():
+    boiler = " When you are done, reply with the answer only."
+    assert normalize_answer("12", "exact_str", "Prices are given to 2 decimal places. How many items cost more than 5?") == "12"
+    assert normalize_answer("12", "exact_str", "Use 2 d.p. in the intermediate steps. How many orders?" + boiler) == "12"
+    assert normalize_answer("12", "exact_str", "The table converts to 2 decimals. How many rows?") == "12"
+    assert normalize_answer("12", "exact_str", "How many items cost more than 5? Round to 2 decimal places.") == "12.00"
+    assert normalize_answer("30.9", "exact_str", "What is the average price, rounded to 2 decimal places?" + boiler) == "30.90"

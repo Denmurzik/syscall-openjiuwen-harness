@@ -12,6 +12,7 @@ from pathlib import Path
 from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
 from harness.result import SolveResult
 from harness.sandbox import run_program
+from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.shape import DESCRIBE, expected_shape, mismatch
 from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic writer reused
 from harness.solvers.testrun import TestReport, run_in_dir
@@ -56,8 +57,7 @@ _NUM = re.compile(r"(?:(?<![\w])-)?\d+(?:\.\d+)?")
 
 
 _WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
-_DECIMALS = re.compile(r"\bto\s+(\d+|one|two|three|four|five|six)\s+decimal(?:\s+places?|s)?\b"
-                       r"|\b(\d+)\s+d\.?p\.?(?!\w)", re.I)
+_DECIMALS = re.compile(r"\bround(?:ed|ing)?\b[^.?!]*?\bto\s+(?:(?P<n>\d+|one|two|three|four|five|six)\s+(?:decimal(?:\s+places?|s)?|d\.?p\.?))\b", re.I)
 _PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
