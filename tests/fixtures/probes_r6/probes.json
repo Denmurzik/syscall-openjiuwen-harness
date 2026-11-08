@@ -844,5 +844,639 @@
   "allowed": [],
   "ws": "search",
   "note": "employer of a company"
+ },
+ {
+  "id": "n01",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n2. Then the stock is doubled.\n1. It loses 20 boxes to theft.\nHow many boxes does it have at the end?",
+  "allowed": [
+   "160"
+  ],
+  "ws": "data",
+  "note": "numbered steps out of textual order"
+ },
+ {
+  "id": "n02",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n3) Then the stock is doubled.\n1) It loses 20 boxes to theft.\n2) It receives 2 deliveries of 10 boxes each.\nHow many boxes does it have at the end?",
+  "allowed": [
+   "200"
+  ],
+  "ws": "data",
+  "note": "numbered ) out of order"
+ },
+ {
+  "id": "n03",
+  "dom": "math",
+  "text": "Consider the following:\n- A warehouse starts with 100 boxes.\n- It loses 20 boxes to theft.\n- Then the stock is doubled.\nHow many boxes does it have at the end?",
+  "allowed": [
+   "160"
+  ],
+  "ws": "data",
+  "note": "filler header + bullets (positive)"
+ },
+ {
+  "id": "n04",
+  "dom": "math",
+  "text": "You are given the following scenario. A warehouse starts with 100 boxes. It loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [
+   "80"
+  ],
+  "ws": "data",
+  "note": "filler (positive)"
+ },
+ {
+  "id": "n05",
+  "dom": "math",
+  "text": "Note: A warehouse starts with 100 boxes. It loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [
+   "80"
+  ],
+  "ws": "data",
+  "note": "note prefix (positive)"
+ },
+ {
+  "id": "n06",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes. Note: it loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [
+   "80"
+  ],
+  "ws": "data",
+  "note": "note prefix mid"
+ },
+ {
+  "id": "n07",
+  "dom": "math",
+  "text": "One warehouse starts with 100 boxes. The other warehouse starts with 50 boxes. It loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [],
+  "ws": "data",
+  "note": "two warehouses"
+ },
+ {
+  "id": "n08",
+  "dom": "math",
+  "text": "Our warehouse starts with 100 boxes. It loses 20 boxes to theft. Then the stock is doubled. How many boxes does it have at the end?",
+  "allowed": [
+   "160"
+  ],
+  "ws": "data",
+  "note": "start variant (positive)"
+ },
+ {
+  "id": "n09",
+  "dom": "math",
+  "text": "Initial stock: 1,000 boxes. It loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [
+   "980"
+  ],
+  "ws": "data",
+  "note": "comma number"
+ },
+ {
+  "id": "n10",
+  "dom": "math",
+  "text": "Initial stock: 1,00 boxes. It loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [],
+  "ws": "data",
+  "note": "malformed number"
+ },
+ {
+  "id": "n11",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n- It loses 20 boxes to theft\n- Then the stock is doubled\nHow many boxes does it have at the end",
+  "allowed": [],
+  "ws": "data",
+  "note": "no question mark"
+ },
+ {
+  "id": "n12",
+  "dom": "math",
+  "text": "- A warehouse starts with 100 boxes.\n- It loses 20 boxes to theft.\n- It loses 20 boxes to theft.\n- How many boxes does it have at the end?",
+  "allowed": [
+   "60"
+  ],
+  "ws": "data",
+  "note": "repeated bullet = twice"
+ },
+ {
+  "id": "n13",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes. Given this context, it loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [
+   "80"
+  ],
+  "ws": "data",
+  "note": "context prefix"
+ },
+ {
+  "id": "n14",
+  "dom": "math",
+  "text": "Here is the task: A warehouse starts with 100 boxes. It loses 20 boxes to theft. Heads up: then the stock is doubled. How many boxes does it have at the end?",
+  "allowed": [
+   "160"
+  ],
+  "ws": "data",
+  "note": "prefix chain"
+ },
+ {
+  "id": "n15",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n* It loses 20 boxes to theft.\n* Then the stock is doubled.\n(Do the steps in reverse order.)\nHow many boxes does it have at the end?",
+  "allowed": [],
+  "ws": "data",
+  "note": "reverse-order note"
+ },
+ {
+  "id": "n16",
+  "dom": "math",
+  "text": "Initial inventory is 100 boxes. It loses 20 boxes to theft. How many boxes are left at the end?",
+  "allowed": [
+   "80"
+  ],
+  "ws": "data",
+  "note": "start A variant"
+ },
+ {
+  "id": "n17",
+  "dom": "math",
+  "text": "Starting stock: 100 boxes. It loses 20 boxes to theft. How many boxes does it have at the end?",
+  "allowed": [
+   "80"
+  ],
+  "ws": "data",
+  "note": "start A colon"
+ },
+ {
+  "id": "n18",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n10. It loses 20 boxes to theft.\nHow many boxes does it have at the end?",
+  "allowed": [
+   "80"
+  ],
+  "ws": "data",
+  "note": "two-digit numbered item"
+ },
+ {
+  "id": "n19",
+  "dom": "data",
+  "text": "Looking at sales.csv (order_id, region, product, month, units, price; 636 rows), what is the total revenue?",
+  "allowed": [
+   "2602055"
+  ],
+  "ws": "data",
+  "note": "positive"
+ },
+ {
+  "id": "n20",
+  "dom": "data",
+  "text": "Looking at sales.csv (order_id, region, product, month, units, price; 636 rows) and only region 'north', what is the total revenue?",
+  "allowed": [
+   "652009"
+  ],
+  "ws": "data",
+  "note": "and-clause filter after file"
+ },
+ {
+  "id": "n21",
+  "dom": "data",
+  "text": "Regarding sales.csv (order_id, region, product, month, units, price; 636 rows); north only. What is the total revenue?",
+  "allowed": [
+   "652009"
+  ],
+  "ws": "data",
+  "note": "; clause after file"
+ },
+ {
+  "id": "n22",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id, region, product, month, units and price (636 rows). What is the total revenue?",
+  "allowed": [
+   "2602055"
+  ],
+  "ws": "data",
+  "note": "no oxford comma"
+ },
+ {
+  "id": "n23",
+  "dom": "data",
+  "text": "Given that the file sales.csv has columns order_id, region, product, month, units, price, gizmo, what is the total revenue?",
+  "allowed": [
+   "638081"
+  ],
+  "ws": "data",
+  "note": "filter word absorbed as column"
+ },
+ {
+  "id": "n24",
+  "dom": "data",
+  "text": "Only north orders matter. Looking at sales.csv (order_id, region, product, month, units, price; 636 rows), what is the total revenue?",
+  "allowed": [
+   "652009"
+  ],
+  "ws": "data",
+  "note": "head sentence before file"
+ },
+ {
+  "id": "n25",
+  "dom": "data",
+  "text": "Here is a brief overview of the dataset structure. Ignore gizmo. The file sales.csv has columns order_id,region,product,month,units,price (636 rows). What is the total revenue?",
+  "allowed": [
+   "1963974"
+  ],
+  "ws": "data",
+  "note": "filler then constraint"
+ },
+ {
+  "id": "n26",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Could you tell me how many orders were placed in month 3, excluding gizmo?",
+  "allowed": [
+   "36"
+  ],
+  "ws": "data",
+  "note": "lead + excluding"
+ },
+ {
+  "id": "n27",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Please calculate the total revenue minus the total revenue in region 'north'.",
+  "allowed": [
+   "1950046"
+  ],
+  "ws": "data",
+  "note": "lead + arithmetic"
+ },
+ {
+  "id": "n28",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). What is the mean price in month 8, weighted by units?",
+  "allowed": [
+   "142.66"
+  ],
+  "ws": "data",
+  "note": "mean -> average with weight"
+ },
+ {
+  "id": "n29",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Find the average price in month 8, rounded to the nearest 10.",
+  "allowed": [
+   "140.0"
+  ],
+  "ws": "data",
+  "note": "rounding to nearest 10 via lead"
+ },
+ {
+  "id": "n30",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Tell me the total revenue (units * price) in thousands.",
+  "allowed": [
+   "2602.055"
+  ],
+  "ws": "data",
+  "note": "units*price + thousands"
+ },
+ {
+  "id": "n31",
+  "dom": "data",
+  "text": "- File: sales.csv\n- Columns: order_id, region, product, month, units, price\n- Rows: 636\n- Region: north\nWhat is the total revenue?",
+  "allowed": [
+   "652009"
+  ],
+  "ws": "data",
+  "note": "bullet filter in file block"
+ },
+ {
+  "id": "n32",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). What is the total revenue\nin region 'north'\nor in region 'south'?",
+  "allowed": [
+   "1268660"
+  ],
+  "ws": "data",
+  "note": "joined lines with or"
+ },
+ {
+  "id": "n33",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Determine the total units sold, then double it.",
+  "allowed": [
+   "39902"
+  ],
+  "ws": "data",
+  "note": "lead + then"
+ },
+ {
+  "id": "n34",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Compute the average price in month 8 for orders above 10 units, rounded to 2 decimal places.",
+  "allowed": [
+   "151.12"
+  ],
+  "ws": "data",
+  "note": "lead + extra filter"
+ },
+ {
+  "id": "n35",
+  "dom": "data",
+  "text": "Looking at sales.csv (order_id, region, product, month, units, price; 636 rows), what's the mean units per order in region 'north' for product 'gizmo' between months 2 and 5?",
+  "allowed": [
+   "28.26"
+  ],
+  "ws": "data",
+  "note": "multi-filter positive (rounding unspecified)"
+ },
+ {
+  "id": "n36",
+  "dom": "data",
+  "text": "Note: The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Quick question: what is the total revenue?",
+  "allowed": [
+   "2602055"
+  ],
+  "ws": "data",
+  "note": "prefixes (positive)"
+ },
+ {
+  "id": "n37",
+  "dom": "data",
+  "text": "We have sales.csv (columns: order_id, region, product, month, units, price; 636 rows) and returns.csv (columns: order_id; 20 rows). What is the total revenue?",
+  "allowed": [],
+  "ws": "data",
+  "note": "two files with and"
+ },
+ {
+  "id": "n38",
+  "dom": "data",
+  "text": "Looking at sales.csv (order_id, region, product, month, units, price; 636 rows), given this context, excluding north, what is the total revenue?",
+  "allowed": [
+   "1950046"
+  ],
+  "ws": "data",
+  "note": "prefix then filter"
+ },
+ {
+  "id": "n39",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows). Using that data, what is the total revenue in the north region?",
+  "allowed": [
+   "652009"
+  ],
+  "ws": "data",
+  "note": "unquoted region"
+ },
+ {
+  "id": "n40",
+  "dom": "data",
+  "text": "The file sales.csv has columns order_id,region,product,month,units,price (636 rows).\n1. What is the total revenue?",
+  "allowed": [
+   "2602055"
+  ],
+  "ws": "data",
+  "note": "numbered question"
+ },
+ {
+  "id": "n41",
+  "dom": "search",
+  "text": "Please identify the employer of Alice Khan's mentor.",
+  "allowed": [
+   "Juniper Logistics"
+  ],
+  "ws": "search",
+  "note": "positive"
+ },
+ {
+  "id": "n42",
+  "dom": "search",
+  "text": "Who is the employer of Alice Khan's mentor?",
+  "allowed": [
+   "Juniper Logistics"
+  ],
+  "ws": "search",
+  "note": "canonical scope pair (positive)"
+ },
+ {
+  "id": "n43",
+  "dom": "search",
+  "text": "Where is Alice Khan headquartered?",
+  "allowed": [],
+  "ws": "search",
+  "note": "company field of a person -> unparsed now"
+ },
+ {
+  "id": "n44",
+  "dom": "search",
+  "text": "In which city does Alice Khan work?",
+  "allowed": [
+   "Malmo"
+  ],
+  "ws": "search",
+  "note": "explicit +Employer"
+ },
+ {
+  "id": "n45",
+  "dom": "search",
+  "text": "In which city does Alice Khan's mentor work?",
+  "allowed": [
+   "Cork"
+  ],
+  "ws": "search",
+  "note": "+Employer with path"
+ },
+ {
+  "id": "n46",
+  "dom": "search",
+  "text": "In which city does the employer of Alice Khan work?",
+  "allowed": [],
+  "ws": "search",
+  "note": "company works -> mismatch"
+ },
+ {
+  "id": "n47",
+  "dom": "search",
+  "text": "What year was Iris Optics born?",
+  "allowed": [],
+  "ws": "search",
+  "note": "born of a company"
+ },
+ {
+  "id": "n48",
+  "dom": "search",
+  "text": "Who is the mentor of Alice?",
+  "allowed": [],
+  "ws": "search",
+  "note": "partial name"
+ },
+ {
+  "id": "n49",
+  "dom": "search",
+  "text": "Find the mentor of Alice Khan's mentor's former mentor.",
+  "allowed": [],
+  "ws": "search",
+  "note": "former"
+ },
+ {
+  "id": "n50",
+  "dom": "search",
+  "text": "Please identify the mentor of Alice Khan, or of her mentor.",
+  "allowed": [],
+  "ws": "search",
+  "note": "or"
+ },
+ {
+  "id": "n51",
+  "dom": "search",
+  "text": "1. Who is the mentor of Alice Khan?",
+  "allowed": [
+   "Marco Sato"
+  ],
+  "ws": "search",
+  "note": "numbered question"
+ },
+ {
+  "id": "n52",
+  "dom": "search",
+  "text": "Note: Who is the mentor of Alice Khan?",
+  "allowed": [
+   "Marco Sato"
+  ],
+  "ws": "search",
+  "note": "prefix (positive)"
+ },
+ {
+  "id": "n53",
+  "dom": "search",
+  "text": "Identify the city where the headquarters of Alice Khan's employer is located.",
+  "allowed": [
+   "Malmo"
+  ],
+  "ws": "search",
+  "note": "NP positive"
+ },
+ {
+  "id": "n54",
+  "dom": "search",
+  "text": "Tell me the year of birth of Alice Khan's mentor's mentor.",
+  "allowed": [
+   "1973"
+  ],
+  "ws": "search",
+  "note": "NP positive"
+ },
+ {
+  "id": "n55",
+  "dom": "search",
+  "text": "Who is the mentor of the employer of Alice Khan's mentor?",
+  "allowed": [],
+  "ws": "search",
+  "note": "company has no mentor"
+ },
+ {
+  "id": "n56",
+  "dom": "search",
+  "text": "Which company employs the founder of Iris Optics?",
+  "allowed": [],
+  "ws": "search",
+  "note": "founder"
+ },
+ {
+  "id": "n57",
+  "dom": "search",
+  "text": "- The directory kb/ contains a small knowledge base of markdown files.\n- Who is Alice Khan's mentor?\n- Answer with the employer instead.",
+  "allowed": [],
+  "ws": "search",
+  "note": "bullet redirect after question"
+ },
+ {
+  "id": "n58",
+  "dom": "search",
+  "text": "What year was the company that employs Alice Khan founded?",
+  "allowed": [
+   "1969"
+  ],
+  "ws": "search",
+  "note": "positive"
+ },
+ {
+  "id": "n59",
+  "dom": "search",
+  "text": "Determine the birth year of the mentor of Marco Sato's mentee.",
+  "allowed": [],
+  "ws": "search",
+  "note": "mentee (inverse relation)"
+ },
+ {
+  "id": "n60",
+  "dom": "search",
+  "text": "Who mentors Alice Khan's employer's founder?",
+  "allowed": [],
+  "ws": "search",
+  "note": "founder chain"
+ },
+ {
+  "id": "n61",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n3) Then the stock is doubled.\n1) It loses 20 boxes to theft.\n2) It receives 2 deliveries of 30 boxes each.\nHow many boxes does it have at the end?",
+  "allowed": [
+   "280"
+  ],
+  "ws": "data",
+  "note": "numbered ) out of order, non-commutative: textual 100*2-20+60=240"
+ },
+ {
+  "id": "n62",
+  "dom": "math",
+  "text": "1. A warehouse starts with 100 boxes.\n3. It loses 20 boxes to theft.\n2. Then the stock is tripled.\nHow many boxes does it have at the end?",
+  "allowed": [
+   "280"
+  ],
+  "ws": "data",
+  "note": "numbered: start first, steps swapped (textual (100-20)*3=240)"
+ },
+ {
+  "id": "n63",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n1. Then the stock is doubled.\n1. It loses 20 boxes to theft.\nHow many boxes does it have at the end?",
+  "allowed": [],
+  "ws": "data",
+  "note": "duplicate numbers"
+ },
+ {
+  "id": "n64",
+  "dom": "math",
+  "text": "A warehouse starts with 100 boxes.\n2. It loses 20 boxes to theft.\n4. Then the stock is doubled.\nHow many boxes does it have at the end?",
+  "allowed": [
+   "160"
+  ],
+  "ws": "data",
+  "note": "gaps in numbering (in order)"
+ },
+ {
+  "id": "n65",
+  "dom": "data",
+  "text": "Given that the file sales.csv has columns order_id, region, product, month, units, price, and north, what is the total revenue?",
+  "allowed": [
+   "652009"
+  ],
+  "ws": "data",
+  "note": "'and north' absorbed as column"
+ },
+ {
+  "id": "n66",
+  "dom": "data",
+  "text": "Looking at sales.csv (order_id, region, product, month, units, price, gizmo; 636 rows), what is the total revenue?",
+  "allowed": [],
+  "ws": "data",
+  "note": "extra column-like token (ambiguous)"
+ },
+ {
+  "id": "n67",
+  "dom": "data",
+  "text": "Regarding sales.csv (columns: order_id, region, product, month, units, price, excluding, north; 636 rows), what is the total revenue?",
+  "allowed": [
+   "1950046"
+  ],
+  "ws": "data",
+  "note": "filter inside column list"
  }
 ]

@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 from harness.result import SolveResult
-from harness.solvers.common import normalize_instruction, split_sentences, strip_boilerplate
+from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.tasks import Task
 
 _FLAGS = re.IGNORECASE
@@ -146,7 +146,7 @@ def _parse_entity(expr: str, bare: bool = False) -> list[tuple[str, list[str]]]:
 
 def _question(instruction: str) -> str | SolveResult:
     question = None
-    parts = [" ".join(p.split()) for p in split_sentences(normalize_instruction(instruction, "search"))]
+    parts = [" ".join(p.split()) for p in split_sentences(strip_boilerplate(instruction))]
     sentences: list[str] = []
     for part in parts:  # "Jonas T. Dubois": a single-letter initial does not end a sentence
         if sentences and _INITIAL_END.search(sentences[-1]):
@@ -356,11 +356,12 @@ def _kind_mismatch(index: dict, name: str, key: str) -> bool:
 
 def _run(specs: list[dict], workspace: Path) -> SolveResult:
     results = [execute(spec, workspace) for spec in specs]
+    mismatch = [r.status == "unparsed" and "kind mismatch" in r.note for r in results]
+    if any(mismatch) and any(r.status == "solved" for r in results):
+        if mismatch[0]:  # the literal reading asks a relation the entity does not have ("the mentor of X's employer")
+            return _unparsed("ambiguous question: the primary reading is a relation/entity-kind mismatch")
+        results = [r for r, m in zip(results, mismatch) if not m]  # a secondary reading that cannot be meant
     answers = {r.answer for r in results if r.status == "solved"}
-    if answers and any(r.status == "unparsed" and "kind mismatch" in r.note for r in results):
-        # one reading applies a relation to the wrong kind of entity ("the mentor of X's employer"): do not let the
-        # other reading win silently
-        return _unparsed("ambiguous question: a reading asks a relation the entity does not have",)
     if len(answers) == 1:
         return SolveResult("solved", answers.pop())
     if len(answers) > 1:
