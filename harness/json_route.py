@@ -69,7 +69,8 @@ _SEARCH_PROMPT = (
     "Person pages: Born (year), Employer (company name), Mentor (person name). "
     "Company pages: Founded (year), Headquarters (city).\n"
     "Schema: {\"entity\": <name>, \"hops\": [<field>, ...]}\n"
-    "entity is the person the question starts from (an {E#} placeholder). hops is the list of fields to read, "
+    "entity is the person or company the question starts from: its placeholder ({E#} or {S#}) or, if it has "
+    "none, its literal name, exactly as in the task text. hops is the list of fields to read, "
     "starting at the entity and moving outward; each hop reads one field of the page reached by the previous hop; "
     "the LAST hop is the field that is asked for. Write exactly one hop for every relation word in the question, "
     "counting repeats: each 'mentor' / 'mentoring' / 'mentors' / 'mentor of' = Mentor; each 'employer' / "
@@ -114,7 +115,8 @@ def _from_hops(spec: dict) -> tuple[dict | None, str]:
 
 
 def _as_reply(task_type: str, spec: dict) -> str:
-    """The spec as the model would have written it (search: back in hops form) for a follow-up turn."""
+    """The spec for the follow-up turn's assistant message. search is shown in hops form even when the model
+    replied in the old path/field shape: the follow-up then speaks the schema the system prompt asks for."""
     if task_type == "search" and set(spec) == {"entity", "path", "field"} and isinstance(spec["path"], list):
         spec = {"entity": spec["entity"], "hops": [*spec["path"], spec["field"]]}
     return json.dumps(spec, ensure_ascii=False)

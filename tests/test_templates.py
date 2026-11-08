@@ -74,19 +74,57 @@ def test_equal_numbers_share_template_with_different_numbers():
 @pytest.mark.parametrize("name", ["Nikolai-Felix Lindqvist", "Quinn D. Muller", "Karim Petrov-Sato",
                                   "Farid-Farid Gomez", "Sofia Smith"])
 def test_hyphenated_names_and_initials_are_one_slot(name):
-    t, slots = templatize(f"Find the person mentoring {name}. Work only inside the current directory.")
+    t, slots = templatize(f"Find the person mentoring {name}. Work only inside the current directory.", "search")
     assert slots == {"E1": name}
     assert t == "Find the person mentoring {E1}."
 
 
 def test_hyphen_names_share_template_but_relations_do_not():
-    a, _ = templatize("Who mentors the mentor of Nikolai-Felix Lindqvist?")
-    b, _ = templatize("Who mentors the mentor of Ann Lee?")
-    c, _ = templatize("Who employs the mentor of Quinn D. Muller?")
+    a, _ = templatize("Who mentors the mentor of Nikolai-Felix Lindqvist?", "search")
+    b, _ = templatize("Who mentors the mentor of Ann Lee?", "search")
+    c, _ = templatize("Who employs the mentor of Quinn D. Muller?", "search")
     assert a == b != c
     assert "-" not in a and "D." not in c
 
 
 def test_name_before_lowercase_hyphen_word_stays_short():
-    t, slots = templatize("Ann Lee-based staff and Bo Li's mentor.")
+    t, slots = templatize("Ann Lee-based staff and Bo Li's mentor.", "search")
     assert slots == {"E1": "Ann Lee", "E2": "Bo Li"} and t == "{E1}-based staff and {E2}'s mentor."
+
+
+def _tank(target: str) -> str:
+    return (f"Tank A has 5 liters and Tank B has 7 liters. Move 2 liters into {target}. What does Tank B hold? "
+            "Work only inside the current directory.")
+
+
+def test_letter_after_word_does_not_glue_math_tasks():
+    a, b = _task("a", "math", _tank("Tank A")), _task("b", "math", _tank("Tank B"))
+    g = group([a, b])
+    assert len(g) == 2
+    for (_, template), members in g.items():
+        assert "What does" in template
+        assert all("." not in v for _, slots in members for v in slots.values())
+
+
+def test_letter_after_word_keeps_data_question_intact():
+    ins = "Compute the total revenue of Product A. Use the file sales.csv."
+    for kind in ("data_analysis", "math", "search"):
+        t, slots = templatize(ins, kind)
+        assert "Use the file" in t, (kind, t)
+        assert all(v == "Product A" or ("." not in v and "Use" not in v) for v in slots.values()), (kind, slots)
+    t, slots = templatize("Option B. costs 7.", "math")
+    assert all("." not in v for v in slots.values())
+
+
+def test_search_initial_only_inside_a_name():
+    t, slots = templatize("Who mentors Quinn D. Muller? It was Plan B. Which one? Then Ann C. Then.", "search")
+    assert slots == {"E1": "Quinn D. Muller"}
+    assert "Plan B. Which one?" in t and "Ann C. Then." in t
+
+
+def test_initials_and_hyphens_only_for_search():
+    for kind in ("math", "data_analysis"):
+        _, slots = templatize("Ask about Quinn D. Muller and Nikolai-Felix Lindqvist.", kind)
+        assert all("." not in v and "-" not in v for v in slots.values()), (kind, slots)
+    _, slots = templatize("Ask about Quinn D. Muller and Nikolai-Felix Lindqvist.", "search")
+    assert set(slots.values()) >= {"Quinn D. Muller", "Nikolai-Felix Lindqvist"}

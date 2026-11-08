@@ -7,9 +7,13 @@ from harness.tasks import Task
 _STOP_WORDS = {"A", "An", "The", "In", "How", "What", "Which", "Who", "Where", "When", "Then", "It", "Use",
                "Compute"}
 _QUOTED = re.compile(r"""(?<![\w])'([^'\n]+)'(?!\w)|"([^"\n]+)\"""")
-# a name word may be hyphenated (Nikolai-Felix, Petrov-Sato); a later word may be an initial (Quinn D. Muller)
+_ENTITY = re.compile(r"\b[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}\b")
+# search only (person names): a name word may be hyphenated (Nikolai-Felix, Petrov-Sato) and a middle initial
+# may stand BETWEEN name words (Quinn D. Muller). Not for math/data, where "Tank A. What ..." would glue a
+# letter, the full stop and the next sentence's first word into one slot.
 _NAME_WORD = r"[A-Z][a-z]+(?:-[A-Z][a-z]+)*"
-_ENTITY = re.compile(rf"\b{_NAME_WORD}(?: (?:{_NAME_WORD}|[A-Z]\.)){{1,2}}(?![\w])")
+_INITIAL = rf"(?: [A-Z]\.(?! (?:{'|'.join(sorted(_STOP_WORDS))})\b))"
+_PERSON = re.compile(rf"\b{_NAME_WORD}{_INITIAL}?(?: {_NAME_WORD}){{1,2}}(?![\w])")
 _PLACEHOLDER = re.compile(r"\{[SEN]\d+\}")
 # whole integers only: not part of a word, a decimal, or an existing placeholder
 _NUMBER = re.compile(r"(?<![\w.{])\d+(?![\w}]|\.\d)")
@@ -41,7 +45,7 @@ def _skip_placeholders(text: str, sub) -> str:
     return "".join(out)
 
 
-def templatize(instruction: str) -> tuple[str, dict[str, str]]:
+def templatize(instruction: str, task_type: str | None = None) -> tuple[str, dict[str, str]]:
     text = strip_boilerplate(instruction)
     strings, entities, numbers = _Slots("S"), _Slots("E"), _Slots("N", dedupe=False)
 
@@ -57,7 +61,8 @@ def templatize(instruction: str) -> tuple[str, dict[str, str]]:
             return m.group(0)
         return " ".join(words[:lead] + [entities.name(" ".join(rest))]).strip()
 
-    text = _skip_placeholders(text, lambda s: _ENTITY.sub(entity_sub, s))
+    names = _PERSON if task_type == "search" else _ENTITY
+    text = _skip_placeholders(text, lambda s: names.sub(entity_sub, s))
     text = _skip_placeholders(text, lambda s: _NUMBER.sub(lambda m: numbers.name(m.group(0)), s))
     slots: dict[str, str] = {}
     for table in (strings, entities, numbers):
@@ -69,6 +74,6 @@ def templatize(instruction: str) -> tuple[str, dict[str, str]]:
 def group(tasks: list[Task]) -> dict[tuple[str, str], list[tuple[Task, dict[str, str]]]]:
     groups: dict[tuple[str, str], list[tuple[Task, dict[str, str]]]] = {}
     for task in tasks:
-        template, slots = templatize(task.instruction)
+        template, slots = templatize(task.instruction, task.task_type)
         groups.setdefault((task.task_type, template), []).append((task, slots))
     return groups

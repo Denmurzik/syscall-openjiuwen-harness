@@ -358,3 +358,17 @@ def test_search_prompt_speaks_hops():
 def test_search_impossible_with_hops_stays_impossible():
     spec = asyncio.run(request_spec("search", "t", FakeClient('{"impossible": true, "hops": []}')))
     assert spec == {"impossible": True, "hops": []}
+
+
+def test_search_impossible_with_hops_makes_group_unparsed(tmp_path):
+    ws, kb = _kb(tmp_path)
+    t = _ask("Who mentors Ann Lee?", ws)
+    template, slots = templatize(t.instruction, "search")
+    out = asyncio.run(solve_group("search", template, [(t, slots)], FakeClient('{"impossible": true, "hops": []}')))
+    assert out["s1"].status == "unparsed" and out["s1"].note == "model: spec impossible"
+
+
+def test_search_prompt_allows_company_or_literal_entity():
+    from harness.json_route import _system_prompt
+    p = _system_prompt("search")
+    assert "person or company" in p and "literal name" in p
