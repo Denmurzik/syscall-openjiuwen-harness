@@ -61,6 +61,12 @@ def _phase1_target(out_queue, task: Task, solver_name=None) -> None:
 
 def _kill(proc) -> None:
     try:
+        if proc.pid is not None:
+            from harness.proc import kill_descendants
+            kill_descendants(proc.pid)
+    except Exception:
+        pass
+    try:
         proc.terminate()
         proc.join(1.0)
         if proc.is_alive():

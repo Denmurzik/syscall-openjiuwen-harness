@@ -41,6 +41,16 @@ def sleepy_target(queue, task, solver_name=None):
     time.sleep(10)
 
 
+def grandchild_target(queue, task, solver_name=None):
+    """Like a coding solver: runs a subprocess that never ends and then waits for it."""
+    from harness.proc import run_python
+    marker = Path(task.workspace) / "alive.txt"
+    code = ("import time, pathlib; "
+            f"p = pathlib.Path({str(marker)!r}); "
+            "exec('while True: p.write_text(str(time.time())); time.sleep(0.2)')")
+    run_python(["-c", code], Path(task.workspace), 60)
+
+
 def unparsed_target(queue, task, solver_name=None):
     queue.put((task.task_id, SolveResult("unparsed", note="forced")))
 
@@ -133,6 +143,25 @@ def test_hung_phase1_task_is_killed(tmp_path, monkeypatch):
     summary = scheduler.run(tasks, 1000, None)
     assert time.monotonic() - t0 < 5
     assert summary["unparsed"] == 1 and summary["solved"] == 0
+
+
+def test_timed_out_phase1_child_takes_its_subprocesses_with_it(tmp_path, monkeypatch):
+    """Killing a phase-1 child must not orphan the solver subprocess it runs: on Windows an orphaned
+    mutant with an endless loop keeps burning CPU for the rest of the run (no RLIMIT_CPU there)."""
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "coding_x", "coding", "whatever")
+    monkeypatch.setattr(scheduler, "_phase1_target", grandchild_target)
+    monkeypatch.setitem(config.PHASE1_TIMEOUT, "default", 3)
+    monkeypatch.setitem(config.PHASE1_TIMEOUT, "coding", 3)
+    marker = d / "workspace" / "alive.txt"
+    t0 = time.monotonic()
+    scheduler.run(tasks, 1000, None)
+    assert time.monotonic() - t0 < 15
+    assert marker.is_file()                      # the grandchild really ran
+    time.sleep(1.5)
+    stamp = marker.read_text()
+    time.sleep(1.5)
+    assert marker.read_text() == stamp           # and stopped writing: it is dead
 
 
 def test_run_agent_exits_zero_on_missing_dir(tmp_path):

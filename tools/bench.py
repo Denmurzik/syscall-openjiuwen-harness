@@ -4,9 +4,13 @@ score it and write bench.json + bench.md (accuracy per type/difficulty, timing, 
     python -m tools.bench --gen-n 2000 --seed 1 --difficulty mixed --out runs/bench1 [--workers 8]
 """
 import argparse
+import faulthandler
 import json
+import os
+import threading
 import re
 import statistics
+import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -14,6 +18,32 @@ from pathlib import Path
 from tools import evaluate, gen_tasks
 
 TYPES = gen_tasks.TYPES
+
+
+def _stall_watchdog(progress: list, stop: threading.Event, stall_s: float, dump_path: Path) -> None:
+    """Diagnostics: when no task finished for `stall_s` seconds, dump parent thread tracebacks
+    and the process list to `dump_path`; repeats at most every `stall_s`."""
+    import subprocess
+    NL = chr(10)
+    last_dump = 0.0
+    while not stop.wait(5.0):
+        now = time.monotonic()
+        if now - progress[0] < stall_s or now - last_dump < stall_s:
+            continue
+        last_dump = now
+        try:
+            with open(dump_path, "a", encoding="utf-8") as f:
+                f.write(f"=== no progress for {now - progress[0]:.0f}s, {progress[1]} done ===" + NL)
+                try:
+                    cmd = (["tasklist", "/FI", "IMAGENAME eq python.exe"] if os.name == "nt"
+                           else ["ps", "-eo", "pid,ppid,stat,etime,time,cmd"])
+                    f.write(subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout)
+                except Exception as e:
+                    f.write(f"process list failed: {e!r}" + NL)
+                f.flush()
+                faulthandler.dump_traceback(file=f, all_threads=True)
+        except Exception:
+            pass
 
 
 def run_phase1(tasks_dir: Path, workers: int, deadline_s: float = 24 * 3600) -> dict:
@@ -25,8 +55,18 @@ def run_phase1(tasks_dir: Path, workers: int, deadline_s: float = 24 * 3600) -> 
 
     tasks = load_tasks(tasks_dir)
     results: dict = {}
+    progress = [time.monotonic(), 0]
+    t_start = time.monotonic()
+    stop = threading.Event()
+    stall_s = float(os.environ.get("BENCH_STALL_S", "120"))
+    threading.Thread(target=_stall_watchdog, daemon=True,
+                     args=(progress, stop, stall_s, Path(os.environ.get("BENCH_STALL_DUMP", "bench_stall.txt")))).start()
 
     def on_result(task, res, elapsed):
+        progress[0] = time.monotonic()
+        progress[1] += 1
+        if progress[1] % 250 == 0:
+            print(f"phase 1: {progress[1]}/{len(tasks)} tasks done, {time.monotonic() - t_start:.0f}s", file=sys.stderr, flush=True)
         if res.status == "solved" and res.answer is None:
             res = SolveResult("unparsed", note="solved without answer")
         elif res.status == "solved":
@@ -36,7 +76,10 @@ def run_phase1(tasks_dir: Path, workers: int, deadline_s: float = 24 * 3600) -> 
                 res = SolveResult("unparsed", note=f"write failed: {e!r}")
         results[task.task_id] = (res, elapsed)
 
-    scheduler._phase1(tasks, workers, time.monotonic(), deadline_s, on_result)
+    try:
+        scheduler._phase1(tasks, workers, time.monotonic(), deadline_s, on_result)
+    finally:
+        stop.set()
     return results
 
 

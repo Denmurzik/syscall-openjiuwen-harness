@@ -27,6 +27,49 @@ def _cut(b: bytes | str | None) -> str:
     return b[:2048] + mark + b[-(MAX_OUT - 2048 - len(mark)):]
 
 
+def _posix_descendants(pid: int) -> list[int]:
+    """Pids of all descendants of `pid` (via /proc); best effort, [] when /proc is unavailable."""
+    children: dict[int, list[int]] = {}
+    try:
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{name}/stat", "rb") as f:
+                    ppid = int(f.read().rsplit(b")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            children.setdefault(ppid, []).append(int(name))
+    except OSError:
+        return []
+    out, todo = [], [pid]
+    while todo:
+        for c in children.get(todo.pop(), []):
+            out.append(c)
+            todo.append(c)
+    return out
+
+
+def kill_descendants(pid: int) -> None:
+    """Kill everything `pid` started (not `pid` itself). A solver subprocess runs in its own session
+    (posix) or is merely a child (Windows), so killing only the phase-1 child would orphan it, and an
+    orphaned endless loop burns CPU for the rest of the run."""
+    try:
+        if os.name == "posix":
+            import signal
+            for c in _posix_descendants(pid):
+                try:
+                    os.kill(c, signal.SIGKILL)
+                except OSError:
+                    pass
+        else:
+            # taskkill /T walks the parent links of live processes, so run it before the parent dies
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                           capture_output=True, check=False, timeout=15)
+    except Exception:
+        pass
+
+
 def _kill_tree(proc: subprocess.Popen) -> None:
     try:
         if os.name == "posix":
@@ -34,7 +77,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
             os.killpg(proc.pid, signal.SIGKILL)
         else:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                           capture_output=True, check=False)
+                           capture_output=True, check=False, timeout=15)
     except Exception:
         pass
     try:
