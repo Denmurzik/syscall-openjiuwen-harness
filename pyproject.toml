@@ -7,5 +7,5 @@ requires-python = ">=3.11,<3.14"
 testpaths = ["tests"]
 pythonpath = ["."]
 norecursedirs = ["fixtures"]
-markers = ["live: tests that call the real LLM endpoint"]
-addopts = '-m "not live"'
+markers = ["live: tests that call the real LLM endpoint", "chaos: slow end-to-end robustness tests with a hostile fake proxy"]
+addopts = '-m "not live and not chaos"'
