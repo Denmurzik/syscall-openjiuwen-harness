@@ -38,19 +38,33 @@ _QUESTIONS = [
     (re.compile(r"(?:can you tell me|tell me) the year (.+) was born", _FLAGS), "Born"),
     (re.compile(r"(?:can you tell me|tell me) the year (.+) was founded", _FLAGS), "Founded"),
     (re.compile(r"who is (.+)['\u2019]s employer", _FLAGS), "Employer"),
+    (re.compile(r"in which city does (.+) work", _FLAGS), "Headquarters"),
+    (re.compile(r"(?:what is|find) the birth year of (.+)", _FLAGS), "Born"),
+    (re.compile(r"(.+) works for which (?:company|firm)", _FLAGS), "Employer"),
+    (re.compile(r"which firm employs (.+)", _FLAGS), "Employer"),
+    (re.compile(r"which firm does (.+) work for", _FLAGS), "Employer"),
 ]
 
 _INITIAL_END = re.compile(r"\s[A-Z]\.$")
 _POSSESSIVE = re.compile(r"(.+)['\u2019]s (employer|mentor)", _FLAGS)
 _THE_OF = re.compile(r"the (employer|mentor) of (.+)", _FLAGS)
+_EMPLOYS = re.compile(r"the (?:company|firm) that employs (.+)", _FLAGS)
 
 
 def _unparsed(note: str) -> SolveResult:
     return SolveResult("unparsed", note=note)
 
 
+_TYPO = str.maketrans({
+    "’": "'", "‘": "'", "ʼ": "'", "′": "'", "´": "'", "`": "'",
+    "–": "-", "—": "-", "‐": "-", "‑": "-", "‒": "-", "−": "-",
+    " ": " ", " ": " ", " ": " ",
+})
+
+
 def _norm(s: str) -> str:
-    return " ".join(s.split()).casefold()
+    """Casefolded, whitespace-collapsed, with typographic apostrophes and dashes unified."""
+    return " ".join(s.translate(_TYPO).split()).casefold()
 
 
 _QUALIFIERS = {"former", "current", "not", "and", "or", "mentee", "ex", "previous", "new", "old", "of", "the",
@@ -123,6 +137,10 @@ def _parse_entity(expr: str, bare: bool = False) -> list[tuple[str, list[str]]]:
     if the_of is not None:
         for name, path in _parse_entity(the_of.group(2)):
             out.append((name, path + [the_of.group(1).capitalize()]))
+    employs = _EMPLOYS.fullmatch(expr)
+    if employs is not None:
+        for name, path in _parse_entity(employs.group(1)):
+            out.append((name, path + ["Employer"]))
     return out or [(expr, [])]
 
 
@@ -143,7 +161,7 @@ def _question(instruction: str) -> str | SolveResult:
         question = sentence
     if question is None:
         return _unparsed("no question")
-    return question
+    return " ".join(question.translate(_TYPO).split())
 
 
 def _specs(question: str, bare: bool) -> list[dict]:
@@ -194,8 +212,9 @@ _WORD = re.compile(r"[a-z0-9]+")
 def _mentioned_names(question: str, kb: dict) -> list[tuple[int, int, str]]:
     """Occurrences of kb names in the question; a name inside a longer matched name is dropped."""
     hits = []
+    question = question.translate(_TYPO)
     for name in kb:
-        pattern = r"(?<!\w)" + r"\s+".join(re.escape(w) for w in name.split()) + r"(?!\w)"
+        pattern = r"(?<!\w)" + r"\s+".join(re.escape(w) for w in name.translate(_TYPO).split()) + r"(?!\w)"
         for m in re.finditer(pattern, question, _FLAGS):
             hits.append((m.start(), m.end(), name))
     hits = [h for h in hits if not any(o is not h and o[0] <= h[0] and h[1] <= o[1] and (o[1] - o[0]) > (h[1] - h[0])

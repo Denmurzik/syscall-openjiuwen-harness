@@ -12,9 +12,9 @@ _THEN = r"(?:then\s+)?"
 _FRAC = {"half": 2, "third": 3, "quarter": 4, "fifth": 5, "tenth": 10}
 _FRACS = "|".join(_FRAC)
 _ART = r"(?:one|a|an)"
-_INT = r"(\d+)"
+_INT = r"(\d{1,3}(?:,\d{3})+|\d+)"
 
-_START = re.compile(rf"{_THEN}a warehouse starts with {_INT} boxes\.", _FLAGS)
+_START = re.compile(rf"{_THEN}a warehouse starts with {_INT} box(?:es)?\.", _FLAGS)
 _SPLIT = re.compile(
     rf"{_THEN}the stock is (?:split equally into|then divided evenly among|divided evenly among) {_INT} "
     r"warehouses(?: and it keeps one share|,? and this one retains a single share)"
@@ -23,21 +23,21 @@ _SCALE = re.compile(
     rf"{_THEN}(?:the stock is (doubled|tripled)(?: by (?:merging with a sister warehouse|a big merger))?"
     r"|an? (?:[a-z]+ ){0,4}merger(?: with an? [a-z]+ warehouse)? (?:then )?(doubles|triples) the stock)\.", _FLAGS)
 _SHIP = re.compile(
-    rf"{_THEN}(?:it ships {_INT} boxes per day for {_INT} days"
-    rf"|every day for {_INT} days, {_INT} boxes leave the warehouse"
-    rf"|for {_INT} days in a row, {_INT} boxes are shipped out daily)\.", _FLAGS)
+    rf"{_THEN}(?:it ships {_INT} box(?:es)? per day for {_INT} days?"
+    rf"|every day for {_INT} days?, {_INT} box(?:es)? leave the warehouse"
+    rf"|for {_INT} days? in a row, {_INT} box(?:es)? (?:is|are) shipped out daily)\.", _FLAGS)
 _RECEIVE = re.compile(
-    rf"{_THEN}(?:it receives {_INT} deliveries of {_INT} boxes each"
-    rf"|{_INT} trucks arrive, each carrying {_INT} boxes"
-    rf"|the warehouse takes in {_INT} shipments of {_INT} boxes apiece)\.", _FLAGS)
+    rf"{_THEN}(?:it receives {_INT} (?:deliveries|delivery) of {_INT} box(?:es)? each"
+    rf"|{_INT} (?:trucks arrive|truck arrives), each carrying {_INT} box(?:es)?"
+    rf"|the warehouse takes in {_INT} shipments? of {_INT} box(?:es)? apiece)\.", _FLAGS)
 _LOSS = re.compile(
-    rf"{_THEN}(?:it loses {_INT} boxes to theft|thieves take {_INT} boxes"
-    rf"|a leak ruins {_INT} boxes, which are thrown away|water damage destroys {_INT} boxes)\.", _FLAGS)
+    rf"{_THEN}(?:it loses {_INT} box(?:es)? to theft|thieves take {_INT} box(?:es)?"
+    rf"|a leak ruins {_INT} box(?:es)?, which (?:is|are) thrown away|water damage destroys {_INT} box(?:es)?)\.", _FLAGS)
 _MOVED = re.compile(
-    rf"{_THEN}{_ART} ({_FRACS}) of the stock(?: \(rounded down\)|, rounded down,) "
+    rf"{_THEN}(?:{_ART} )?({_FRACS}) of the stock(?: \(rounded down\)|, rounded down,) "
     r"is (?:moved|transferred) to another site\.", _FLAGS)
 _SELL = re.compile(
-    rf"{_THEN}(?:it )?(?:then )?sells ({_FRACS}) of the (?:boxes, rounding the number sold down"
+    rf"{_THEN}(?:it )?(?:then )?sells (?:{_ART} )?({_FRACS}) of the (?:boxes, rounding the number sold down"
     r"|stock, with the number of boxes sold rounded down)\.", _FLAGS)
 _ADD_PCT = re.compile(
     rf"{_THEN}(?:the stock grows by {_INT} percent \(rounded down\)"
@@ -68,7 +68,7 @@ def _unparsed(note: str) -> SolveResult:
 
 
 def _nums(m) -> list[int]:
-    return [int(g) for g in m.groups() if g is not None and g.isdigit()]
+    return [int(g.replace(",", "")) for g in m.groups() if g is not None and g.replace(",", "").isdigit()]
 
 
 def parse(instruction: str) -> dict | SolveResult:
@@ -89,7 +89,7 @@ def parse(instruction: str) -> dict | SolveResult:
         if kind == "start":
             if start is not None:
                 return _unparsed("duplicate start")
-            start = int(m.group(1))
+            start = int(m.group(1).replace(",", ""))
             continue
         if kind == "question":
             asked = True

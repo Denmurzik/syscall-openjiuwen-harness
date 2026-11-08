@@ -8,7 +8,7 @@ from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.tasks import Task
 
 _FLAGS = re.IGNORECASE
-_FILE = re.compile(r"The file (\S+\.csv) has columns ([\w,]+)(?: \(\d+ rows\))?\.", _FLAGS)
+_FILE = re.compile(r"The file (\S+\.csv) has columns ([\w,]+)(?: \(\d[\d,]* rows\))?\.", _FLAGS)
 
 # Filter fragments, removed from the question text before the metric is matched.
 _PRODUCT = re.compile(r"\s+(?:of|for) product '(\w+)'", _FLAGS)
@@ -16,7 +16,10 @@ _PRODUCT = re.compile(r"\s+(?:of|for) product '(\w+)'", _FLAGS)
 _REGIONS = [
     (re.compile(r"\s+in region '(\w+)'", _FLAGS), True),
     (re.compile(r"\s+in the '(\w+)' region", _FLAGS), True),
+    (re.compile(r"\s+for region '(\w+)'", _FLAGS), True),
+    (re.compile(r"\s+for the '(\w+)' region", _FLAGS), True),
     (re.compile(r"\s+in region (\w+)", _FLAGS), False),
+    (re.compile(r"\s+for region (\w+)", _FLAGS), False),
     (re.compile(r"\s+in the (\w+) region", _FLAGS), False),
 ]
 _RANGES = [
@@ -29,22 +32,23 @@ _MONTH = re.compile(r"\s+in month (\d+)(?!\d)", _FLAGS)
 
 _METRICS = [
     ("sum_units", re.compile(
-        r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total units(?: sold)?)\?", _FLAGS)),
+        r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total (?:number of )?units(?: sold)?)\[?.]?", _FLAGS)),
     ("sum_revenue", re.compile(
-        r"what (?:is|was) (?:the )?(?:total )?revenue(?: \(units multiplied by price\))?\?", _FLAGS)),
-    ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)\?", _FLAGS)),
-    ("avg_price", re.compile(r"what (?:is|was) the average price\?", _FLAGS)),
+        r"what (?:is|was) (?:the )?(?:total )?revenue(?: \(units multiplied by price\))?\[?.]?", _FLAGS)),
+    ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)\[?.]?", _FLAGS)),
+    ("avg_price", re.compile(r"what (?:is|was) the average price\[?.]?", _FLAGS)),
     ("avg_units", re.compile(
-        r"what (?:is|was) the average (?:number of )?units(?: per order| in an order)?\?", _FLAGS)),
+        r"what (?:is|was) the average (?:number of )?units(?: per order| in an order)?\[?.]?", _FLAGS)),
     ("max_units", re.compile(
         r"what (?:is|was) the (?:largest|biggest|highest|maximum) (?:number of )?units?"
-        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\?", _FLAGS)),
+        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\[?.]?", _FLAGS)),
     ("min_units", re.compile(
         r"what (?:is|was) the (?:smallest|lowest|minimum) (?:number of )?units?"
-        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\?", _FLAGS)),
+        r"(?: in| for| ordered in)? (?:a|an|one|any) (?:single )?order\[?.]?", _FLAGS)),
 ]
 # ", rounded to N decimal places" (only for averages and revenue); N=2 is the default.
-_ROUND = re.compile(r",?\s+rounded to (\d+) decimal places?(?=\s*\?)", _FLAGS)
+_ROUND = re.compile(
+    r",?\s+rounded to (?:(\d+) decimal places?|the nearest (?:integer|whole number))(?=\s*(?:\?|$))", _FLAGS)
 # "What is the total discount given?": a quantity no sales column can provide.
 _ABSENT = re.compile(
     r"what (?:is|was) the total (discount|tax|shipping|profit|margin|commission|rebate|refund|tip)s?"
@@ -58,7 +62,7 @@ _TOP_MEASURE = {"units": "sum_units", "revenue": "sum_revenue", "orders": "count
                 "number of orders": "count_orders"}
 _TOP_Q = re.compile(
     r"which (product|region) (?:sold the most (units)|(?:had|has|generated|made|recorded) the "
-    r"(?:most|highest|greatest) (?:total )?(units|revenue|orders|number of orders)(?: sold)?)(?: overall)?\?",
+    r"(?:most|highest|greatest) (?:total )?(units|revenue|orders|number of orders)(?: sold)?)(?: overall)?\[?.]?",
     _FLAGS)
 _METRIC_NAMES = {name for name, _ in _METRICS} | _TOP_NAMES
 _REQUIRED = {
@@ -154,7 +158,7 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
     found, text = _take(_ROUND, text)
     if found is False:
         return _unparsed("repeated rounding clause")
-    decimals = int(found.group(1)) if found else None
+    decimals = int(found.group(1) or 0) if found else None
     text = " ".join(text.split())
     metrics = [name for name, rx in _METRICS if rx.fullmatch(text)]
     top = _TOP_Q.fullmatch(text)
@@ -194,8 +198,19 @@ _LOOSE_STOP = {
     "to", "through", "and", "s", "which", "did", "there", "had", "has", "have", "been", "we", "by", "that",
 }
 _LOOSE_MONTHS = re.compile(
-    r"(?:\b(between|from)\s+)?\bmonths?\s+(\d+)"
-    r"(?:\s*(?:through|to|-)\s*(?:months?\s+)?(\d+)|\s+and\s+(?:months?\s+)?(\d+))?(?!\d)", _FLAGS)
+    r"(?:\b(between|from|through|thru|until|till|up to|by)\s+)?\bmonths?\s+(\d+)"
+    r"(?:\s*(?:through|to|-)\s*(?:months?\s+)?(\d+)|\s+and\s+(?:months?\s+)?(\d+))?(?!\d)"
+    r"(?:\s+(onwards?|on)\b)?", _FLAGS)
+_MONTH_NAMES = {n: i for i, n in enumerate(
+    "january february march april may june july august september october november december".split(), 1)}
+_MONTH_NAMES["sept"] = 9
+_NAMED_MONTH = re.compile(r"\bin\s+(" + "|".join(_MONTH_NAMES) + r")\b", _FLAGS)
+_ORDINAL_MONTH = re.compile(r"\bin\s+the\s+(\d+)(?:st|nd|rd|th)\s+month\b", _FLAGS)
+_UPTO = {"through", "thru", "until", "till", "up to"}
+# "units multiplied by price" / "price times units": the definition of revenue, not a second measure.
+_REVENUE_DEF = re.compile(
+    r"\(?\b(?:units?\s+(?:multiplied by|times)\s+(?:the\s+)?price"
+    r"|price\s+(?:multiplied by|times)\s+(?:the\s+)?units?)\b\)?", _FLAGS)
 _WORD = re.compile(r"[a-z0-9]+")
 _MAX_WORDS = {"largest", "biggest", "maximum", "max", "highest"}
 _MIN_WORDS = {"smallest", "lowest", "minimum", "min"}
@@ -236,18 +251,45 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
     found, text = _take(_ROUND, text)
     if found is False:
         return _unparsed("loose: repeated rounding clause")
-    decimals = int(found.group(1)) if found else None
+    decimals = int(found.group(1) or 0) if found else None
 
+    text = _REVENUE_DEF.sub(" ", text)
+    named = list(_NAMED_MONTH.finditer(text))
+    ordinal = list(_ORDINAL_MONTH.finditer(text))
     ranges = list(_LOOSE_MONTHS.finditer(text))
-    if len(ranges) > 1:
+    if len(ranges) + len(named) + len(ordinal) > 1:
         return _unparsed("loose: several month expressions")
     month_from = month_to = None
-    if ranges:
+    if named or ordinal:
+        mm = (named or ordinal)[0]
+        if named:
+            name = mm.group(1).casefold()
+            if any(name in vals for vals in values.values()):
+                return _unparsed("loose: month name is also a product/region")
+            month_from = month_to = _MONTH_NAMES[name]
+        else:
+            month_from = month_to = int(mm.group(1))
+        text = text[:mm.start()] + " " + text[mm.end():]
+    elif ranges:
         mm = ranges[0]
-        if mm.group(4) is not None and mm.group(1) is None:
+        lead, first, second, third, onward = mm.groups()
+        if third is not None and lead not in ("between", "from"):
             return _unparsed("loose: 'and' joins months only after between/from")
-        month_from = int(mm.group(2))
-        month_to = int(mm.group(3) or mm.group(4) or mm.group(2))
+        month_from = int(first)
+        if second is not None or third is not None:
+            if onward or lead in _UPTO or lead == "by":
+                return _unparsed("loose: month bounds mixed with an open bound")
+            month_to = int(second or third)
+        elif onward:
+            if lead not in (None, "from"):
+                return _unparsed("loose: open month bound")
+            month_to = 12
+        elif lead in _UPTO:
+            month_from, month_to = 1, int(first)
+        elif lead is None:
+            month_to = month_from
+        else:
+            return _unparsed("loose: month bound on one side only")
         text = text[:mm.start()] + " " + text[mm.end():]
 
     words = _WORD.findall(text)
@@ -278,6 +320,8 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
             return _unparsed("loose: ranked column is also filtered")
     elif (("product" in topic and product is None) or ("region" in topic and region is None)):
         return _unparsed("loose: column word without a value")
+    if month_from is not None and kw & {"from", "through", "to", "between"}:
+        return _unparsed("loose: month bound words left over")
     kw -= _LOOSE_STOP
     kw -= {"most", "highest", "greatest", "generated"} if top_col else set()
 
@@ -296,7 +340,9 @@ def parse_loose(instruction: str, workspace: Path | None) -> dict | SolveResult:
     has_revenue = "revenue" in kw
     has_avg = bool(kw & {"average", "avg", "mean"})
     if has_revenue:
-        kw -= {"revenue", "units", "unit", "price", "multiplied", "times"}
+        if kw & {"units", "unit", "price"}:
+            return _unparsed("loose: revenue together with units or price as a second measure")
+        kw -= {"revenue"}
     if has_avg:
         kw -= {"average", "avg", "mean"}
     has_units = bool(kw & {"units", "unit"})

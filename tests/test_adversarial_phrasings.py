@@ -19,15 +19,7 @@ from tools import gen_tasks
 U, I = "unparsed", "infeasible"
 
 # case id -> one-line reason (strict xfail: the solver gives a silent wrong outcome today)
-XFAIL: dict[str, str] = {
-    "d-months-through-only": "'through month 5' is read as month 5 only (data loose parser drops 'through')",
-    "d-by-month": "'by month 5' is read as month 5 only (data loose parser: 'by' is a stop word)",
-    "d-from-month": "'from month 5' is read as month 5 only (loose month regex: lone 'from' = single month)",
-    "d-through-revenue": "'through month 6' is read as month 6 only (same loose month-regex root cause)",
-    "d-compound-units-revenue": "two questions (units and revenue): loose parser keeps only revenue",
-    "d-top-both-measures": "'both the most units and the most revenue' answered by revenue only (has_revenue swallows 'units')",
-    "s-name-apostrophe-curly": "curly apostrophe in a kb name (O’Brien vs O'Brien) -> infeasible instead of the answer",
-}
+XFAIL: dict[str, str] = {}
 
 CASES: list[dict] = []
 
