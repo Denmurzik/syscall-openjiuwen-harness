@@ -69,7 +69,12 @@ def _phase1_target(out_queue, task: Task, solver_name=None) -> None:
     """Child process body: run one deterministic solver, send (task_id, SolveResult)."""
     try:
         mod = _solver_for(task.task_type)
-        res = mod.solve(task) if mod is not None else SolveResult("unparsed", note="unknown task type")
+        if mod is None:
+            res = SolveResult("unparsed", note="unknown task type")
+        elif task.task_type == "coding":  # the solver's own limit stays inside the parent's kill timeout
+            res = mod.solve(task, time_limit=config.coding_time_limit())
+        else:
+            res = mod.solve(task)
     except BaseException as e:  # the child must always answer
         res = SolveResult("unparsed", note=f"solver crashed: {e!r}")
     out_queue.put((task.task_id, res))
@@ -340,6 +345,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         log.exception("grouping failed")
         groups = {}
     for (ttype, template), members in groups.items():
+        # expected cost of one spec call; the rare shape retry on MODEL_ALT (up to 2 more) is left to the reserve
         est = estimate_json_tokens(template)
 
         def make(ttype=ttype, template=template, members=members):
@@ -353,7 +359,9 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                 el = time.monotonic() - start
                 for task, _ in members:
                     res = results.get(task.task_id)
-                    if res is not None and _final_2a(res):
+                    # a non-final result with a best guess is settled too: it stays unparsed (2b still runs)
+                    # and its guess is written by the last pass if nothing better comes
+                    if res is not None and (_final_2a(res) or (res.extra or {}).get("best_guess") is not None):
                         settle(2, task, res, el)
                 if exhausted is not None:
                     raise exhausted
@@ -369,7 +377,8 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     for task in [t for t in left if (tentative.get(t.task_id) is not None
                                      and (tentative[t.task_id].extra or {}).get("ambiguous"))]:
         extra = tentative[task.task_id].extra
-        # one call per arbitration model (each may retry once without the regex)
+        # expected cost: one call per arbitration model. The rare retry without the regex (a second call per
+        # model, only when a reply cannot be read) is not counted; the ledger reserve covers it
         est = (len(str(extra.get("ambiguous"))) // 30 + 10) * len(config.ARBITRATE_MODELS)
 
         def make(task=task, extra=extra):

@@ -549,3 +549,27 @@ def test_arbitration_estimate_covers_every_arbitration_model(tmp_path, monkeypat
         monkeypatch.setattr(scheduler, "arbitrate", fake_arb)
         scheduler.run(tasks, budget, object())
         assert calls == expect, budget
+
+
+@pytest.mark.parametrize("env, limit", [(None, 85.0), ("40", 25.0), ("200", 185.0), ("10", 5.0)])
+def test_coding_child_time_limit_follows_phase1_timeout(monkeypatch, env, limit):
+    import queue as q
+    from harness import config
+    if env is None:
+        monkeypatch.delenv("HARNESS_PHASE1_TIMEOUT_CODING", raising=False)
+    else:
+        monkeypatch.setenv("HARNESS_PHASE1_TIMEOUT_CODING", env)
+    seen = {}
+
+    class FakeCoding:
+        @staticmethod
+        def solve(task, time_limit=config.CODING_TIME_LIMIT):
+            seen["limit"] = time_limit
+            return SolveResult("unparsed")
+
+    monkeypatch.setattr(scheduler, "_solver_for", lambda ttype: FakeCoding)
+    out = q.Queue()
+    scheduler._phase1_target(out, Task("c", "coding", "fix", 1.0, "unittest", Path("."), Path(".")))
+    assert out.get_nowait()[0] == "c"
+    assert seen["limit"] == pytest.approx(limit)
+    assert config.coding_time_limit() == pytest.approx(limit)

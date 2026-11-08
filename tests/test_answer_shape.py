@@ -250,8 +250,9 @@ def test_scheduler_writes_good_member_when_retry_exhausts_budget(tmp_path, monke
     client = BudgetOnSecond('{"entity": "{E1}", "path": [], "field": "Employer"}')
     summary = scheduler.run(tasks, 100000, client)
     assert (tasks / "search_a" / "answer.txt").read_text(encoding="utf-8").strip() == "Porto Labs"
-    assert not (tasks / "search_b" / "answer.txt").exists()
-    assert summary["solved"] == 1 and later == []  # the run stopped: no 2b after exhaustion
+    # the wrong-shape member is not final; its value is only written by the last best-guess pass
+    assert (tasks / "search_b" / "answer.txt").read_text(encoding="utf-8").strip() == "1994"
+    assert later == []  # the run stopped: no 2b after exhaustion
     recs = [json.loads(x) for x in (tmp_path / "logs" / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()]
     assert any(r["status"] == "budget_exhausted" for r in recs)
 
@@ -284,3 +285,46 @@ def test_2a_shape_retry_shows_the_reply_in_hops_form(tmp_path):
     previous = json.loads(client.calls[1]["messages"][-2]["content"])
     assert previous == {"entity": "{E1}", "hops": ["Born"]}
     assert "hop" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_2a_final_shape_mismatch_keeps_best_guess(tmp_path):
+    ws, kb, name = _kb_ws(tmp_path)
+    t = _search(f"Which firm employs {name}?", ws)
+    template, members = _group(t)
+    client = FakeClient(*['{"entity": "{E1}", "hops": ["Born"]}'] * 2)
+    out = asyncio.run(solve_group("search", template, members, client))
+    assert out["s1"].status == "unparsed" and out["s1"].answer is None
+    assert out["s1"].extra == {"best_guess": kb[name]["Born"]}
+
+
+def test_2b_final_shape_mismatch_keeps_best_guess(tmp_path):
+    t = _program_task(tmp_path, "Which firm employs Ann Lee?")
+    client = FakeClient("print(1990)", "print(1991)")
+    res = asyncio.run(solve_with_program(t, client))
+    assert res.status == "unparsed" and res.extra == {"best_guess": "1991"}
+
+
+def test_2b_shape_mismatch_then_crash_keeps_the_wrong_shape_guess(tmp_path):
+    t = _program_task(tmp_path, "Which firm employs Ann Lee?")
+    client = FakeClient("print(1990)", "raise SystemExit(3)")
+    res = asyncio.run(solve_with_program(t, client))
+    assert res.status == "unparsed" and res.extra == {"best_guess": "1990"}
+
+
+def test_scheduler_writes_2a_best_guess_when_2b_fails(tmp_path, monkeypatch):
+    from harness import json_route, scheduler
+    from tests.test_scheduler import _make, unparsed_target
+    monkeypatch.setenv("HARNESS_LOG_DIR", str(tmp_path / "logs"))
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_a", "search", INTRO + "In which year was Ann Lee born?" + TAIL)
+
+    async def prog(task, client):
+        from harness.result import SolveResult
+        return SolveResult("unparsed", note="program exit code 1")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(json_route, "_execute", _fake_execute({"search_a": "12 March 1983"}))
+    client = FakeClient(*['{"entity": "{E1}", "hops": ["Born"]}'] * 2)
+    scheduler.run(tasks, 100000, client)
+    assert (tasks / "search_a" / "answer.txt").read_text(encoding="utf-8").strip() == "12 March 1983"

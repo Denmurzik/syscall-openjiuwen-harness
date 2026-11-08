@@ -72,6 +72,13 @@ def phase1_timeout(task_type: str) -> float:
     return PHASE1_TIMEOUT.get(task_type, default) if task_type in PHASE1_TIMEOUT else default
 
 
+def coding_time_limit() -> float:
+    """The coding solver's own limit inside the phase-1 child: 15 s under the kill timeout (85 at the
+    default 100), so it stops by itself (tentative answer, arbitration hint) before the parent kills it."""
+    t = phase1_timeout("coding")
+    return t - 15 if t > 30 else t * 0.5
+
+
 def retry_delays() -> tuple:
     raw = os.environ.get("HARNESS_RETRY_DELAYS")
     if raw is None or raw.strip() == "":

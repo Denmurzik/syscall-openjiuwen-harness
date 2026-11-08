@@ -83,10 +83,29 @@ _SEARCH_PROMPT = (
     "'City of the headquarters of the employer of the mentor of {E1}' -> hops "
     "[\"Mentor\",\"Employer\",\"Headquarters\"]. "
     "'Birth year of the mentor of the mentor of the mentor of {E1}' -> hops [\"Mentor\",\"Mentor\",\"Mentor\",\"Born\"].\n"
+    "Hops only go forward, from a page to the field it lists: if the question goes the reverse way (whom X mentors, "
+    "X's mentee, who works for company C), return {\"impossible\": true}. "
     "If the question cannot be answered this way return {\"impossible\": true}. Placeholders: write {E1} exactly "
     "as in the task text. Write the JSON compactly on one line. Output only the JSON object."
 )
 _HOPS = {name.casefold(): name for name in ("Born", "Employer", "Mentor", "Founded", "Headquarters")}
+
+# questions that walk a relation backwards (whom X mentors, who works for C): hops cannot express them, and a
+# forward reading gives a well-shaped wrong answer, so 2a leaves them to 2b (which can scan the whole KB)
+_SLOT = r"\{[ES]\d+\}"
+_REVERSE = re.compile("|".join([
+    r"\bmentees?\b",
+    rf"\bmentored by {_SLOT}",
+    rf"{_SLOT} mentor(?:s|ed)?\b(?! by)",                       # does X mentor / X mentors / X mentored
+    rf"{_SLOT} (?:is|was|has been) mentoring\b", rf"\b(?:is|was) {_SLOT} mentoring\b",
+    rf"\b(?:works?|working|worked) (?:for|at) {_SLOT}",
+    rf"\bemployed (?:by|at) {_SLOT}", rf"{_SLOT} employs?\b", r"\bemployees?\b", rf"\bstaff (?:of|at) {_SLOT}",
+]), re.I)
+
+
+def _reverse_relation(template: str) -> str | None:
+    m = _REVERSE.search(template)
+    return None if m is None else m.group(0)
 
 
 def _system_prompt(task_type: str) -> str | None:
@@ -216,6 +235,9 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
 
     if _system_prompt(task_type) is None:
         return all_members(SolveResult("unparsed", note=f"no JSON route for {task_type}"))
+    reverse = _reverse_relation(template) if task_type == "search" else None
+    if reverse is not None:
+        return all_members(SolveResult("unparsed", note=f"reverse relation: {reverse!r}"))
     try:
         spec = await request_spec(task_type, template, client)
     except BudgetExhausted:
@@ -255,7 +277,10 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
         if res is not None and res.status == "solved" and _shape_error(task, res) is None:
             out[task.task_id] = res
         else:
-            out[task.task_id] = SolveResult("unparsed", note=f"answer shape: {bad[task.task_id]}")
+            # not final, but the latest wrong-shape value stays a best guess for the scheduler's last pass
+            guess = res.answer if res is not None and res.status == "solved" else out[task.task_id].answer
+            out[task.task_id] = SolveResult("unparsed", note=f"answer shape: {bad[task.task_id]}",
+                                            extra={"best_guess": guess})
     if exhausted is not None:
         exhausted.results = out
         raise exhausted
@@ -272,7 +297,19 @@ def _execute_all(members: list[tuple[Task, dict[str, str]]], spec: dict) -> dict
     out: dict[str, SolveResult] = {}
     for task, slots in members:
         try:
-            out[task.task_id] = _execute(task, fill(spec, slots))
+            filled = fill(spec, slots)
+            res = _execute(task, filled)
         except Exception as e:  # KeyError for an unknown placeholder, ValueError for a bad number, ...
             out[task.task_id] = SolveResult("unparsed", note=f"json route failed: {e!r}")
+            continue
+        if (task.task_type == "search" and res.status == "infeasible"
+                and (res.note or "").startswith("start entity not found")
+                and not _task_value(filled.get("entity"), slots, task.instruction)):
+            # the model's (or the templater's) name, not the task's: let 2b look, do not close the task
+            res = SolveResult("unparsed", note=f"start entity not found, not a task value: {filled.get('entity')!r}")
+        out[task.task_id] = res
     return out
+
+
+def _task_value(entity: object, slots: dict[str, str], instruction: str) -> bool:
+    return isinstance(entity, str) and entity in slots.values() and entity in (instruction or "")

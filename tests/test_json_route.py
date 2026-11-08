@@ -372,3 +372,55 @@ def test_search_prompt_allows_company_or_literal_entity():
     from harness.json_route import _system_prompt
     p = _system_prompt("search")
     assert "person or company" in p and "literal name" in p
+
+
+# ------------------------------------------------------------------ search: reverse relations go to 2b
+REVERSE = ["Whom does {n} mentor?", "Who is {n} mentoring?", "Who is mentored by {n}?", "Name the mentee of {n}.",
+           "Which person does {n} mentor?", "Who are {n}'s mentees?", "Tell me which person {n} mentors.",
+           "Who works for {c}?", "Who works at {c}?", "Name an employee of {c}.", "List the employees of {c}.",
+           "Which person is employed by {c}?", "Whom does {c} employ?"]
+FORWARD = ["Who is the mentor of {n}?", "Find the person mentoring {n}.", "Which person mentors {n}?",
+           "Who mentored {n}?", "Who has been mentoring {n}?", "{n} is mentored by which person?",
+           "Which firm employs {n}?", "Which company does {n} work for?", "Who does {n} work for?",
+           "Which organisation has {n} on its payroll?", "Where is the employer of the mentor of {n} based?",
+           "Which company is {n} employed by?", "In which year was the mentor of {n} born?"]
+
+
+@pytest.mark.parametrize("q", REVERSE)
+def test_reverse_relation_is_unparsed_without_a_call(q, tmp_path):
+    ws, kb = _kb(tmp_path)
+    t = _ask(q.format(n="Ann Lee", c="Arktika Labs"), ws)
+    template, slots = templatize(t.instruction, "search")
+    client = FakeClient()
+    out = asyncio.run(solve_group("search", template, [(t, slots)], client))
+    assert out["s1"].status == "unparsed" and "reverse relation" in out["s1"].note
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("q", FORWARD)
+def test_forward_relation_is_not_flagged(q):
+    from harness.json_route import _reverse_relation
+    template, _ = templatize(q.format(n="Ann Lee"), "search")
+    assert _reverse_relation(template) is None, template
+
+
+def test_search_prompt_sends_reverse_questions_to_impossible():
+    from harness.json_route import _system_prompt
+    p = _system_prompt("search")
+    assert "reverse" in p and "whom X mentors" in p
+
+
+# ------------------------------------------------------------------ search: start entity not in the task
+def test_start_entity_not_found_is_final_only_for_a_task_value(tmp_path):
+    ws, kb = _kb(tmp_path)
+    t = _ask("In which year was Zzyzx Nobody born?", ws)
+    template, slots = templatize(t.instruction, "search")
+    out = asyncio.run(solve_group("search", template, [(t, slots)],
+                                  FakeClient('{"entity": "{E1}", "hops": ["Born"]}')))
+    assert out["s1"].status == "infeasible" and "start entity not found" in out["s1"].note
+    out = asyncio.run(solve_group("search", template, [(t, slots)],
+                                  FakeClient('{"entity": "Zzyzx Nobody", "hops": ["Born"]}')))
+    assert out["s1"].status == "infeasible"  # literal name, but it is the task's own value
+    out = asyncio.run(solve_group("search", template, [(t, slots)],
+                                  FakeClient('{"entity": "Zzyzx Nobodi", "hops": ["Born"]}')))
+    assert out["s1"].status == "unparsed" and "not a task value" in out["s1"].note

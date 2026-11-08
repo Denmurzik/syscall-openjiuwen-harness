@@ -128,6 +128,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
     messages = _program_messages(task)
     note = ""
     model, attempt, attempts, shape_retried = MODEL_FAST, 0, 2, False
+    guess = None  # the latest wrong-shape answer: a best guess for the scheduler's last pass
     while attempt < attempts:
         try:
             r = await client.chat(model, messages, 400)
@@ -144,8 +145,9 @@ async def solve_with_program(task: Task, client) -> SolveResult:
             bad = mismatch(task, answer)
             if bad is None:
                 return SolveResult("solved", answer=answer, note="model program")
+            guess = answer
             if shape_retried:
-                return SolveResult("unparsed", note=f"answer shape: {bad}")
+                return SolveResult("unparsed", note=f"answer shape: {bad}", extra={"best_guess": guess})
             shape_retried, model, attempts = True, MODEL_ALT, attempt + 2  # exactly one more call
             note = f"answer shape: {bad}"
             feedback = (f"Your program printed {answer[:60]!r}, but the question asks for "
@@ -160,7 +162,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
                                {"role": "user", "content": feedback + "\nFix it. Print the final answer with print(); "
                                            "do not write it to a file. Output only code."}]
         attempt += 1
-    return SolveResult("unparsed", note=note)
+    return SolveResult("unparsed", note=note, extra=None if guess is None else {"best_guess": guess})
 
 
 # ---------------------------------------------------------------- coding
