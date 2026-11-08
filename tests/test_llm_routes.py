@@ -314,3 +314,7 @@ def test_decimals_tail_form_without_round():
     assert normalize_answer("30.9", "exact_str", q) == "30.90"
     assert normalize_answer("12", "exact_str", "Prices are given to 2 decimal places. How many items cost more than 5?") == "12"
     assert normalize_answer("12", "exact_str", "How many items, to 2 decimals in the table, are there?") == "12"
+
+
+def test_decimals_only_in_the_last_sentence():
+    assert normalize_answer("12", "exact_str", "Round the prices to 2 decimals first. How many items cost more than 5?") == "12"

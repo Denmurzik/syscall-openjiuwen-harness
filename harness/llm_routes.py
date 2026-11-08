@@ -13,6 +13,7 @@ from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not ca
 from harness.result import SolveResult
 from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
+from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.shape import DESCRIBE, expected_shape, mismatch
 from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic writer reused
 from harness.solvers.testrun import TestReport, run_in_dir
@@ -63,10 +64,13 @@ _PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def _requested_decimals(instruction: str | None) -> int | None:
-    found = _DECIMALS.search(instruction or "")
+    sentences = split_sentences(strip_boilerplate(instruction or ""))
+    found = None
+    if sentences:  # the asking sentence only
+        found = _DECIMALS.search(sentences[-1]) or _TAIL_DECIMALS.search(sentences[-1])
     if not found:
         return None
-    word = (found.group(1) or found.group(2)).lower()
+    word = found.group("n").lower()
     n = _WORDS.get(word) if word in _WORDS else int(word)
     return n if n is not None and n <= 6 else None
 
