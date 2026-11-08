@@ -209,4 +209,5 @@ def test_math_styles_agree_with_hand_table(kind):
 def test_revenue_styles_are_not_sum_units_times_price():
     for texts, _ in paraphrase._D_STYLES:
         r = texts["revenue"]
-        assert "over all rows" in r or "per-row" in r, r
+        assert "all rows" not in r, r
+        assert "row by row" in r or "per-row" in r, r

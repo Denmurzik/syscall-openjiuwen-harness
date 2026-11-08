@@ -169,19 +169,19 @@ _D_METRICS = [
 ]
 # metric -> text, per metric style (lower-case first letter, except "I need ...")
 _D_STYLES = [
-    ({"units": "report the sum of the units column", "revenue": "report the sum, over all rows, of units times price",
+    ({"units": "report the sum of the units column", "revenue": "report the sum of units times price, computed row by row",
       "orders": "report the number of order rows", "avg_price": "report the mean price",
       "avg_units": "report the mean number of units per order",
       "max": "report the largest units value found in any one order",
       "min": "report the smallest units value found in any one order",
       "absent": "report the overall {c} granted"}, "."),
-    ({"units": "what do the units add up to", "revenue": "what does the sum over all rows of units times price come to",
+    ({"units": "what do the units add up to", "revenue": "what does the sum of units times price, computed row by row, come to",
       "orders": "how many order rows are there", "avg_price": "what does the price average out to",
       "avg_units": "what do the units per order average out to",
       "max": "which is the greatest units value in any one order",
       "min": "which is the least units value in any one order",
       "absent": "what is the overall {c} granted"}, "?"),
-    ({"units": "I need the grand total of units sold", "revenue": "I need the grand total, over all rows, of per-row units multiplied by price",
+    ({"units": "I need the grand total of units sold", "revenue": "I need the grand total of per-row units multiplied by price",
       "orders": "I need the count of order rows", "avg_price": "I need the typical price (arithmetic mean)",
       "avg_units": "I need the typical units per order (arithmetic mean)",
       "max": "I need the top units value of a single order",
