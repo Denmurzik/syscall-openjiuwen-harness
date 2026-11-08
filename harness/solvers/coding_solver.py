@@ -347,17 +347,39 @@ def contradictory_tests(test_src: str) -> bool:
     return bool(_contradicted_callees(test_src))
 
 
-_IMPURE = {"random", "time", "uuid", "datetime", "os", "sys", "secrets", "input", "open", "id",
-           "globals", "locals", "vars", "setattr", "getattr", "eval", "exec", "itertools",
-           "functools", "threading", "subprocess", "socket", "hash"}
+_PURE_BUILTINS = {"len", "sum", "min", "max", "sorted", "abs", "range", "str", "int", "float", "round",
+                  "bool", "list", "tuple", "dict", "set", "enumerate", "zip", "reversed", "any", "all",
+                  "divmod", "pow", "ord", "chr", "map", "filter", "isinstance"}
+_SIMPLE = (int, float, str, bool, type(None))
 
 
-def _is_pure(tree: ast.Module, name: str) -> bool:
-    """A top-level function with no hidden state: same arguments always give the same result.
-    Conservative: any global/nonlocal, decorator, module-level variable or impure name -> False."""
+def _simple_literal(v) -> bool:
+    """Builtin value without custom equality."""
+    if isinstance(v, _SIMPLE):
+        return True
+    if isinstance(v, (list, tuple, set, frozenset)):
+        return all(_simple_literal(x) for x in v)
+    if isinstance(v, dict):
+        return all(_simple_literal(k) and _simple_literal(x) for k, x in v.items())
+    return False
+
+
+def _callee_is_pure(tree: ast.Module, name: str) -> bool:
+    """Same literal arguments always give the same result: a top-level function that reads only
+    its parameters, its own locals, whitelisted builtins and other such functions."""
+    top: dict[str, int] = {}
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            top[n.name] = top.get(n.name, 0) + 1
+        else:
+            for t in ast.walk(n):
+                if isinstance(t, ast.Name) and isinstance(t.ctx, ast.Store):
+                    top[t.id] = top.get(t.id, 0) + 2
+                elif isinstance(t, (ast.Import, ast.ImportFrom)):
+                    for a in t.names:
+                        key = (a.asname or a.name).split(".")[0]
+                        top[key] = top.get(key, 0) + 2
     funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-    state = {t.id for n in tree.body if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign))
-             for t in ast.walk(n) if isinstance(t, ast.Name)}
     todo, seen = [name], set()
     while todo:
         cur = todo.pop()
@@ -365,32 +387,121 @@ def _is_pure(tree: ast.Module, name: str) -> bool:
             continue
         seen.add(cur)
         fn = funcs.get(cur)
-        if fn is None or fn.decorator_list:
+        if fn is None or top.get(cur) != 1 or fn.decorator_list:
             return False
+        a = fn.args
+        if any(d is not None and not isinstance(d, ast.Constant) for d in a.defaults + a.kw_defaults):
+            return False
+        local = set()
         for node in ast.walk(fn):
-            if isinstance(node, (ast.Global, ast.Nonlocal, ast.Await, ast.Yield, ast.YieldFrom)):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                local.add(node.id)
+            elif isinstance(node, ast.arg):
+                local.add(node.arg)
+        for node in ast.walk(fn):
+            if node is fn:
+                continue
+            if isinstance(node, (ast.Global, ast.Nonlocal, ast.Import, ast.ImportFrom, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef, ast.Await, ast.Yield,
+                                 ast.YieldFrom, ast.With, ast.AsyncWith, ast.Try, ast.Delete)):
                 return False
-            if isinstance(node, ast.Name):
-                if node.id in _IMPURE or node.id in state:
+            if isinstance(node, ast.Attribute):
+                if node.attr.startswith("_") or not (isinstance(node.value, ast.Name) and node.value.id in local):
                     return False
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                if node.id in local:
+                    continue
                 if node.id in funcs:
                     todo.append(node.id)
-            elif isinstance(node, ast.Attribute) and node.attr in _IMPURE:
-                return False
+                elif node.id not in _PURE_BUILTINS or node.id in top:
+                    return False
     return True
 
 
+_PATCHY = {"mock", "patch", "monkeypatch", "patch_object", "MagicMock", "Mock"}
+_SETUPS = {"setUp", "setUpClass", "setUpModule", "tearDown", "tearDownClass", "tearDownModule"}
+
+
 def provable_contradiction(test_src: str, mylib_src: str) -> bool:
-    """Strict proof for an early `infeasible`: the visible tests ask one mylib function for two
-    different results on identical literal arguments AND that function is stateless."""
-    callees = _contradicted_callees(test_src)
-    if not callees:
-        return False
+    """Strict proof for an early `infeasible`; any doubt -> False. Needs two plain top-level
+    `self.assertEqual(<mylib call with literal args>, <literal>)` statements of one test method,
+    the same call, expected literals unequal under Python ==, and a stateless callee."""
     try:
-        tree = ast.parse(mylib_src)
-    except SyntaxError:
+        tree = ast.parse(test_src)
+        lib = ast.parse(mylib_src)
+    except (SyntaxError, ValueError):
         return False
-    return all(_is_pure(tree, c) for c in callees)
+    aliases, names = _mylib_names(tree)
+    if not aliases and not names:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _PATCHY:
+            return False
+        if isinstance(node, ast.Attribute) and node.attr in _PATCHY:
+            return False
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            mods = [getattr(node, "module", None) or ""] + [a.name for a in node.names]
+            if any(w in m for m in mods for w in ("mock", "patch", "pytest")):
+                return False
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
+            tg = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
+            for t in tg:
+                for x in ast.walk(t):
+                    if isinstance(x, ast.Attribute) and isinstance(x.value, ast.Name) and x.value.id in aliases:
+                        return False
+                    if isinstance(x, ast.Name) and (x.id in aliases or x.id in names):
+                        return False  # rebinding the module or an imported name
+        if isinstance(node, ast.FunctionDef) and node.name in _SETUPS:
+            return False
+
+    def callee(c: ast.expr) -> str | None:
+        if not isinstance(c, ast.Call) or not (c.args or c.keywords):
+            return None
+        f = c.func
+        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in aliases:
+            return f.attr
+        if isinstance(f, ast.Name) and f.id in names:
+            return f.id
+        return None
+
+    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef)]:
+        for fn in cls.body:
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            seen: dict[tuple, object] = {}
+            for st in fn.body:  # direct children only: no if/try/with/for around the asserts
+                if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Call)):
+                    continue
+                node = st.value
+                f = node.func
+                if not (isinstance(f, ast.Attribute) and f.attr == "assertEqual"
+                        and isinstance(f.value, ast.Name) and f.value.id == "self"
+                        and len(node.args) == 2 and not node.keywords):
+                    continue
+                name = callee(node.args[0])
+                if name is None:
+                    continue
+                call = node.args[0]
+                try:
+                    args = [ast.literal_eval(x) for x in call.args]
+                    kws = [(k.arg, ast.literal_eval(k.value)) for k in call.keywords]
+                    expected = ast.literal_eval(node.args[1])
+                except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
+                    continue
+                if any(k is None for k, _ in kws) or not _simple_literal(expected) \
+                        or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
+                    continue
+                key = (name, repr(args), repr(kws))
+                if key not in seen:
+                    seen[key] = expected
+                    continue
+                try:
+                    differs = bool(seen[key] != expected)
+                except Exception:
+                    differs = False
+                if differs and _callee_is_pure(lib, name):
+                    return True
+    return False
 
 
 def _norm(seg: str) -> str:
@@ -627,21 +738,21 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             return SolveResult("solved", answer="DONE", note="tests already pass")
         if any(f.startswith("<") for f in report.failed):
             return SolveResult("unparsed", note=f"cannot localize failures: {report.failed}")
-        if provable_contradiction(test_src, original):  # no search, no model calls
-            return SolveResult("infeasible", note="tests contradict each other")
         initially_failing = list(report.failed)
         cur = original
         try:
             while not report.ok:
                 step = _repair_round(ctx, cur, report, refs)
                 if step is None:
-                    if contradictory_tests(test_src):  # only after repair failed: saves model tokens
+                    if contradictory_tests(test_src) or provable_contradiction(test_src, original):
                         return SolveResult("infeasible", note="tests contradict each other")
                     if cur != original:  # best partial repair: a guess beats no answer
                         return _partial(ws, mylib, cur, report)
                     return SolveResult("unparsed", note=f"no repair found for {report.failed}")
                 cur, report = step
         except _OutOfTime:
+            if provable_contradiction(test_src, original):  # search is hopeless: no model calls
+                return SolveResult("infeasible", note="tests contradict each other")
             if cur != original and not report.ok:
                 return _partial(ws, mylib, cur, report)
             raise

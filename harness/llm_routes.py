@@ -318,11 +318,6 @@ def _patch_messages(mylib: str, tests: str, output: str) -> list[dict]:
     return [{"role": "system", "content": PATCH_SYSTEM}, {"role": "user", "content": user}]
 
 
-def _sig(out: str) -> str:
-    """Test output without temp paths and timings, for comparing two runs."""
-    return re.sub(r"llm_fix_\w+|\d+\.\d+s|0x[0-9a-f]+", "", out)
-
-
 def _budget_is_free(client) -> bool:
     """More than half of the budget left: the reasoning step is affordable for any reward."""
     ledger = getattr(client, "ledger", None)
@@ -348,12 +343,10 @@ async def fix_coding(task: Task, client) -> SolveResult:
         return SolveResult("infeasible", note="tests contradict each other")
     output = base_report.output
     attempts = [(MODEL_FAST, 400, {}), (MODEL_ALT, 600, {})]
-    reason_allowed = task.reward >= 3 or _budget_is_free(client)
+    if task.reward >= 3 or _budget_is_free(client):
+        attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))
     note = "no attempt made"
-    alt_progress = False
-    for model, max_tokens, extra in attempts + [(MODEL_REASON, 3000, {"reasoning_effort": "low"})]:
-        if model == MODEL_REASON and not (reason_allowed and alt_progress):
-            break  # the expensive tier only follows a partial fix by ALT
+    for model, max_tokens, extra in attempts:
         try:
             r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
         except LLMUnavailable as e:
@@ -368,12 +361,7 @@ async def fix_coding(task: Task, client) -> SolveResult:
             shutil.rmtree(ws / "__pycache__", ignore_errors=True)
             return SolveResult("solved", answer="DONE", note=f"patched by {model}")
         note = f"{model}: tests still failing"
-        moved = _sig(report.output) != _sig(output)  # a stuck ladder repeats the same failure
         output = report.output
-        clean = not any(f.startswith("<") for f in report.failed)
-        if len(report.failed) < len(base_report.failed) and clean:
+        if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
             base, base_report = fixed, report  # keep partial progress for the next attempt
-            alt_progress = model == MODEL_ALT
-        elif model == MODEL_ALT and moved and clean:
-            alt_progress = True
     return SolveResult("unparsed", note=note)

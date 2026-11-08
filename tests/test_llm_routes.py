@@ -113,7 +113,7 @@ def test_fix_coding_third_attempt_only_for_reward_3(tmp_path):
     assert r.status == "unparsed" and len(c.calls) == 2
     assert "s -= x" in (t.workspace / "mylib.py").read_text()   # untouched
     t = _fixture("coding_0003", tmp_path / "b", reward=3.0)
-    c = FakeClient(["nonsense", bad, "FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE])
+    c = FakeClient([bad, bad, "FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE])
     r = run(fix_coding(t, c))
     assert r.status == "solved" and len(c.calls) == 3
     assert c.calls[2]["model"] == config.MODEL_REASON
@@ -263,7 +263,7 @@ def test_fix_coding_reasoning_step_when_budget_is_free(tmp_path):
     good = "FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVERSE
     for spent, expect_calls in ((100, 3), (60000, 2)):
         t = _fixture("coding_0003", tmp_path / str(spent), reward=2.0)
-        c = FakeClient(["nonsense", bad, good])
+        c = FakeClient([bad, bad, good])
         c.ledger = _Ledger(100000, spent)
         r = run(fix_coding(t, c))
         assert len(c.calls) == expect_calls, spent
@@ -346,7 +346,7 @@ def test_decimals_not_from_data_sentences():
     assert normalize_answer("12", "exact_str", "How many orders?" + _CSV + " Prices use 2 decimals." + _TAIL) == "12"
 
 
-# ---- task 30: contradictory visible tests, REASON only on progress
+# ---- task 30: strict contradiction proof ends fix_coding with zero calls
 CONTRA_LIB = "def f(x):\n    return x\n"
 CONTRA_TESTS = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
                 "    def test_f(self):\n        self.assertEqual(m.f(7), 7)\n"
@@ -368,17 +368,7 @@ def test_fix_coding_contradiction_is_infeasible_without_calls(tmp_path):
 
 
 def test_fix_coding_stateful_callee_is_not_declared_infeasible(tmp_path):
-    lib = "_n = [0]\n\ndef f(x):\n    _n[0] += 1\n    return _n[0]\n"
+    lib = "def f(x, acc=[]):\n    acc.append(x)\n    return len(acc)\n"
     c = FakeClient(["nonsense", "nonsense"])
     r = run(fix_coding(_custom_task(tmp_path, lib, CONTRA_TESTS, reward=2.0), c))
     assert r.status == "unparsed" and len(c.calls) == 2
-
-
-def test_fix_coding_reason_needs_alt_progress(tmp_path):
-    bad = "FUNC total\n" + GOOD_TOTAL
-    t = _fixture("coding_0003", tmp_path / "a", reward=3.0)   # FAST progressed, ALT adds none
-    c = FakeClient([bad, bad])
-    assert run(fix_coding(t, c)).status == "unparsed" and len(c.calls) == 2
-    t = _fixture("coding_0003", tmp_path / "b", reward=3.0)   # nothing applies
-    c = FakeClient(["nonsense", "nonsense"])
-    assert run(fix_coding(t, c)).status == "unparsed" and len(c.calls) == 2

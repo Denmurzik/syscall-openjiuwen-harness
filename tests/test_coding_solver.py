@@ -343,27 +343,83 @@ def test_tie_keeps_strict_comparison_first_occurrence(tmp_path):
     assert "len(w) > len(best)" in (t.workspace / "mylib.py").read_text(encoding="utf-8")
 
 
-def test_contradiction_ends_before_any_search(tmp_path, monkeypatch):
-    from harness.solvers import coding_solver as cs
-
-    def boom(*a, **k):
-        raise AssertionError("repair search must not start")
-    monkeypatch.setattr(cs, "_repair_round", boom)
-    lib = "def f(x):\n    return x\n\ndef g(x):\n    return x + 1\n"
-    tests = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
-             "    def test_f(self):\n        self.assertEqual(m.f(7), 7)\n        self.assertEqual(m.f(7), 8)\n"
-             "    def test_g(self):\n        self.assertEqual(m.g(1), 5)\n")
-    r = solve(_custom(tmp_path, lib, tests))
-    assert r.status == "infeasible" and r.answer is None
+# ---------------------------------------------------------------- strict contradiction proof
+_H = ("import unittest\nimport mylib as m\nfrom unittest import mock\n\n"
+      "class T(unittest.TestCase):\n    def test_a(self):\n")
 
 
-def test_stateful_callee_is_not_a_proof():
+def _t(body: str, header: str = _H.replace("from unittest import mock" + chr(10), "")) -> str:
+    return header + "".join("        " + ln + "\n" for ln in body.split("\n"))
+
+
+_TWO = "self.assertEqual(m.f(1), 1)\nself.assertEqual(m.f(1), 2)"
+_PURE = "def f(x):\n    return x\n"
+
+
+def _pc(tests, lib):
     from harness.solvers.coding_solver import provable_contradiction
-    tests = ("import mylib as m\nclass T:\n    def test_f(self):\n"
-             "        self.assertEqual(m.f(1), 1)\n        self.assertEqual(m.f(1), 2)\n")
-    assert provable_contradiction(tests, "def f(x):\n    return x\n")
-    assert not provable_contradiction(tests, "n = 0\ndef f(x):\n    global n\n    n += 1\n    return n\n")
-    assert not provable_contradiction(tests, "c = []\ndef f(x):\n    c.append(x)\n    return len(c)\n")
-    assert not provable_contradiction(tests, "import random\ndef f(x):\n    return random.random()\n")
-    assert not provable_contradiction(tests, "class f:\n    def __init__(self, x): pass\n")
-    assert not provable_contradiction(tests, "def f(x):\n    return g(x)\ndef g(x):\n    return id(x)\n")
+    return provable_contradiction(tests, lib)
+
+
+def test_proof_true_contradiction():
+    assert _pc(_t("self.assertEqual(m.f(7), 7)\nself.assertEqual(m.f(7), 8)"), _PURE)
+    assert _pc(_t("self.assertEqual(m.f([1]), 2)\nself.assertEqual(m.f([1]), 1)"),
+               "def f(l):\n    l.append(1)\n    return len(l)\n")
+    assert _pc(_t("self.assertEqual(m.f({'a':1}), 1)\nself.assertEqual(m.f({'a':1}), 2)"),
+               "def f(d):\n    return sorted(d)[0]\n")
+
+
+def test_proof_python_equality_means_no_proof():
+    for a, b in (("1", "1.0"), ("True", "1"), ("'a'", '"a"'), ("0", "False"), ("[1]", "[1.0]")):
+        assert not _pc(_t(f"self.assertEqual(m.f(7), {a})\nself.assertEqual(m.f(7), {b})"), _PURE)
+
+
+def test_proof_other_assertions_and_contexts():
+    assert not _pc(_t("self.assertAlmostEqual(m.f(7), 1.0)\nself.assertAlmostEqual(m.f(7), 2.0)"), _PURE)
+    assert not _pc(_t("self.assertEqual(m.f(7), 7)\nself.assertNotEqual(m.f(7), 8)"), _PURE)
+    assert not _pc(_t("self.assertEqual(m.f(7), 7)\nself.assertIn(m.f(7), [8])"), _PURE)
+    assert not _pc(_t("self.assertCountEqual(m.f([1]), [1])\nself.assertCountEqual(m.f([1]), [2])"), _PURE)
+    assert not _pc(_t("if True:\n    self.assertEqual(m.f(7), 7)\nelse:\n    self.assertEqual(m.f(7), 8)"), _PURE)
+    assert not _pc(_t("try:\n    self.assertEqual(m.f(7), 8)\nexcept AssertionError:\n"
+                      "    self.assertEqual(m.f(7), 7)"), _PURE)
+    assert not _pc(_t("for e in (1, 2):\n    with self.subTest(e=e):\n        self.assertEqual(m.f(1), e)"), _PURE)
+    # two classes with the same method name
+    two_cls = ("import unittest\nimport mylib as m\nclass A(unittest.TestCase):\n    def test_a(self):\n"
+               "        self.assertEqual(m.f(1), 1)\nclass B(unittest.TestCase):\n    def test_a(self):\n"
+               "        self.assertEqual(m.f(1), 2)\n")
+    assert not _pc(two_cls, _PURE)
+
+
+def test_proof_mocking_and_monkeypatching():
+    lib = "def g(x):\n    return x\ndef f(x):\n    return g(x)\n"
+    assert not _pc(_t("self.assertEqual(m.f(7), 7)\nwith mock.patch('mylib.g', return_value=9):\n"
+                      "    self.assertEqual(m.f(7), 9)"), lib)
+    assert not _pc(_t("self.assertEqual(m.f(7), 7)\nm.g = lambda x: 9\nself.assertEqual(m.f(7), 9)"), lib)
+    two = "self.assertEqual(m.f(7), 7)" + chr(10) + "self.assertEqual(m.f(7), 8)"
+    assert not _pc(_t(two, _H), lib)  # imports mock
+    setup = _H.replace("    def test_a", "    def setUp(self):\n        pass\n    def test_a")
+    assert not _pc(setup + "        self.assertEqual(m.f(7), 7)\n        self.assertEqual(m.f(7), 8)\n", lib)
+
+
+def test_proof_stateful_callee_means_no_proof():
+    for lib in (
+        "def f(x, acc=[]):\n    acc.append(x)\n    return len(acc)\n",
+        "class C:\n    n = 0\ndef f(x):\n    C.n += 1\n    return C.n\n",
+        "from random import randint\ndef f(x):\n    return randint(1, 2)\n",
+        "from helper import c\ndef f(x):\n    return c()\n",
+        "from pathlib import Path\ndef f(x):\n    p = Path('c.txt')\n    p.write_text('1')\n    return 1\n",
+        "n = 0\ndef f(x):\n    global n\n    n += 1\n    return n\n",
+        "c = []\ndef f(x):\n    c.append(x)\n    return len(c)\n",
+        "def f(x):\n    return open('c.txt').read()\n",
+        "class f:\n    def __init__(self, x): pass\n",
+        "def f(x):\n    return g(x)\ndef g(x):\n    return id(x)\n",
+        "def f(x):\n    return x\nf = print\n",
+        "import functools\n@functools.lru_cache\ndef f(x):\n    return x\n",
+        "class A:\n    def __eq__(s, o): return True\ndef f(x):\n    return A()\n",
+    ):
+        assert not _pc(_t(_TWO), lib), lib
+
+
+def test_stateful_no_arg_and_missing_function():
+    assert not _pc(_t(_TWO), "def h(x):\n    return x\n")
+    assert not _pc(_t("self.assertEqual(m.f(), 1)\nself.assertEqual(m.f(), 2)"), "def f():\n    return 1\n")
