@@ -268,3 +268,33 @@ def test_fix_coding_reasoning_step_when_budget_is_free(tmp_path):
         r = run(fix_coding(t, c))
         assert len(c.calls) == expect_calls, spent
         assert (r.status == "solved") == (expect_calls == 3)
+
+
+# ---- task 26: requested decimal places
+def test_normalize_answer_pads_requested_decimals():
+    q = "What is the average, rounded to 2 decimal places?"
+    assert normalize_answer("30.9\n", "exact_str", q) == "30.90"
+    assert normalize_answer("23.0", "exact_str", q) == "23.00"
+    assert normalize_answer("23", "exact_str", q) == "23.00"
+    assert normalize_answer("12.34", "exact_str", q) == "12.34"
+    assert normalize_answer("3.14159", "exact_str", q) == "3.14"
+    assert normalize_answer("2.675", "exact_str", q) == "2.68"  # same ROUND_HALF_UP as phase 1
+    assert normalize_answer("7.5", "exact_str", "Give it to three decimals.") == "7.500"
+    assert normalize_answer("7.5", "exact_str", "rounded to one decimal place") == "7.5"
+
+
+def test_normalize_answer_decimals_leaves_other_answers():
+    q = "What is the average, rounded to 2 decimal places?"
+    assert normalize_answer("Osaka", "exact_str", q) == "Osaka"
+    assert normalize_answer("1.5 and 2.5", "exact_str", q) == "1.5 and 2.5"
+    assert normalize_answer("30.9", "exact_str", "What is the average?") == "30.9"
+    assert normalize_answer("30.9", "exact_str") == "30.9"
+    assert normalize_answer("31.4", "exact_int", "rounded to the nearest integer") == "31"
+    assert normalize_answer("31.0", "exact_int", q) == "31"
+
+
+def test_phase1_executor_keeps_requested_decimals():
+    from decimal import Decimal
+    from harness.solvers.data_solver import _fmt
+    assert _fmt(Decimal("30.9"), "exact_str", 2) == "30.90"
+    assert _fmt(Decimal("23"), "exact_str", 2) == "23.00"

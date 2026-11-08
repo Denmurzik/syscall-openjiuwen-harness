@@ -55,7 +55,34 @@ def extract_code(text: str, join_all: bool = True) -> str:
 _NUM = re.compile(r"(?:(?<![\w])-)?\d+(?:\.\d+)?")
 
 
-def normalize_answer(stdout: str, check: str | None) -> str | None:
+_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+_DECIMALS = re.compile(r"\bto\s+(\d+|one|two|three|four|five|six)\s+decimal(?:\s+places?|s)?\b"
+                       r"|\b(\d+)\s+d\.?p\.?(?!\w)", re.I)
+_PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _requested_decimals(instruction: str | None) -> int | None:
+    found = _DECIMALS.search(instruction or "")
+    if not found:
+        return None
+    word = (found.group(1) or found.group(2)).lower()
+    n = _WORDS.get(word) if word in _WORDS else int(word)
+    return n if n is not None and n <= 6 else None
+
+
+def _with_decimals(ans: str, instruction: str | None) -> str:
+    """A lone number gets exactly the requested places, rounded as the phase-1 executor does (`_fmt`)."""
+    n = _requested_decimals(instruction)
+    if n is None or not _PLAIN_NUMBER.fullmatch(ans):
+        return ans
+    from harness.solvers.data_solver import _fmt
+    try:
+        return _fmt(Decimal(ans), "exact_str", n)
+    except (InvalidOperation, ValueError):
+        return ans
+
+
+def normalize_answer(stdout: str, check: str | None, instruction: str | None = None) -> str | None:
     if check == "exact_int":
         nums = _NUM.findall(re.sub(r"(?<=\d),(?=\d{3})", "", stdout))
         if not nums:
@@ -71,7 +98,7 @@ def normalize_answer(stdout: str, check: str | None) -> str | None:
         return None
     ans = re.sub(r"^answer\s*:\s*", "", lines[-1], flags=re.I).strip()
     ans = ans.strip("\"'").strip()
-    return ans or None
+    return _with_decimals(ans, instruction) if ans else None
 
 
 def _is_text(raw: bytes) -> bool:
@@ -140,7 +167,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
             return SolveResult("infeasible", note="program printed IMPOSSIBLE")
-        answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check)
+        answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
         if answer is not None:
             bad = mismatch(task, answer)
             if bad is None:
