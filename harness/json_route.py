@@ -98,6 +98,7 @@ _REVERSE = re.compile("|".join([
     rf"\bmentored by {_SLOT}",
     rf"{_SLOT} mentor(?:s|ed)?\b(?! by)",                       # does X mentor / X mentors / X mentored
     rf"{_SLOT} (?:is|was|has been) mentoring\b", rf"\b(?:is|was) {_SLOT} mentoring\b",
+    rf"\b(?:has|had|have) {_SLOT} as (?:(?:his|her|their|its|a|an|the) )?(?:mentor|employer)\b",  # X is the mentor
     rf"\b(?:works?|working|worked) (?:for|at) {_SLOT}",
     rf"\bemployed (?:by|at) {_SLOT}", rf"{_SLOT} employs?\b", r"\bemployees?\b", rf"\bstaff (?:of|at) {_SLOT}",
 ]), re.I)

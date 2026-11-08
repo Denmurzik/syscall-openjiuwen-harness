@@ -375,11 +375,14 @@ def test_search_prompt_allows_company_or_literal_entity():
 
 
 # ------------------------------------------------------------------ search: reverse relations go to 2b
-REVERSE = ["Whom does {n} mentor?", "Who is {n} mentoring?", "Who is mentored by {n}?", "Name the mentee of {n}.",
+# the 7 phrasings of the final review (4 named there, 3 added by the lead) first, then more variants
+REVIEW7 = ["Whom does {n} mentor?", "Who is {n} mentoring?", "Who is mentored by {n}?", "Who is {n}'s mentee?",
+           "Name the person that {n} mentors.", "Which individual has {n} as their mentor?", "Who works for {c}?"]
+REVERSE = REVIEW7 + ["Name the mentee of {n}.", "Which person has {c} as her employer?",
            "Which person does {n} mentor?", "Who are {n}'s mentees?", "Tell me which person {n} mentors.",
-           "Who works for {c}?", "Who works at {c}?", "Name an employee of {c}.", "List the employees of {c}.",
+           "Who works at {c}?", "Name an employee of {c}.", "List the employees of {c}.",
            "Which person is employed by {c}?", "Whom does {c} employ?"]
-FORWARD = ["Who is the mentor of {n}?", "Find the person mentoring {n}.", "Which person mentors {n}?",
+FORWARD = ["Who is the mentor of {n}?", "Which individual is {n}'s mentor?", "Who does {n} have as a mentor?", "Find the person mentoring {n}.", "Which person mentors {n}?",
            "Who mentored {n}?", "Who has been mentoring {n}?", "{n} is mentored by which person?",
            "Which firm employs {n}?", "Which company does {n} work for?", "Who does {n} work for?",
            "Which organisation has {n} on its payroll?", "Where is the employer of the mentor of {n} based?",
