@@ -7,7 +7,9 @@ from harness.tasks import Task
 _STOP_WORDS = {"A", "An", "The", "In", "How", "What", "Which", "Who", "Where", "When", "Then", "It", "Use",
                "Compute"}
 _QUOTED = re.compile(r"""(?<![\w])'([^'\n]+)'(?!\w)|"([^"\n]+)\"""")
-_ENTITY = re.compile(r"\b[A-Z][a-z]+(?: [A-Z][a-z]+){1,2}\b")
+# a name word may be hyphenated (Nikolai-Felix, Petrov-Sato); a later word may be an initial (Quinn D. Muller)
+_NAME_WORD = r"[A-Z][a-z]+(?:-[A-Z][a-z]+)*"
+_ENTITY = re.compile(rf"\b{_NAME_WORD}(?: (?:{_NAME_WORD}|[A-Z]\.)){{1,2}}(?![\w])")
 _PLACEHOLDER = re.compile(r"\{[SEN]\d+\}")
 # whole integers only: not part of a word, a decimal, or an existing placeholder
 _NUMBER = re.compile(r"(?<![\w.{])\d+(?![\w}]|\.\d)")

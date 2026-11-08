@@ -270,3 +270,91 @@ def test_rules_allow_placeholders_in_expressions_and_unknown_metric_impossible()
     from harness.json_route import _system_prompt
     assert "inside the expression" in _system_prompt("math")
     assert "impossible" in _system_prompt("data_analysis").split("one of:")[1]
+
+
+# ------------------------------------------------------------------ search: hops schema
+def _kb(tmp_path):
+    ws = tmp_path / "workspace"
+    shutil.copytree(FIX / "search_0001" / "workspace", ws)
+    from harness.solvers.search_solver import load_kb
+    return ws, load_kb(ws / "kb")
+
+
+def _ask(question: str, ws: Path, tid: str = "s1") -> Task:
+    ins = ("The directory kb/ contains a small knowledge base of markdown files. "
+           f"{question} Work only inside the current directory.")
+    return Task(tid, "search", ins, 1.0, "exact_str", ws.parent, ws)
+
+
+def test_search_hops_become_path_and_field():
+    reply = '{"entity": "{E1}", "hops": ["Mentor", "Employer", "Headquarters"]}'
+    spec = asyncio.run(request_spec("search", "t", FakeClient(reply)))
+    assert spec == {"entity": "{E1}", "path": ["Mentor", "Employer"], "field": "Headquarters"}
+
+
+def test_search_single_hop_has_empty_path_and_names_are_canonical():
+    spec = asyncio.run(request_spec("search", "t", FakeClient('{"entity": "{E1}", "hops": ["mentor"]}')))
+    assert spec == {"entity": "{E1}", "path": [], "field": "Mentor"}
+
+
+def test_search_old_path_field_reply_still_accepted():
+    reply = '{"entity": "{E1}", "path": ["Employer"], "field": "Headquarters"}'
+    spec = asyncio.run(request_spec("search", "t", FakeClient(reply)))
+    assert spec == {"entity": "{E1}", "path": ["Employer"], "field": "Headquarters"}
+
+
+@pytest.mark.parametrize("bad", ['{"entity": "{E1}", "hops": []}',
+                                 '{"entity": "{E1}", "hops": ["Mentor", "Name"]}',
+                                 '{"entity": "{E1}", "hops": "Mentor"}',
+                                 '{"entity": "{E1}", "hops": [3]}'])
+def test_search_bad_hops_are_an_invalid_spec(bad):
+    client = FakeClient(bad, bad)
+    assert asyncio.run(request_spec("search", "t", client)) is None
+    assert len(client.calls) == 2
+    assert "hops" in client.calls[1]["messages"][-1]["content"]
+
+
+def test_search_bad_hops_then_good_retry():
+    client = FakeClient('{"entity": "{E1}", "hops": ["Name"]}', '{"entity": "{E1}", "hops": ["Born"]}')
+    assert asyncio.run(request_spec("search", "t", client)) == {"entity": "{E1}", "path": [], "field": "Born"}
+
+
+def test_hops_only_for_search():
+    reply = '{"start": 1, "steps": [], "hops": []}'
+    assert asyncio.run(request_spec("math", "t", FakeClient(reply))) == {"start": 1, "steps": [], "hops": []}
+
+
+def test_person_mentoring_x_is_one_mentor_hop(tmp_path):
+    ws, kb = _kb(tmp_path)
+    name = next(n for n, f in kb.items() if f.get("Mentor") in kb)
+    t = _ask(f"Find the person mentoring {name}.", ws)
+    template, slots = templatize(t.instruction)
+    client = FakeClient('{"entity": "{E1}", "hops": ["Mentor"]}')
+    out = asyncio.run(solve_group("search", template, [(t, slots)], client))
+    assert out["s1"].status == "solved" and out["s1"].answer == kb[name]["Mentor"]
+    assert len(client.calls) == 1
+
+
+def test_mentor_of_mentor_is_two_hops(tmp_path):
+    ws, kb = _kb(tmp_path)
+    name = next(n for n, f in kb.items() if kb.get(f.get("Mentor"), {}).get("Mentor") in kb)
+    t = _ask(f"Who is the mentor of the mentor of {name}?", ws)
+    template, slots = templatize(t.instruction)
+    out = asyncio.run(solve_group("search", template, [(t, slots)],
+                                  FakeClient('{"entity": "{E1}", "hops": ["Mentor", "Mentor"]}')))
+    assert out["s1"].answer == kb[kb[name]["Mentor"]]["Mentor"]
+
+
+def test_search_prompt_speaks_hops():
+    from harness.json_route import _system_prompt
+    p = _system_prompt("search")
+    assert '"hops"' in p and '"path"' not in p
+    assert "Find the person mentoring {E1}" in p and '["Mentor"]' in p
+    assert '["Mentor","Mentor"]' in p
+    for word in ("mentoring", "payroll", "works for", "head office", "based", "birth", "established"):
+        assert word in p
+
+
+def test_search_impossible_with_hops_stays_impossible():
+    spec = asyncio.run(request_spec("search", "t", FakeClient('{"impossible": true, "hops": []}')))
+    assert spec == {"impossible": True, "hops": []}

@@ -1,4 +1,5 @@
 import json
+import pytest
 from pathlib import Path
 
 from harness.tasks import Task
@@ -68,3 +69,24 @@ def test_equal_numbers_share_template_with_different_numbers():
     t1, s1 = templatize("A warehouse starts with 3 boxes. It ships 3 boxes per day for 3 days.")
     t2, _ = templatize("A warehouse starts with 9 boxes. It ships 7 boxes per day for 3 days.")
     assert t1 == t2 and s1 == {"N1": "3", "N2": "3", "N3": "3"}
+
+
+@pytest.mark.parametrize("name", ["Nikolai-Felix Lindqvist", "Quinn D. Muller", "Karim Petrov-Sato",
+                                  "Farid-Farid Gomez", "Sofia Smith"])
+def test_hyphenated_names_and_initials_are_one_slot(name):
+    t, slots = templatize(f"Find the person mentoring {name}. Work only inside the current directory.")
+    assert slots == {"E1": name}
+    assert t == "Find the person mentoring {E1}."
+
+
+def test_hyphen_names_share_template_but_relations_do_not():
+    a, _ = templatize("Who mentors the mentor of Nikolai-Felix Lindqvist?")
+    b, _ = templatize("Who mentors the mentor of Ann Lee?")
+    c, _ = templatize("Who employs the mentor of Quinn D. Muller?")
+    assert a == b != c
+    assert "-" not in a and "D." not in c
+
+
+def test_name_before_lowercase_hyphen_word_stays_short():
+    t, slots = templatize("Ann Lee-based staff and Bo Li's mentor.")
+    assert slots == {"E1": "Ann Lee", "E2": "Bo Li"} and t == "{E1}-based staff and {E2}'s mentor."

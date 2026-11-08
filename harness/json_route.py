@@ -59,23 +59,65 @@ _SCHEMAS = {
         "month_from and month_to are an inclusive month range; give both or set both to null (a single month m "
         "is month_from = month_to = m). file is the literal file name from the text.\n"
     ),
-    "search": (
-        "You turn a question about a markdown knowledge base into a JSON specification.\n"
-        "Schema: {\"entity\": <name string>, \"path\": [<field>, ...], \"field\": <field>}\n"
-        "Each knowledge-base page describes one person or company and has 'Key: value' lines. "
-        "Person fields: Born (year), Employer (a company name), Mentor (a person name). "
-        "Company fields: Founded (year), Headquarters (city). "
-        "entity is the name the question starts from. path lists link fields (Employer, Mentor) followed from the "
-        "entity, in order, each yielding another page; use [] when none is needed. field is the final field "
-        "read on the last page. Example: 'In which city is the headquarters of X's employer?' is "
-        "{\"entity\": \"X\", \"path\": [\"Employer\"], \"field\": \"Headquarters\"}.\n"
-    ),
 }
+
+# search speaks `hops` (one relation per hop, the last one is the asked field): with path + field the model
+# had to move the last relation word into field and often miscounted (research report, round 4)
+_SEARCH_PROMPT = (
+    "You turn a question about a markdown knowledge base into a JSON specification.\n"
+    "Each page describes one person or company with 'Key: value' lines. "
+    "Person pages: Born (year), Employer (company name), Mentor (person name). "
+    "Company pages: Founded (year), Headquarters (city).\n"
+    "Schema: {\"entity\": <name>, \"hops\": [<field>, ...]}\n"
+    "entity is the person the question starts from (an {E#} placeholder). hops is the list of fields to read, "
+    "starting at the entity and moving outward; each hop reads one field of the page reached by the previous hop; "
+    "the LAST hop is the field that is asked for. Write exactly one hop for every relation word in the question, "
+    "counting repeats: each 'mentor' / 'mentoring' / 'mentors' / 'mentor of' = Mentor; each 'employer' / "
+    "'employs' / 'employed by' / 'works for' / 'payroll' = Employer; 'headquarters' / 'head office' / 'based' / "
+    "'base' / 'city' of a company = Headquarters; 'born' / 'birth year' = Born; 'founded' / 'established' = "
+    "Founded. The question words 'find the person', 'which person', 'who' add no hop. Mentor is a person; "
+    "Employer is a company, so a company is asked for with Employer, never a person.\n"
+    "Examples (read inside out): 'Find the person mentoring {E1}' -> {\"entity\":\"{E1}\",\"hops\":[\"Mentor\"]}. "
+    "'Who is the mentor of the mentor of {E1}?' -> hops [\"Mentor\",\"Mentor\"]. "
+    "'City of the headquarters of the employer of the mentor of {E1}' -> hops "
+    "[\"Mentor\",\"Employer\",\"Headquarters\"]. "
+    "'Birth year of the mentor of the mentor of the mentor of {E1}' -> hops [\"Mentor\",\"Mentor\",\"Mentor\",\"Born\"].\n"
+    "If the question cannot be answered this way return {\"impossible\": true}. Placeholders: write {E1} exactly "
+    "as in the task text. Write the JSON compactly on one line. Output only the JSON object."
+)
+_HOPS = {name.casefold(): name for name in ("Born", "Employer", "Mentor", "Founded", "Headquarters")}
 
 
 def _system_prompt(task_type: str) -> str | None:
+    if task_type == "search":
+        return _SEARCH_PROMPT
     schema = _SCHEMAS.get(task_type)
     return None if schema is None else schema + _RULES
+
+
+def _from_hops(spec: dict) -> tuple[dict | None, str]:
+    """{"entity", "hops"} -> the executor's {"entity", "path": hops[:-1], "field": hops[-1]}.
+
+    A reply without hops (the old path/field shape, impossible, ...) passes through unchanged."""
+    if "hops" not in spec or spec.get("impossible") is True:
+        return spec, ""
+    hops = spec["hops"]
+    if not isinstance(hops, list) or not hops:
+        return None, "hops must be a non-empty list of field names"
+    names = []
+    for hop in hops:
+        name = _HOPS.get(hop.strip().casefold()) if isinstance(hop, str) else None
+        if name is None:
+            return None, f"unknown hop {hop!r} in hops (allowed: {', '.join(_HOPS.values())})"
+        names.append(name)
+    return {"entity": spec.get("entity"), "path": names[:-1], "field": names[-1]}, ""
+
+
+def _as_reply(task_type: str, spec: dict) -> str:
+    """The spec as the model would have written it (search: back in hops form) for a follow-up turn."""
+    if task_type == "search" and set(spec) == {"entity", "path", "field"} and isinstance(spec["path"], list):
+        spec = {"entity": spec["entity"], "hops": [*spec["path"], spec["field"]]}
+    return json.dumps(spec, ensure_ascii=False)
 
 
 def _slot_text(name: str, slots: dict[str, str]) -> str:
@@ -126,6 +168,8 @@ async def request_spec(task_type: str, template: str, client: LLMClient, model: 
     for attempt in range(2):
         result = await client.chat(model, messages, MAX_TOKENS, response_format={"type": "json_object"})
         spec, error = _parse_json(result.text)
+        if spec is not None and task_type == "search":
+            spec, error = _from_hops(spec)
         if spec is not None:
             return spec
         messages = messages + [
@@ -189,8 +233,10 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
     shape = expected_shape(first)
     feedback = (f"With that specification the answer has the wrong kind: the question asks for "
                 f"{DESCRIBE[shape]}, but the result was {str(out[first.task_id].answer)[:60]!r}. Re-read the question "
-                "and reply with only a corrected JSON object.")
-    history = [{"role": "assistant", "content": json.dumps(spec, ensure_ascii=False)},
+                + ("and count its relation words again: one hop per relation word, the last hop is the asked field. "
+                   "Reply " if task_type == "search" else "and reply ")
+                + "with only a corrected JSON object.")
+    history = [{"role": "assistant", "content": _as_reply(task_type, spec)},
                {"role": "user", "content": feedback}]
     exhausted = None
     try:

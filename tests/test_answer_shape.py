@@ -272,3 +272,15 @@ def test_feedback_answers_are_truncated(tmp_path, monkeypatch):
     asyncio.run(solve_with_program(pt, c))
     fb = c.calls[1]["messages"][-1]["content"]
     assert long not in fb and "1" * 60 in fb
+
+
+def test_2a_shape_retry_shows_the_reply_in_hops_form(tmp_path):
+    ws, kb, name = _kb_ws(tmp_path)
+    t = _search(f"Which firm employs {name}?", ws)
+    template, members = _group(t)
+    client = FakeClient('{"entity": "{E1}", "hops": ["Born"]}', '{"entity": "{E1}", "hops": ["Employer"]}')
+    out = asyncio.run(solve_group("search", template, members, client))
+    assert out["s1"].answer == kb[name]["Employer"]
+    previous = json.loads(client.calls[1]["messages"][-2]["content"])
+    assert previous == {"entity": "{E1}", "hops": ["Born"]}
+    assert "hop" in client.calls[1]["messages"][-1]["content"]
