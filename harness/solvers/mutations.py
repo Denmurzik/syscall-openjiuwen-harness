@@ -4,7 +4,7 @@ import textwrap
 from dataclasses import dataclass
 from typing import Callable, Iterator
 
-_ARITH = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod)
+_ARITH = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)
 _AUG = (ast.Add, ast.Sub, ast.Mult)
 _ORDER = (ast.Lt, ast.Gt, ast.LtE, ast.GtE)
 _EQ = (ast.Eq, ast.NotEq)

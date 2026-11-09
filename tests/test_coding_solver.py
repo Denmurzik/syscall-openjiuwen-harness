@@ -1,3 +1,4 @@
+import ast
 import shutil
 from pathlib import Path
 
@@ -147,9 +148,23 @@ def test_regression_total_initial_value(tmp_path):
 
 
 def test_regression_first_n_slice_bound(tmp_path):
-    bug = "def first_n(xs, n):\n    return xs[:n - 1]\n"
-    _hidden_check(tmp_path, bug, "first_n", ("[4, 3, 2, 1], 4", [4, 3, 2, 1]),
-                  [("[1, 2, 3], 2", [1, 2]), ("[], 3", []), ("[7, 8], 1", [7])])
+    # `n + 1` and `n - 0` both fit the visible test; since `x - 0` counts as a no-op the
+    # choice is left to arbitration: the right fix must be among the offered candidates
+    bug = "def first_n(xs, n):
+    return xs[:n - 1]
+"
+    t = _custom(tmp_path, bug, "import unittest
+import mylib as m
+
+
+class T(unittest.TestCase):
+"
+                "    def test_first_n(self):
+        self.assertEqual(m.first_n([4, 3, 2, 1], 4), [4, 3, 2, 1])
+")
+    r = solve(t)
+    assert r.status == "solved" and r.tentative
+    assert any("xs[:n - 0]" in c for c in r.extra["ambiguous"][0]["candidates"])
 
 
 def test_contradictory_visible_tests_are_infeasible(tmp_path):
@@ -454,3 +469,104 @@ def test_phase1_branching_contradiction_is_not_infeasible(tmp_path):
 def test_proof_redefinition_in_nested_module_block_means_no_proof():
     lib = "import sys\nif sys.platform:\n    def f(x):\n        return x\nelse:\n    def f(x):\n        return -x\n"
     assert not _pc(_t("self.assertEqual(m.f(7), 7)\nself.assertEqual(m.f(7), 8)"), lib)
+
+
+# ---------------------------------------------------------------- round 7: file-wide proof
+_FH = "import unittest\nimport mylib as m\n\n"
+
+
+def _two_methods(deco_a="", deco_b="", cls_deco="", extra_b="", name_b="test_b"):
+    return (_FH + cls_deco + "class T(unittest.TestCase):\n" + deco_a +
+            "    def test_a(self):\n        self.assertEqual(m.f(1), 1)\n" + deco_b +
+            f"    def {name_b}(self):\n{extra_b}        self.assertEqual(m.f(1), 2)\n")
+
+
+def test_proof_across_methods_and_classes():
+    assert _pc(_two_methods(), _PURE)
+    two_cls = (_FH + "class T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(m.f(1), 1)\n\n"
+               "class U(unittest.TestCase):\n    def test_b(self):\n        self.assertEqual(m.f(1), 2)\n")
+    assert _pc(two_cls, _PURE)
+
+
+def test_proof_across_methods_keeps_every_guard():
+    assert not _pc(_two_methods(deco_b="    @unittest.skip('x')\n"), _PURE)
+    assert not _pc(_two_methods(deco_a="    @unittest.skipIf(True, 'x')\n"), _PURE)
+    assert not _pc(_two_methods(cls_deco="@unittest.skip('x')\n"), _PURE)
+    assert not _pc(_two_methods(extra_b="        return\n"), _PURE)
+    assert not _pc(_two_methods(extra_b="        self.skipTest('x')\n"), _PURE)
+    assert not _pc(_two_methods(name_b="helper"), _PURE)       # never run by unittest
+    assert not _pc(_two_methods(name_b="test_a"), _PURE)       # redefinition: only the last runs
+    assert not _pc(_two_methods(), "def f(x):\n    return x + len(m)\n")
+    assert not _pc(_two_methods().replace("class T(", "class T(object, ").replace("(object, unittest.TestCase)", "(object)"), _PURE)
+    assert not _pc(_two_methods().replace("    def test_b", "    def setUp(self):\n        pass\n    def test_b"), _PURE)
+    stateful = "n = 0\ndef f(x):\n    global n\n    n += 1\n    return n\n"
+    assert not _pc(_two_methods(), stateful)
+    assert not _pc(_two_methods().replace("m.f(1), 2", "m.f(2), 2"), _PURE)   # different args
+
+
+def test_proof_conditional_assert_never_counts():
+    t = (_FH + "class T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(m.f(1), 1)\n"
+         "    def test_b(self):\n        if m.f(0) == 0:\n            self.assertEqual(m.f(1), 2)\n")
+    assert not _pc(t, _PURE)
+
+
+# ---------------------------------------------------------------- round 7: fix ranking
+def _hidden_ok(ws, lib_asserts):
+    import subprocess, sys
+    code = "from mylib import *\n" + "\n".join("assert " + a for a in lib_asserts)
+    try:
+        p = subprocess.run([sys.executable, "-B", "-c", code], cwd=ws, capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return False
+    return p.returncode == 0
+
+
+def _solve_case(tmp_path, buggy, vis_call, vis_exp):
+    tests = (_FH + "class T(unittest.TestCase):\n    def test_x(self):\n"
+             f"        self.assertEqual(m.{vis_call}, {vis_exp})\n")
+    t = _custom(tmp_path, buggy, tests)
+    return t, solve(t)
+
+
+def test_rank_is_sorted_not_plus_zero(tmp_path):
+    buggy = "def is_sorted(xs):\n    return all(xs[i] >= xs[i + 1] for i in range(len(xs) - 1))\n"
+    t, r = _solve_case(tmp_path, buggy, "is_sorted([1, 2, 3])", "True")
+    assert _hidden_ok(t.workspace, ["is_sorted([1,1,2])==True", "is_sorted([3,1])==False"]) or r.tentative
+
+
+def test_rank_gcd_prefers_non_hanging_fix(tmp_path):
+    buggy = "def gcd(a, b):\n    while b:\n        a, b = b, a // b\n    return a\n"
+    t, r = _solve_case(tmp_path, buggy, "gcd(12, 8)", "4")
+    assert _hidden_ok(t.workspace, ["gcd(7,3)==1", "gcd(100,75)==25"])
+
+
+def test_rank_even_sq_pow_mutation(tmp_path):
+    buggy = "def even_sq(xs):\n    return [x * 2 for x in xs if x % 2 == 0]\n"
+    t, r = _solve_case(tmp_path, buggy, "even_sq([1, 3, 4])", "[16]")
+    assert _hidden_ok(t.workspace, ["even_sq([3,6])==[36]"]) or r.tentative
+
+
+def test_pair_fix_is_tentative(tmp_path):
+    buggy = "def power(b, e):\n    r = 1\n    for _ in range(e):\n        r += b\n    return r\n"
+    t, r = _solve_case(tmp_path, buggy, "power(2, 3)", "8")
+    assert r.status == "solved" and (_hidden_ok(t.workspace, ["power(3,3)==27"]) or r.tentative)
+
+
+def test_pair_only_fix_is_tentative(tmp_path):
+    buggy = "def f(a, b):\n    return a - b * 3\n"
+    t, r = _solve_case(tmp_path, buggy, "f(1, 2)", "5")
+    assert r.status == "solved" and r.tentative
+    assert "pair" in r.note
+
+
+def test_pow_mutants():
+    from harness.solvers.mutations import mutants
+    assert "def f(x):\n    return x ** 2" in list(mutants("def f(x):\n    return x * 2"))
+    assert "def f(x):\n    return x * 2" in list(mutants("def f(x):\n    return x ** 2"))
+
+
+def test_degenerate_plus_minus_zero():
+    from harness.solvers.coding_solver import _degenerate
+    for e in ("x + 0", "x - 0", "0 + x"):
+        assert _degenerate(ast.parse(e)) > 0, e
+    assert _degenerate(ast.parse("x + 1")) == 0

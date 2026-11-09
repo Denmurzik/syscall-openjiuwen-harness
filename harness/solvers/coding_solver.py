@@ -25,6 +25,7 @@ CAND_TIMEOUT_MAX = 5.0
 BASE_TIMEOUT = 20.0
 AMBIG_MUTANT_CAP = 400
 AMBIG_MAX_OPTIONS = 9
+CRASH_PENALTY = 4.0
 
 
 class _OutOfTime(Exception):
@@ -112,6 +113,7 @@ class _Run:
         self.cand_timeout = CAND_TIMEOUT_MAX
         self.verify_timeout = BASE_TIMEOUT
         self.count = 0
+        self.used_pair = False
 
     def _remaining(self) -> float:
         left = self.deadline - time.monotonic()
@@ -242,6 +244,7 @@ def _repair_round(ctx: _Run, cur: str, report: TestReport, refs: dict[str, set[s
     found = _search(ctx, _pairs(cur, [u for u in units if u.owner in scope] or units),
                     failing, failing, capped=True)
     if found:
+        ctx.used_pair = True
         return found
 
     # Phase D: the best partial fix (fewest remaining failures) among single mutants.
@@ -471,13 +474,35 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
             return f.id
         return None
 
-    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and not n.decorator_list]:
+    seen: dict[tuple, object] = {}   # file-wide: methods and classes run independently
+    cls_count: dict[str, int] = {}
+    meth_count: dict[str, int] = {}   # test names are the harness's handle: keep them unique
+    for n in tree.body:
+        if isinstance(n, ast.ClassDef):
+            cls_count[n.name] = cls_count.get(n.name, 0) + 1
+            for x in n.body:
+                if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    meth_count[x.name] = meth_count.get(x.name, 0) + 1
+
+    def is_case(c: ast.ClassDef) -> bool:
+        return any((b.id if isinstance(b, ast.Name) else b.attr if isinstance(b, ast.Attribute) else "")
+                   .endswith("TestCase") for b in c.bases)
+
+    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and not n.decorator_list
+                and is_case(n) and cls_count[n.name] == 1]:
+        counts: dict[str, int] = {}
+        for x in cls.body:
+            bound = [x.name] if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else [
+                y.id for y in ast.walk(x) if isinstance(y, ast.Name) and isinstance(y.ctx, ast.Store)]
+            for nm in bound:
+                counts[nm] = counts.get(nm, 0) + 1
         for fn in cls.body:
             if not isinstance(fn, ast.FunctionDef) or fn.decorator_list:
                 continue
+            if not fn.name.startswith("test") or counts.get(fn.name) != 1 or meth_count[fn.name] != 1:
+                continue  # never run by unittest, or redefined
             if any(isinstance(n, (ast.Return, ast.Raise)) for n in ast.walk(fn)):
                 continue  # asserts may never run
-            seen: dict[tuple, object] = {}
             for st in fn.body:  # direct children only: no if/try/with/for around the asserts
                 if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Call)):
                     continue
@@ -497,8 +522,7 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                     expected = ast.literal_eval(node.args[1])
                 except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
                     continue
-                if any(k is None for k, _ in kws) or not _simple_literal(expected) \
-                        or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
+                if any(k is None for k, _ in kws) or not _simple_literal(expected)                         or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
                     continue
                 key = (name, repr(args), repr(kws))
                 if key not in seen:
@@ -586,7 +610,7 @@ def _pair_rank(a, b) -> float:
 
 
 def _degenerate(tree: ast.AST) -> float:
-    """Weight of no-op code: x * 1, x * 0, x // 1, x % 1, x / 1, x ** 1, += 0, sum(0 for ...),
+    """Weight of no-op code: x * 1, x * 0, x // 1, x % 1, x / 1, x ** 1, x + 0, x - 0, += 0, sum(0 for ...),
     --x (3 each) and -0 (1)."""
     n = 0.0
     for x in ast.walk(tree):
@@ -603,6 +627,9 @@ def _degenerate(tree: ast.AST) -> float:
             elif isinstance(x.op, (ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)) and right == 1:
                 n += 3
             elif isinstance(x, ast.AugAssign) and isinstance(x.op, (ast.Add, ast.Sub)) and right == 0:
+                n += 3
+            elif isinstance(x, ast.BinOp) and ((isinstance(x.op, (ast.Add, ast.Sub)) and right == 0)
+                                               or (isinstance(x.op, ast.Add) and left == 0)):
                 n += 3
         elif (isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == "sum"
               and len(x.args) == 1 and isinstance(x.args[0], ast.GeneratorExp)
@@ -687,6 +714,10 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
                 clusters[chosen_key] = [chosen_rank, chosen_order, chosen_seg]
             if len(clusters) < 2:
                 continue
+            crash = [k for k in clusters if any(v.startswith("<exc:") for v in k)]
+            if crash and len(crash) < len(clusters):   # others run clean on every probe
+                for k in crash:
+                    clusters[k][0] += CRASH_PENALTY
             ranked = sorted(clusters, key=lambda k: (clusters[k][0], clusters[k][1]))
             if ranked[0] != chosen_key:
                 new = _splice(cur, u, clusters[ranked[0]][2])
@@ -775,6 +806,9 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         if preferred != cur:
             _write_mylib(mylib, preferred)
             shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+        if ctx.used_pair:   # a pair of mutations fits the visible tests; the model gets a look
+            return SolveResult("solved", answer="DONE", note="repaired by mutation pair"
+                               + (", ambiguous" if extra else ""), tentative=True, extra=extra)
         if extra:
             return SolveResult("solved", answer="DONE", note="repaired by mutation, ambiguous",
                                tentative=True, extra=extra)
