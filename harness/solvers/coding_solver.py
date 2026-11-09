@@ -995,7 +995,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         if extra:
             return SolveResult("solved", answer="DONE", note="repaired by mutation, ambiguous",
                                tentative=True, extra=extra)
-        hint = _verify_hint(original, preferred, test_src) if config.verify_coding() else None
+        try:
+            hint = _verify_hint(original, preferred, test_src) if config.verify_coding() else None
+        except Exception:
+            hint = None   # the fix is on disk: an answer without a check beats none
         if hint:   # on disk and answered already: a check that never comes changes nothing
             return SolveResult("solved", answer="DONE", note="repaired by mutation, unchecked",
                                tentative=True, extra=hint)

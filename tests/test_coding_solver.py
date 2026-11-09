@@ -237,7 +237,8 @@ def test_ambiguous_fix_returns_clusters(tmp_path):
     assert run_tests(t.workspace).ok
 
 
-def test_unambiguous_fix_has_no_extra(tmp_path):
+def test_unambiguous_fix_has_no_extra(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_VERIFY_CODING", "0")   # the check would leave it tentative
     mylib = "def f(n):\n    i = 0\n    while i <= n:\n        i += 1\n    return i\n"
     tests = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
              "    def test_f(self):\n        self.assertEqual(m.f(5), 5)\n")
@@ -538,7 +539,8 @@ def test_rank_even_sq_pow_mutation(tmp_path):
     assert _hidden_ok(t.workspace, ["even_sq([3,6])==[36]"])
 
 
-def test_pair_only_fix_is_solved_not_tentative(tmp_path):
+def test_pair_only_fix_is_solved_not_tentative(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_VERIFY_CODING", "0")   # the check would leave it tentative
     buggy = "def f(a, b):\n    return a - b * 3\n"
     t, r = _solve_case(tmp_path, buggy, "f(1, 2)", "5")
     assert r.status == "solved" and not r.tentative

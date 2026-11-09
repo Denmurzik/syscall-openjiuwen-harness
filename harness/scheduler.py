@@ -489,8 +489,18 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     units.sort(key=lambda u: -u["prio"])
     await _drive(units, t0, deadline_s, ledger, state)
 
-    # 2d: an independent model check of green single coding fixes. Last: an open task is worth more than a
-    # second opinion on an answered one, and the written fix stays whatever happens here
+    # one more pass over what found the model unavailable, unless the run is over (dead proxy, spent budget,
+    # deadline). A proxy that is still failing here holds these calls until it recovers or is declared dead
+    if unavailable and not state["stop"] and not ledger.exhausted:
+        units = [make() for make in unavailable]
+        units.sort(key=lambda u: -u["prio"])
+        await _drive(units, t0, deadline_s, ledger, state)
+
+    # 2d: an independent model check of green single coding fixes. Last of all, after every pass over open tasks:
+    # an open task is worth more than a second opinion on an answered one, and the written fix stays whatever
+    # happens here (a budget or deadline stop in 2d cancels nothing that ran before it)
+    unchecked: list = []  # 2d units whose model call got no answer: one pass of their own
+
     def unit_2d(task, extra):
         est = len(str(extra)) // 30 + config.VERIFY_MAX_TOKENS  # the arbitration behind a difference: left to the reserve
 
@@ -502,7 +512,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
             settle(2, task, res, time.monotonic() - start)
             if (res.note or "").startswith(_LLM_UNAVAILABLE):
                 resume = res.extra or extra
-                unavailable.append(lambda: unit_2d(task, resume))
+                unchecked.append(lambda: unit_2d(task, resume))
         return {"prio": task.reward / est, "estimate": est, "run": go, "name": f"verify:{task.task_id}"}
 
     units = [unit_2d(t, tentative[t.task_id].extra) for t in left
@@ -510,10 +520,8 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     units.sort(key=lambda u: -u["prio"])
     await _drive(units, t0, deadline_s, ledger, state)
 
-    # one more pass over what found the model unavailable, unless the run is over (dead proxy, spent budget,
-    # deadline). A proxy that is still failing here holds these calls until it recovers or is declared dead
-    if unavailable and not state["stop"] and not ledger.exhausted:
-        units = [make() for make in unavailable]
+    if unchecked and not state["stop"] and not ledger.exhausted:
+        units = [make() for make in unchecked]
         units.sort(key=lambda u: -u["prio"])
         await _drive(units, t0, deadline_s, ledger, state)
 

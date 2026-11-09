@@ -9,6 +9,7 @@ after the agreed variant passes the full visible test run (tests are never touch
 """
 import ast
 import asyncio
+import dataclasses
 import difflib
 import re
 import shutil
@@ -25,6 +26,7 @@ from harness.tasks import Task
 
 MAX_FUNCS = 4          # numbers + commas must fit in max_tokens
 MAX_TOKENS = 8
+MAX_ROWS = 5           # probe rows shown per function, after every row where the options differ
 VERIFY_TESTS_CAP = 2000  # chars of visible tests per function shown to the model writing its own fix
 VERIFY_SYSTEM = ("Fix the bugs in these Python functions. The visible tests are only examples, hidden tests "
                  "check other inputs: write what the function name means, not what merely fits the examples. "
@@ -68,8 +70,12 @@ def _prompt(items: list[dict], asserts: list[str]) -> str:
                  f"Candidate fixes (all pass the visible tests), as edits of the buggy version:\n{opts}")
         calls, outs = it.get("calls") or [], it.get("outputs") or []
         if calls and outs:
-            rows = [f"{c} -> " + " | ".join(_short(o[k]) if k < len(o) else "?" for o in outs)
-                    for k, c in enumerate(calls[:5])]
+            cells = [[_short(o[k]) if k < len(o) else "?" for o in outs] for k in range(len(calls))]
+            differ = [k for k, row in enumerate(cells) if len(set(row)) > 1]
+            same = [k for k in range(len(calls)) if k not in differ]
+            # every row that tells the options apart, then the others up to the limit
+            order = differ + same[:max(0, MAX_ROWS - len(differ))]
+            rows = [f"{calls[k]} -> " + " | ".join(cells[k]) for k in order]
             block += f"\n\nResults of options 1..{len(outs)} on sample calls:\n" + "\n".join(rows)
         parts.append(block)
     tests = "\n".join(a for a in asserts if a)
@@ -109,11 +115,20 @@ async def _ask(client, model: str, items: list[dict], asserts: list[str]) -> lis
     return parse_choice(r.text, items)
 
 
-async def _agreed(client, items: list[dict], asserts: list[str]) -> tuple[list[int], str]:
+def _votes(replies: list) -> str:
+    """Each model's reply as 1-based option numbers, for the note."""
+    def one(r):
+        if isinstance(r, BaseException):
+            return "unavailable"
+        return "unusable" if r is None else ",".join(str(p + 1) for p in r)
+    return ", ".join(f"{m} {one(r)}" for m, r in zip(ARBITRATE_MODELS, replies))
+
+
+async def _agreed(client, items: list[dict], asserts: list[str]) -> tuple[list[int], str, str]:
     """Per function: the option every model named, else the phase-1 choice; plus why the
     choice stays where it is ("one model unavailable", "unusable reply", "models disagree",
-    "models confirmed"). LLMUnavailable only when no model was reachable; BudgetExhausted
-    (and anything unexpected) propagates."""
+    "models confirmed") and each model's vote. LLMUnavailable only when no model was reachable;
+    BudgetExhausted (and anything unexpected) propagates."""
     replies = await asyncio.gather(*(_ask(client, m, items, asserts) for m in ARBITRATE_MODELS),
                                    return_exceptions=True)
     for r in replies:
@@ -122,10 +137,11 @@ async def _agreed(client, items: list[dict], asserts: list[str]) -> tuple[list[i
     if all(isinstance(r, LLMUnavailable) for r in replies):
         raise replies[0]
     picks = [it["chosen"] for it in items]
+    votes = _votes(replies)
     if any(isinstance(r, BaseException) for r in replies):
-        return picks, "one model unavailable"
+        return picks, "one model unavailable", votes
     if any(r is None for r in replies):
-        return picks, "unusable reply"
+        return picks, "unusable reply", votes
     agreed = True
     for i, it in enumerate(items):
         named = {r[i] for r in replies}
@@ -133,7 +149,7 @@ async def _agreed(client, items: list[dict], asserts: list[str]) -> tuple[list[i
             picks[i] = named.pop()
         else:
             agreed = False
-    return picks, "models confirmed" if agreed else "models disagree"
+    return picks, "models confirmed" if agreed else "models disagree", votes
 
 
 def _apply(src: str, items: list[dict], picks: list[int]) -> str | None:
@@ -155,9 +171,14 @@ async def arbitrate(task: Task, extra: dict, client) -> SolveResult:
     if not items:
         return SolveResult("solved", answer="DONE", note="nothing to arbitrate")
     try:
-        picks, why = await _agreed(client, items, list(extra.get("visible_asserts") or []))
+        picks, why, votes = await _agreed(client, items, list(extra.get("visible_asserts") or []))
     except LLMUnavailable as e:
         return SolveResult("unparsed", note=f"llm unavailable: {e}")
+    res = await _decide(task, items, picks, why)
+    return dataclasses.replace(res, extra={"votes": votes})
+
+
+async def _decide(task: Task, items: list[dict], picks: list[int], why: str) -> SolveResult:
     if all(p == it["chosen"] for p, it in zip(picks, items)):
         return SolveResult("solved", answer="DONE", note=f"arbitration kept the choice ({why})")
     ws = Path(task.workspace)
@@ -224,8 +245,7 @@ async def verify_fix(task: Task, extra: dict, client) -> SolveResult:
     so ours is replaced only when both models agree on the other. Any doubt keeps ours. `unparsed` only when a
     model was unavailable, with what a later try can resume from."""
     if extra.get("ambiguous"):   # the candidate is paid for already, only the arbitration is left
-        res = await arbitrate(task, extra, client)
-        return SolveResult("unparsed", note=res.note, extra=extra) if res.status != "solved" else res
+        return await _judge(task, extra, client)
     items = list(extra.get("verify") or [])[:MAX_FUNCS]
     ws = Path(task.workspace)
     try:
@@ -237,14 +257,23 @@ async def verify_fix(task: Task, extra: dict, client) -> SolveResult:
                                            {"role": "user", "content": _verify_prompt(items)}], VERIFY_MAX_TOKENS)
     except LLMUnavailable as e:
         return SolveResult("unparsed", note=f"llm unavailable: {e}")
-    if getattr(r, "truncated", False):
-        return SolveResult("solved", answer="DONE", note="check: reply cut by the budget limit, kept")
+    if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= VERIFY_MAX_TOKENS:
+        # at the limit the reply may be cut, and a cut one can still parse with branches lost
+        return SolveResult("solved", answer="DONE", note="check: reply hit the output limit, kept")
     try:
         differ = await asyncio.to_thread(_differing, ws, current, r.text, items)
     except Exception as e:
         return SolveResult("solved", answer="DONE", note=f"check failed, kept: {e!r}"[:200])
     if not differ:
         return SolveResult("solved", answer="DONE", note="check: no other green behaviour, kept")
-    next_extra = {"ambiguous": differ, "visible_asserts": list(extra.get("visible_asserts") or [])}
-    res = await arbitrate(task, next_extra, client)
-    return SolveResult("unparsed", note=res.note, extra=next_extra) if res.status != "solved" else res
+    return await _judge(task, {"ambiguous": differ, "visible_asserts": list(extra.get("visible_asserts") or [])},
+                        client)
+
+
+async def _judge(task: Task, extra: dict, client) -> SolveResult:
+    """2c arbitration of ours against the model's candidate; the note carries each model's vote."""
+    res = await arbitrate(task, extra, client)
+    if res.status != "solved":
+        return SolveResult("unparsed", note=res.note, extra=extra)
+    votes = (res.extra or {}).get("votes")
+    return SolveResult("solved", answer=res.answer, note=f"{res.note}; votes: {votes}"[:200] if votes else res.note)

@@ -435,3 +435,141 @@ def test_scheduler_records_the_cost_of_the_check_under_its_unit(tmp_path, monkey
     rows = [json.loads(x) for f in logs.rglob("*.jsonl") for x in f.read_text(encoding="utf-8").splitlines()]
     row = next(r for r in rows if r.get("unit") == "verify:c1")
     assert row["cost"] == 6.0 and row["task_id"] == "c1" and row["calls"][0]["model"] == MODEL_FAST
+
+
+# ---------------------------------------------------------------- fix round 1
+
+P1_TESTS = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
+            "    def test_f(self):\n        self.assertEqual(mylib.f(5), 10)\n")
+
+
+def test_arbiter_sees_the_only_differing_probe_input(tmp_path):
+    """Reviewer's P1: the candidate differs from ours only on the 6th probe input."""
+    from harness.solvers.probe import inputs_from_call
+    inputs = inputs_from_call((5,))
+    last = inputs[5][0]
+    task = _task(tmp_path, "def f(x):\n    return x * 2\n", P1_TESTS)
+    extra = {"verify": [{"func": "f", "buggy": "def f(x):\n    return x + 2", "inputs": inputs, "tests": "t"}],
+             "visible_asserts": ["self.assertEqual(mylib.f(5), 10)"]}
+    cand = f"def f(x):\n    if x == {last}:\n        return -999\n    return x * 2\n"
+    c = Fake("FUNC f\n" + cand, {MODEL_FAST: "1", MODEL_ALT: "1"})
+    run(verify_fix(task, extra, c))
+    text = next(x for x in c.calls if x["extra"].get("extra_body"))["messages"][1]["content"]
+    rows = text.split("sample calls:\n")[1].split("\n\n")[0].splitlines()
+    assert rows[0] == f"f({last}) -> {last * 2} | -999"
+    assert len(rows) == 5
+
+
+def test_arbiter_rows_differing_first_then_the_rest():
+    from harness.arbitrate import _prompt
+    item = {"func": "g", "buggy": "def g(x): pass", "candidates": ["a", "b"], "chosen": 0,
+            "calls": [f"g({i})" for i in range(7)],
+            "outputs": [["1", "1", "1", "1", "1", "1", "1"], ["1", "2", "1", "2", "1", "1", "2"]]}
+    rows = _prompt([item], []).split("sample calls:\n")[1].splitlines()
+    assert rows[:3] == ["g(1) -> 1 | 2", "g(3) -> 1 | 2", "g(6) -> 1 | 2"]
+    assert rows[3:] == ["g(0) -> 1 | 1", "g(2) -> 1 | 1"]
+
+
+def test_arbiter_sees_every_differing_row_even_past_the_limit():
+    from harness.arbitrate import _prompt
+    item = {"func": "g", "buggy": "def g(x): pass", "candidates": ["a", "b"], "chosen": 0,
+            "calls": [f"g({i})" for i in range(7)],
+            "outputs": [[str(i) for i in range(7)], [str(-i - 1) for i in range(7)]]}
+    rows = _prompt([item], []).split("sample calls:\n")[1].splitlines()
+    assert len(rows) == 7
+
+
+def test_reply_at_the_output_limit_is_not_a_candidate(tmp_path):
+    """Reviewer's P2: a reply that hit VERIFY_MAX_TOKENS may be cut and still parse."""
+    task = _task(tmp_path)
+    before = (task.workspace / "mylib.py").read_bytes()
+
+    class AtLimit(Fake):
+        async def chat(self, model, messages, max_tokens, **extra):
+            self.calls.append(model)
+            return ChatResult(text=_reply(RIGHT), prompt_tokens=10, completion_tokens=max_tokens, cost=2)
+    c = AtLimit("")
+    res = run(verify_fix(task, _extra(), c))
+    assert res.status == "solved" and c.calls == [MODEL_FAST] and "limit" in res.note
+    assert (task.workspace / "mylib.py").read_bytes() == before
+
+
+@pytest.mark.parametrize("fast,alt", [("2", "1"), ("2", "2")])
+def test_note_carries_each_models_vote(tmp_path, fast, alt):
+    task = _task(tmp_path)
+    res = run(verify_fix(task, _extra(), Fake(_reply(RIGHT), {MODEL_FAST: fast, MODEL_ALT: alt})))
+    assert f"{MODEL_FAST} {fast}" in res.note and f"{MODEL_ALT} {alt}" in res.note
+    assert len(res.note) <= 200
+
+
+def test_note_votes_name_an_unavailable_model(tmp_path):
+    task = _task(tmp_path)
+    res = run(verify_fix(task, _extra(), Fake(_reply(RIGHT), {MODEL_FAST: "2", MODEL_ALT: LLMUnavailable("404")})))
+    assert res.status == "solved" and f"{MODEL_ALT} unavailable" in res.note and f"{MODEL_FAST} 2" in res.note
+
+
+def test_hint_failure_keeps_a_final_answer(tmp_path, monkeypatch):
+    from harness.solvers import coding_solver
+    monkeypatch.setenv("HARNESS_VERIFY_CODING", "1")
+
+    def boom(*a):
+        raise ValueError("x")
+    monkeypatch.setattr(coding_solver, "_verify_hint", boom)
+    res = solve(_task(tmp_path, SINGLE_LIB, SINGLE_TESTS))
+    assert res.status == "solved" and not res.tentative and res.extra is None
+
+
+def test_default_is_on(monkeypatch):
+    monkeypatch.delenv("HARNESS_VERIFY_CODING", raising=False)
+    assert config.verify_coding() is True
+
+
+def open_then_verify_target(queue, task, solver_name=None):
+    if task.task_id == "c_verify":
+        verify_target(queue, task)
+    else:
+        queue.put((task.task_id, SolveResult("unparsed", note="no")))
+
+
+def test_check_runs_after_the_retry_pass_of_open_tasks(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _coding(tasks, "c_verify", 9.0)
+    _coding(tasks, "c_open", 1.0)
+    order = []
+
+    async def fake_verify(task, extra, client):
+        order.append("verify")
+        return SolveResult("solved", "DONE", "kept")
+
+    async def fake_fix(task, client, resume=None):
+        order.append("fix")
+        if len([o for o in order if o == "fix"]) == 1:
+            return SolveResult("unparsed", note="llm unavailable: 503", extra={"ladder": {"answered": []}})
+        return SolveResult("solved", "DONE", "patched")
+    monkeypatch.setattr(scheduler, "_phase1_target", open_then_verify_target)
+    monkeypatch.setattr(scheduler, "verify_fix", fake_verify)
+    monkeypatch.setattr(scheduler, "fix_coding", fake_fix)
+    counts = scheduler.run(tasks, 100000, object())
+    assert order == ["fix", "fix", "verify"] and counts["solved"] == 2
+
+
+def test_budget_exhausted_in_the_check_cancels_nothing_before_it(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _coding(tasks, "c_verify", 9.0)
+    _coding(tasks, "c_open", 1.0)
+    order = []
+
+    async def fake_verify(task, extra, client):
+        order.append("verify")
+        raise BudgetExhausted("x")
+
+    async def fake_fix(task, client, resume=None):
+        order.append("fix")
+        if len([o for o in order if o == "fix"]) == 1:
+            return SolveResult("unparsed", note="llm unavailable: 503", extra={"ladder": {"answered": []}})
+        return SolveResult("solved", "DONE", "patched")
+    monkeypatch.setattr(scheduler, "_phase1_target", open_then_verify_target)
+    monkeypatch.setattr(scheduler, "verify_fix", fake_verify)
+    monkeypatch.setattr(scheduler, "fix_coding", fake_fix)
+    counts = scheduler.run(tasks, 100000, object())
+    assert order == ["fix", "fix", "verify"] and counts["solved"] == 2
