@@ -1,0 +1,430 @@
+"""Confirmation of 2a answers by a majority of independent program votes (round 8, task 40)."""
+import asyncio
+import json
+
+import pytest
+
+from harness import config, confirm, scheduler
+from harness.result import SolveResult
+from harness.tasks import Task
+from harness.trajectory import CALLS, record_call
+
+
+def _task(tmp_path, tid="math_1", check="exact_int", ttype="math", reward=2.0, instruction="How many?"):
+    d = tmp_path / tid
+    (d / "workspace").mkdir(parents=True, exist_ok=True)
+    return Task(tid, ttype, instruction, reward, check, d, d / "workspace")
+
+
+def _program(answers, seen=None):
+    """A stand-in for solve_with_program: answers[model] is an answer string, a SolveResult or an exception.
+    Each vote records one model call of its own model, as the real client does."""
+    async def prog(task, client, model=config.MODEL_FAST, shape_model=None):
+        if seen is not None:
+            seen.append((task.task_id, model, shape_model))
+        a = answers[model] if not callable(answers) else answers(task, model)
+        record_call(model, 100, 50, 60)
+        if isinstance(a, BaseException):
+            raise a
+        if isinstance(a, SolveResult):
+            return a
+        return SolveResult("solved", answer=a, note="model program")
+    return prog
+
+
+def _confirm(task, answer, prog, afford=lambda: True):
+    async def go():
+        CALLS.set([])
+        return await confirm.confirm(task, answer, object(), prog, afford)
+    return asyncio.run(go())
+
+
+# ---------------------------------------------------------------- the voting rule
+
+def test_fast_agrees_keeps_2a_without_a_third_vote(tmp_path):
+    seen = []
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "42"}, seen))
+    assert v.replacement is None and v.fast_agrees
+    assert [m for _, m, _ in seen] == [config.MODEL_FAST]
+
+
+def test_votes_are_single_model_programs(tmp_path):
+    seen = []
+    _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "8"}, seen))
+    assert [(m, s) for _, m, s in seen] == [(config.MODEL_FAST, config.MODEL_FAST), (config.MODEL_ALT, config.MODEL_ALT)]
+
+
+def test_alt_siding_with_2a_keeps_2a(tmp_path):
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "42"}))
+    assert v.replacement is None and not v.fast_agrees and "alt" in v.note
+
+
+def test_fast_and_alt_agreeing_on_another_answer_replace_2a(tmp_path):
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}))
+    assert v.replacement == "7" and "42" in v.note
+
+
+def test_three_different_answers_keep_2a(tmp_path):
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "8"}))
+    assert v.replacement is None
+
+
+@pytest.mark.parametrize("bad", [
+    SolveResult("infeasible", note="program printed IMPOSSIBLE"),
+    SolveResult("unparsed", note="program timed out"),
+    SolveResult("unparsed", note="llm unavailable: HTTP 500"),
+    SolveResult("unparsed", note="answer shape: x", extra={"best_guess": "x", "shape_mismatch": True}),
+    SolveResult("solved", answer="IMPOSSIBLE"),
+    SolveResult("solved", answer="seven"),   # wrong shape for exact_int
+])
+def test_a_fast_vote_that_does_not_count_keeps_2a_and_buys_no_third(tmp_path, bad):
+    seen = []
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: bad, config.MODEL_ALT: "7"}, seen))
+    assert v.replacement is None and not v.fast_agrees and len(seen) == 1
+
+
+@pytest.mark.parametrize("bad", [
+    SolveResult("infeasible", note="program printed IMPOSSIBLE"),
+    SolveResult("unparsed", note="program exit code 1"),
+    SolveResult("solved", answer="seven"),
+])
+def test_an_alt_vote_that_does_not_count_keeps_2a(tmp_path, bad):
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "7", config.MODEL_ALT: bad}))
+    assert v.replacement is None
+
+
+def test_wrong_shape_search_answer_never_replaces(tmp_path):
+    t = _task(tmp_path, tid="search_1", ttype="search", check="exact_str",
+              instruction="In which year was the mentor of Ann Lee born?")
+    v = _confirm(t, "1970", _program({config.MODEL_FAST: "Bob Ray", config.MODEL_ALT: "Bob Ray"}))
+    assert v.replacement is None
+
+
+def test_a_crashing_vote_does_not_count(tmp_path):
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "7", config.MODEL_ALT: RuntimeError("boom")}))
+    assert v.replacement is None
+
+
+def test_budget_exhausted_is_not_swallowed(tmp_path):
+    from harness.llm import BudgetExhausted
+    with pytest.raises(BudgetExhausted):
+        _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: BudgetExhausted("x")}))
+
+
+def test_no_third_vote_when_the_ledger_is_short(tmp_path):
+    seen = []
+    v = _confirm(_task(tmp_path), "42", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen),
+                 afford=lambda: False)
+    assert v.replacement is None and len(seen) == 1
+
+
+def test_votes_answered_by_the_same_model_are_not_independent(tmp_path):
+    async def prog(task, client, model=config.MODEL_FAST, shape_model=None):
+        record_call(config.MODEL_ALT, 100, 50, 60)   # the FAST vote fell back to ALT (FAST failing)
+        return SolveResult("solved", answer="7")
+    v = _confirm(_task(tmp_path), "42", prog)
+    assert v.replacement is None and "independent" in v.note
+
+
+@pytest.mark.parametrize("a, b, same", [
+    ("12.50", "12.5", True), ("1000", "1000.0", True), ("-3", "-3", True), ("3", "-3", False),
+    ("Acme Corp", "acme  corp", True), ("Acme", "Acme Corp", False), ("1970", "1971", False),
+    ("NaN", "NaN", True), ("", "0", False),
+])
+def test_same_answer(a, b, same):
+    assert confirm.same_answer(a, b) is same
+
+
+def test_numerically_equal_answer_agrees_and_keeps_2a_spelling(tmp_path):
+    t = _task(tmp_path, check="exact_str")
+    v = _confirm(t, "12.50", _program({config.MODEL_FAST: "12.5"}))
+    assert v.replacement is None and v.fast_agrees
+
+
+# ---------------------------------------------------------------- the program route takes a model
+
+class _Client:
+    def __init__(self, replies):
+        self.replies, self.calls = list(replies), []
+
+    async def chat(self, model, messages, max_tokens, **extra):
+        from harness.llm import ChatResult
+        self.calls.append({"model": model, "messages": messages})
+        return ChatResult(text=self.replies.pop(0), prompt_tokens=10, completion_tokens=10, cost=11)
+
+
+def test_program_route_runs_on_the_given_model_and_shape_retry_model(tmp_path):
+    from harness.llm_routes import solve_with_program
+    t = _task(tmp_path, tid="search_1", ttype="search", check="exact_str",
+              instruction="In which year was the mentor of Ann Lee born?")
+    c = _Client(["print('Bob' + ' Ray')", "print(1900 + 70)"])
+    r = asyncio.run(solve_with_program(t, c, model=config.MODEL_ALT, shape_model=config.MODEL_ALT))
+    assert r.answer == "1970" and [x["model"] for x in c.calls] == [config.MODEL_ALT, config.MODEL_ALT]
+
+
+def test_program_route_default_is_unchanged(tmp_path):
+    from harness.llm_routes import solve_with_program
+    t = _task(tmp_path, tid="search_1", ttype="search", check="exact_str",
+              instruction="In which year was the mentor of Ann Lee born?")
+    c = _Client(["print('Bob' + ' Ray')", "print(1900 + 70)"])
+    asyncio.run(solve_with_program(t, c))
+    assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT]
+
+
+# ---------------------------------------------------------------- the knob
+
+def test_knob(monkeypatch):
+    monkeypatch.delenv("HARNESS_CONFIRM_2A", raising=False)
+    assert config.confirm_2a() is config.CONFIRM_2A
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "0")
+    assert config.confirm_2a() is False
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "1")
+    assert config.confirm_2a() is True
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "maybe")
+    assert config.confirm_2a() is config.CONFIRM_2A
+
+
+# ---------------------------------------------------------------- the scheduler stage
+
+def unparsed_target(queue, task, solver_name=None):
+    queue.put((task.task_id, SolveResult("unparsed", note="forced")))
+
+
+def solved_target(queue, task, solver_name=None):
+    queue.put((task.task_id, SolveResult("solved", answer="1", note="phase 1")))
+
+
+@pytest.fixture(autouse=True)
+def _env(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "1")
+    monkeypatch.setenv("HARNESS_BATCH_2A", "0")
+
+
+def _make(dest, tid, ttype="math", instruction=None, reward=1.0, check="exact_int"):
+    d = dest / tid
+    (d / "workspace").mkdir(parents=True, exist_ok=True)
+    (d / "task.json").write_text(json.dumps({
+        "task_id": tid, "task_type": ttype, "instruction": instruction or f"Riddle {tid}?",
+        "reward": reward, "check": check}), encoding="utf-8")
+    return d
+
+
+def _setup(tmp_path, monkeypatch, answers_2a, rewards=None, groups=None, budget=100000, spent=0.0):
+    """answers_2a: {tid: 2a answer}; groups: [[tid, ...], ...] (default: one group per task)."""
+    tasks = tmp_path / "tasks"
+    rewards = rewards or {}
+    for tid in answers_2a:
+        _make(tasks, tid, reward=rewards.get(tid, 1.0))
+    groups = groups or [[tid] for tid in answers_2a]
+    gid = {tid: k for k, g in enumerate(groups) for tid in g}
+
+    def fake_group(tasks_):
+        out = {}
+        for t in tasks_:
+            out.setdefault(("math", f"template {gid[t.task_id]}"), []).append((t, {}))
+        return out
+
+    async def grp(ttype, template, members, client):
+        return {t.task_id: SolveResult("solved", answer=answers_2a[t.task_id], note="json route")
+                for t, _ in members}
+
+    async def prog_2b(task, client):
+        raise AssertionError("2b must not run for 2a answers")
+
+    from harness import templates
+    monkeypatch.setattr(templates, "group", fake_group)
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog_2b)
+    from harness.budget import TokenLedger
+
+    class Client:
+        ledger = TokenLedger(budget, 0)
+    Client.ledger.spent = spent
+    return tasks, Client()
+
+
+def _answers(tasks):
+    return {d.name: (d / "answer.txt").read_text(encoding="utf-8").strip()
+            for d in sorted(tasks.iterdir()) if (d / "answer.txt").exists()}
+
+
+def _traj(tmp_path):
+    return [json.loads(x) for x in (tmp_path / "logs" / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def test_stage_replaces_only_on_a_majority_and_records_costs(tmp_path, monkeypatch):
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42", "math_b": "10", "math_c": "5"})
+    votes = {("math_a", config.MODEL_FAST): "7", ("math_a", config.MODEL_ALT): "7",     # majority against 2a
+             ("math_b", config.MODEL_FAST): "11", ("math_b", config.MODEL_ALT): "10",   # alt sides with 2a
+             ("math_c", config.MODEL_FAST): "5"}                                        # fast agrees
+    monkeypatch.setattr(scheduler, "confirm_program", _program(lambda t, m: votes[(t.task_id, m)]))
+    counts = scheduler.run(tasks, 100000, client)
+    assert _answers(tasks) == {"math_a": "7", "math_b": "10", "math_c": "5"}
+    assert counts["solved"] == 3
+    rows = [r for r in _traj(tmp_path) if (r.get("unit") or "").startswith("confirm:")]
+    cost = {r["task_id"]: r["cost"] for r in rows}
+    assert cost == {"math_a": 120, "math_b": 120, "math_c": 60}
+    assert all(r["status"] == "solved" for r in rows)
+
+
+def test_knob_off_buys_no_votes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "0")
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"})
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}))
+    scheduler.run(tasks, 100000, client)
+    assert _answers(tasks) == {"math_a": "42"}
+
+
+def test_phase1_answers_are_not_confirmed(tmp_path, monkeypatch):
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"})
+    monkeypatch.setattr(scheduler, "_phase1_target", solved_target)
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
+    scheduler.run(tasks, 100000, client)
+    assert seen == [] and _answers(tasks) == {"math_a": "1"}
+
+
+def test_confirmation_goes_in_reward_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(scheduler, "LLM_WORKERS", 1)
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "1", "math_b": "2", "math_c": "3"},
+                           rewards={"math_a": 1, "math_b": 5, "math_c": 3})
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program(lambda t, m: _answers(tasks)[t.task_id], seen))
+    scheduler.run(tasks, 100000, client)
+    assert [tid for tid, _, _ in seen] == ["math_b", "math_c", "math_a"]
+
+
+def test_big_group_accepted_on_two_agreeing_samples(tmp_path, monkeypatch):
+    ids = [f"math_{i}" for i in range(5)]
+    tasks, client = _setup(tmp_path, monkeypatch, {t: "9" for t in ids}, groups=[ids],
+                           rewards={"math_3": 5, "math_1": 4})
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "9"}, seen))
+    scheduler.run(tasks, 100000, client)
+    assert [tid for tid, _, _ in seen] == ["math_3", "math_1"]
+
+
+def test_big_group_checks_every_member_after_a_disagreement(tmp_path, monkeypatch):
+    ids = [f"math_{i}" for i in range(4)]
+    tasks, client = _setup(tmp_path, monkeypatch, {t: "9" for t in ids}, groups=[ids],
+                           rewards={"math_0": 5})
+    seen = []
+    votes = lambda t, m: "8" if t.task_id == "math_0" else "9"   # noqa: E731
+    monkeypatch.setattr(scheduler, "confirm_program", _program(votes, seen))
+    scheduler.run(tasks, 100000, client)
+    assert sorted({tid for tid, _, _ in seen}) == ids
+    assert _answers(tasks)["math_0"] == "8" and _answers(tasks)["math_1"] == "9"
+
+
+def test_skipped_when_the_ledger_is_short(tmp_path, monkeypatch):
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"}, budget=1000, spent=900)  # 2a (~80) fits, a vote (~120) does not
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
+    scheduler.run(tasks, 1000, client)
+    assert seen == [] and _answers(tasks) == {"math_a": "42"}
+
+
+def test_skipped_near_the_deadline(tmp_path, monkeypatch):
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"})
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
+    monkeypatch.setattr(scheduler, "_confirm_time_left", lambda *a: False)
+    scheduler.run(tasks, 100000, client)
+    assert seen == [] and _answers(tasks) == {"math_a": "42"}
+
+
+def test_stage_runs_after_the_reason_pass_and_before_2d(tmp_path, monkeypatch):
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"})
+    _make(tasks, "search_x", ttype="search", instruction="q?", reward=9, check="exact_str")
+    order = []
+
+    async def prog_2b(task, client):
+        order.append("2b")
+        return SolveResult("unparsed", note="program failed")
+
+    async def reason(task, client):
+        order.append("reason")
+        return SolveResult("unparsed", note="no")
+
+    async def votes(task, client, model=config.MODEL_FAST, shape_model=None):
+        order.append("confirm")
+        return SolveResult("solved", answer="42")
+
+    from harness import templates
+    real_group = templates.group
+
+    def group2(ts):
+        return real_group([t for t in ts if t.task_id != "search_x"]) | {("search", "s"): [(t, {}) for t in ts if t.task_id == "search_x"]}
+    monkeypatch.setattr(templates, "group", group2)
+
+    async def grp(ttype, template, members, client):
+        return {t.task_id: (SolveResult("solved", answer="42") if t.task_id == "math_a" else SolveResult("unparsed"))
+                for t, _ in members}
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog_2b)
+    monkeypatch.setattr(scheduler, "solve_with_reason", reason)
+    monkeypatch.setattr(scheduler, "confirm_program", votes)
+    scheduler.run(tasks, 100000, client)
+    assert order == ["2b", "reason", "confirm"]
+
+
+def test_2d_keeps_its_budget(tmp_path, monkeypatch):
+    """With a ledger that covers the 2d check but not the 2d check plus a vote, the vote is not bought."""
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"}, budget=100000)
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
+    monkeypatch.setattr(scheduler, "_reserve_2d", lambda units: 100000 - 50)
+    scheduler.run(tasks, 100000, client)
+    assert seen == []
+
+
+def test_votes_never_see_the_2a_answer(tmp_path, monkeypatch):
+    """The real program route on a fake client: no message carries the 2a answer."""
+    tasks, client_ = _setup(tmp_path, monkeypatch, {"math_a": "987654"})
+    from harness import llm_routes
+    from harness.llm import ChatResult
+    sent = []
+
+    class Client:
+        ledger = client_.ledger
+
+        async def chat(self, model, messages, max_tokens, **extra):
+            sent.append(json.dumps(messages))
+            return ChatResult(text="print(3 + 4)", prompt_tokens=10, completion_tokens=10, cost=11)
+    monkeypatch.setattr(scheduler, "confirm_program", llm_routes.solve_with_program)
+    scheduler.run(tasks, 100000, Client())
+    assert len(sent) == 2 and not any("987654" in s for s in sent)
+    assert _answers(tasks) == {"math_a": "7"}
+
+
+def verify_target(queue, task, solver_name=None):
+    if task.task_type == "coding":
+        queue.put((task.task_id, SolveResult("solved", answer="DONE", note="fixed", tentative=True,
+                                             extra={"verify": [{"func": "f"}]})))
+    else:
+        queue.put((task.task_id, SolveResult("unparsed", note="forced")))
+
+
+def test_2d_runs_after_the_stage_and_its_estimate_is_held_back(tmp_path, monkeypatch):
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"})
+    d = _make(tasks, "coding_x", ttype="coding", instruction="fix", check="unittest")
+    (d / "workspace" / "mylib.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    monkeypatch.setattr(scheduler, "_phase1_target", verify_target)
+    order, reserves = [], []
+
+    async def votes(task, client, model=config.MODEL_FAST, shape_model=None):
+        order.append("confirm")
+        return SolveResult("solved", answer="42")
+
+    async def verify(task, extra, client):
+        order.append("2d")
+        return SolveResult("solved", answer="DONE", note="checked")
+    real = scheduler._reserve_2d
+    monkeypatch.setattr(scheduler, "_reserve_2d", lambda units: reserves.append(real(units)) or reserves[-1])
+    monkeypatch.setattr(scheduler, "confirm_program", votes)
+    monkeypatch.setattr(scheduler, "verify_fix", verify)
+    scheduler.run(tasks, 100000, client)
+    assert order == ["confirm", "2d"]
+    assert reserves == [pytest.approx(len(str({"verify": [{"func": "f"}]})) // 30 + config.VERIFY_MAX_TOKENS)]

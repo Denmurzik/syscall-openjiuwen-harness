@@ -93,6 +93,18 @@ def verify_coding() -> bool:
     return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)
 
 
+# default of HARNESS_CONFIRM_2A. Round 8, task 40: a 2a answer is checked by an independent MODEL_FAST program; on a
+# difference a MODEL_ALT program is the third vote and two votes against 2a replace it. See the task report
+CONFIRM_2A = True
+CONFIRM_GROUP_SAMPLE = 2   # a 2a group larger than this is accepted when its best-paid members' FAST votes all agree
+VERIFY_UNIT_S = 60         # time set aside per 2d unit (per worker) when the confirmation stage runs before 2d
+
+
+def confirm_2a() -> bool:
+    """Majority vote of independent programs on 2a answers. Read at call time: HARNESS_CONFIRM_2A=1/0."""
+    return _env_bool("HARNESS_CONFIRM_2A", CONFIRM_2A)
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 

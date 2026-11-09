@@ -59,6 +59,7 @@ def _env(tmp_path, monkeypatch):
 
 def test_parallel_units_carry_their_own_calls(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_BATCH_2A", "0")  # per-group units are what this test is about
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "0")  # 2a calls only: the confirmation votes are tested in test_confirm_2a
     tasks = tmp_path / "tasks"
     _math(tasks, "math_a", "A warehouse starts with 10 boxes. It loses 3 boxes to a flood.")
     _math(tasks, "math_b", "A warehouse starts with 20 boxes. It loses 5 boxes to a flood.")

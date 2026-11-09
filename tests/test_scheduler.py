@@ -231,6 +231,7 @@ class SpecFake:
 
 
 def test_json_group_before_program(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "0")  # 2a calls only: the confirmation votes are tested in test_confirm_2a
     tasks = tmp_path / "tasks"
     for i, (a, b) in enumerate([(10, 3), (20, 5), (30, 7)]):
         _make(tasks, f"math_{i}", "math",

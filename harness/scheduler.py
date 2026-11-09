@@ -32,6 +32,7 @@ solve_with_reason = None
 fix_coding = None
 arbitrate = None
 verify_fix = None
+confirm_program = None   # the program route of a confirmation vote (task 40); tests may pre-set it
 BudgetExhausted = None
 
 REASON_PASS_MAX_CALLS = 10      # hard cap of the final reasoning pass, whatever the ledger shows
@@ -183,7 +184,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
 
 
 def _load_phase2() -> None:
-    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, verify_fix, BudgetExhausted
+    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, verify_fix, confirm_program, BudgetExhausted
     from harness import arbitrate as arbitrate_mod, json_route, llm, llm_routes
     if solve_group is None:
         solve_group = json_route.solve_group
@@ -203,6 +204,8 @@ def _load_phase2() -> None:
         arbitrate = arbitrate_mod.arbitrate
     if verify_fix is None:
         verify_fix = arbitrate_mod.verify_fix
+    if confirm_program is None:
+        confirm_program = llm_routes.solve_with_program
     BudgetExhausted = llm.BudgetExhausted
 
 
@@ -395,6 +398,9 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     except Exception:
         log.exception("grouping failed")
         groups = {}
+    group_of = {t.task_id: key for key, members in groups.items() for t, _ in members}
+    answered_2a: dict = {}   # task_id -> (task, answer written by 2a): the confirmation stage's candidates
+
     def settle_group(members, results, el):
         for task, _ in members:
             res = results.get(task.task_id)
@@ -402,6 +408,9 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
             # and its guess is written by the last pass if nothing better comes
             if res is not None and (_final_2a(res) or (res.extra or {}).get("best_guess") is not None):
                 settle(2, task, res, el)
+                if (res.status == "solved" and status.get(task.task_id) == "solved"
+                        and task.task_id not in tentative):
+                    answered_2a[task.task_id] = (task, str(res.answer))
 
     def make_unit(call, members, est, name, stream=False):
         """`call()` returns {task_id: result}; its model calls and cost go to the first settled member.
@@ -539,12 +548,78 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                 unchecked.append(lambda: unit_2d(task, resume))
         return {"prio": task.reward / est, "estimate": est, "run": go, "name": f"verify:{task.task_id}"}
 
-    units = [unit_2d(t, tentative[t.task_id].extra) for t in left
-             if t.task_id in tentative and (tentative[t.task_id].extra or {}).get("verify")]
-    units.sort(key=lambda u: -u["prio"])
-    await _drive(units, t0, deadline_s, ledger, state)
+    units_2d = [unit_2d(t, tentative[t.task_id].extra) for t in left
+                if t.task_id in tentative and (tentative[t.task_id].extra or {}).get("verify")]
+    units_2d.sort(key=lambda u: -u["prio"])
+
+    # confirmation of 2a answers by independent programs, in reward order. After 2b, the retry pass and the final
+    # REASON pass: an open task is worth more than a second opinion, and the REASON pass's spend gate must not see
+    # the votes. Before 2d: per unit it is worth about ten times more (a wrong 2a answer is 4 in 41 on the expert's
+    # sets, at ~200 a task; a wrong green fix about 1 in 20, at ~450 a check), which decides the order if the real
+    # budget ends silently. Within the ledger and the deadline 2d keeps what it needs: the votes leave its estimate
+    # and its time untouched
+    if config.confirm_2a() and answered_2a and not state["stop"] and not ledger.exhausted:
+        await _drive(_confirm_units(answered_2a, group_of, client, ledger, t0, deadline_s, settle, status, traj,
+                                    _reserve_2d(units_2d), len(units_2d)), t0, deadline_s, ledger, state)
+
+    await _drive(units_2d, t0, deadline_s, ledger, state)
 
     if unchecked and not state["stop"] and not ledger.exhausted:
         units = [make() for make in unchecked]
         units.sort(key=lambda u: -u["prio"])
         await _drive(units, t0, deadline_s, ledger, state)
+
+
+def _reserve_2d(units: list) -> float:
+    """What the confirmation stage leaves on the ledger for the 2d checks after it."""
+    return sum(u["estimate"] for u in units)
+
+
+def _confirm_time_left(t0: float, deadline_s: float, n_2d: int) -> bool:
+    """A new vote may start: the stop point for new units, plus time for the 2d checks after the stage."""
+    reserve = -(-n_2d // max(1, LLM_WORKERS)) * config.VERIFY_UNIT_S
+    return time.monotonic() - t0 < deadline_s - config.stop_new_before_deadline_s() - reserve
+
+
+def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_s, settle, status, traj,
+                   reserve: float, n_2d: int) -> list:
+    """One unit per 2a group, best-paid groups first. A group of more than CONFIRM_GROUP_SAMPLE answered members is
+    accepted when the FAST votes on its best-paid members all agree; otherwise every member is checked. Each member's
+    calls are recorded on its own trajectory line."""
+    from harness.confirm import confirm
+    by_group: dict = {}
+    for tid, (task, answer) in answered.items():
+        by_group.setdefault(group_of.get(tid, tid), []).append((task, answer))
+
+    def unit(members):
+        members = sorted(members, key=lambda m: (-m[0].reward, m[0].task_id))
+        est = estimate_tokens(members[0][0])
+
+        async def go():
+            sample = config.CONFIRM_GROUP_SAMPLE if len(members) > config.CONFIRM_GROUP_SAMPLE else len(members)
+            all_agree = True
+            for i, (task, answer) in enumerate(members):
+                if i >= sample and all_agree:
+                    return   # the spec held on the sampled members
+                vote_est = estimate_tokens(task)
+                if not _confirm_time_left(t0, deadline_s, n_2d) or not ledger.can_afford(vote_est + reserve):
+                    return
+                start = time.monotonic()
+                verdict = await confirm(task, answer, client, confirm_program,
+                                        lambda: ledger.can_afford(vote_est + reserve)
+                                        and _confirm_time_left(t0, deadline_s, n_2d))
+                all_agree = all_agree and verdict.fast_agrees
+                if verdict.replacement is not None:
+                    settle(2, task, SolveResult("solved", answer=verdict.replacement, note=verdict.note),
+                           time.monotonic() - start)
+                    if status.get(task.task_id) != "solved" and (task.dir / "answer.txt").exists():
+                        status[task.task_id] = "solved"   # the write failed: 2a's answer is still on disk
+                else:
+                    traj.record({"phase": 2, "task_id": task.task_id, "status": "solved", **_take_calls(),
+                                 "elapsed": round(time.monotonic() - start, 3), "note": verdict.note[:200]})
+        return {"prio": sum(t.reward for t, _ in members), "estimate": est + reserve, "run": go,
+                "name": f"confirm:{members[0][0].task_id}"}
+
+    units = [unit(m) for m in by_group.values()]
+    units.sort(key=lambda u: -u["prio"])
+    return units

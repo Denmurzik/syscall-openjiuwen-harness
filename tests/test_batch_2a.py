@@ -157,6 +157,7 @@ def test_scheduler_does_not_batch_when_off(tmp_path, monkeypatch):
 
 def test_batched_unit_cost_goes_to_the_first_settled_member(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_BATCH_2A", "1")
+    monkeypatch.setenv("HARNESS_CONFIRM_2A", "0")  # 2a calls only: the confirmation votes are tested in test_confirm_2a
     tasks = tmp_path / "tasks"
     _math(tasks, "math_a", "A warehouse starts with 10 boxes. It loses 3 boxes to a flood.")
     _math(tasks, "math_b", "A warehouse starts with 20 boxes. It loses 5 boxes to a fire.")

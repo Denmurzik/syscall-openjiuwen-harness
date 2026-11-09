@@ -229,11 +229,12 @@ def _program_messages(task: Task) -> list[dict]:
     return [{"role": "system", "content": PROGRAM_SYSTEM}, {"role": "user", "content": user}]
 
 
-async def solve_with_program(task: Task, client) -> SolveResult:
-    """Up to two MODEL_FAST programs; an answer of the wrong shape gets one more try on MODEL_ALT."""
+async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_model: str = MODEL_ALT) -> SolveResult:
+    """Up to two `model` programs; an answer of the wrong shape gets one more try on `shape_model`.
+    A confirmation vote (scheduler) passes the same model twice: the vote is then one model's program."""
     messages = _program_messages(task)
     note = ""
-    model, attempt, attempts, shape_retried = MODEL_FAST, 0, 2, False
+    attempt, attempts, shape_retried = 0, 2, False
     literal_retried = False
     guess = None  # the latest wrong-shape answer: a best guess for the scheduler's last pass
     while attempt < attempts:
@@ -268,7 +269,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
             guess = answer
             if shape_retried:
                 return SolveResult("unparsed", note=f"answer shape: {bad}", extra={"best_guess": guess, "shape_mismatch": True})
-            shape_retried, model, attempts = True, MODEL_ALT, attempt + 2  # exactly one more call
+            shape_retried, model, attempts = True, shape_model, attempt + 2  # exactly one more call
             note = f"answer shape: {bad}"
             feedback = (f"Your program printed {answer[:60]!r}, but the question asks for "
                         f"{DESCRIBE[expected_shape(task)]}. Re-read the question and fix the program.")
