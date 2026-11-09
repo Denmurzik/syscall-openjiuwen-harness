@@ -1179,3 +1179,45 @@ def test_reported_usage_is_never_replaced_by_the_estimate():
         return SimpleNamespace(content="hello", usage_metadata=SimpleNamespace(input_tokens=0, output_tokens=3))
     c, fake, ledger, seen = _budgeted(100000, 1000, beh)
     assert asyncio.run(_ask(c, 400)).cost == 3
+
+
+def test_fallback_to_reason_gets_a_limit_and_effort_it_can_answer_with(monkeypatch):
+    """A reasoning model spends a limit of 400 on reasoning and replies with nothing."""
+    c, fakes, ledger, clock = _models(monkeypatch, **_all_models())
+    fakes[config.MODEL_FAST].behavior = fakes[config.MODEL_ALT].behavior = _down()
+    seen = {}
+
+    async def invoke(messages, **kw):
+        seen.update(kw)
+        return _ok()
+    fakes[config.MODEL_REASON].invoke = invoke
+    r = chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 400, response_format={"type": "json_object"})
+    assert asyncio.run(r).text == "ok"
+    assert seen["max_tokens"] == config.REASON_FALLBACK_TOKENS >= 1500 and seen["reasoning_effort"] == "low"
+    assert seen["response_format"] == {"type": "json_object"}
+
+
+def test_fallback_to_reason_keeps_a_larger_limit(monkeypatch):
+    c, fakes, ledger, clock = _models(monkeypatch, **_all_models())
+    fakes[config.MODEL_FAST].behavior = fakes[config.MODEL_ALT].behavior = _down()
+    seen = {}
+
+    async def invoke(messages, **kw):
+        seen.update(kw)
+        return _ok()
+    fakes[config.MODEL_REASON].invoke = invoke
+    asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 4000))
+    assert seen["max_tokens"] == 4000
+
+
+def test_other_models_keep_the_asked_limit_and_no_effort(monkeypatch):
+    c, fakes, ledger, clock = _models(monkeypatch, **_all_models())
+    fakes[config.MODEL_FAST].behavior = _down()
+    seen = {}
+
+    async def invoke(messages, **kw):
+        seen.update(kw)
+        return _ok()
+    fakes[config.MODEL_ALT].invoke = invoke
+    asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 400))
+    assert seen.get("max_tokens") == 400 and "reasoning_effort" not in seen

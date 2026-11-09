@@ -155,8 +155,11 @@ async def chat_or_alt(client, model: str, messages: list[dict], max_tokens: int,
     models = [model] + [m for m in _MODELS if m != model]
     while True:
         for m in models:
+            limit, params = max_tokens, extra
+            if m == config.MODEL_REASON:  # with the routes' limits it would reason to the end and reply with nothing
+                limit, params = max(max_tokens, config.REASON_FALLBACK_TOKENS), {**extra, "reasoning_effort": "low"}
             try:
-                return await client.chat(m, messages, max_tokens, **extra)
+                return await client.chat(m, messages, limit, **params)
             except (ModelFailing, ProxyDown):
                 pass
         await client.wait_for_model(models)

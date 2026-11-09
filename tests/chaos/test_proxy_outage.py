@@ -359,8 +359,17 @@ def test_alt_down_a_route_asking_for_alt_moves_to_fast(tmp_path, make_proxy, mon
 def test_only_reason_answers_routes_still_get_answers(tmp_path, make_proxy):
     """M9: FAST and ALT down for good, REASON healthy: the rule is any model that answers."""
     tasks = _math_tasks(tmp_path / "tasks", 6)
-    run = run_harness(tasks, tmp_path / "run",
-                      make_proxy(lambda n, b: "503" if b.get("model") in (MODEL_FAST, MODEL_ALT) else "normal"),
-                      ONE_MODEL_ENV, timeout=120)
+    reason = []
+
+    def behavior(n, body):
+        if body.get("model") in (MODEL_FAST, MODEL_ALT):
+            return "503"
+        limit = body.get("max_tokens") or body.get("max_completion_tokens")
+        if limit != 1:  # not a ping
+            reason.append((limit, body.get("reasoning_effort")))
+        return "normal"
+    run = run_harness(tasks, tmp_path / "run", make_proxy(behavior), ONE_MODEL_ENV, timeout=120)
     assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
     assert len(answers_on_disk(tasks)) == 6, (run.stdout, _trajectory(tmp_path))
+    # what the request really carries: a limit a reasoning model can answer with, as on the ladder's REASON rung
+    assert reason and all(limit >= 1500 and effort == "low" for limit, effort in reason), reason
