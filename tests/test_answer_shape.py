@@ -158,7 +158,7 @@ def _program_task(tmp_path, question):
 
 def test_2b_wrong_shape_retries_once_on_alt(tmp_path):
     t = _program_task(tmp_path, "Which firm employs Ann Lee?")
-    c = FakeClient("print(1994)", "print('Bluefin Systems')")
+    c = FakeClient("print(str(1994))", "print(str('Bluefin Systems'))")
     r = asyncio.run(solve_with_program(t, c))
     assert r.status == "solved" and r.answer == "Bluefin Systems"
     assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT]
@@ -167,7 +167,7 @@ def test_2b_wrong_shape_retries_once_on_alt(tmp_path):
 
 def test_2b_wrong_shape_twice_is_unparsed(tmp_path):
     t = _program_task(tmp_path, "Which firm employs Ann Lee?")
-    c = FakeClient("print(1994)", "print(1995)")
+    c = FakeClient("print(str(1994))", "print(str(1995))")
     r = asyncio.run(solve_with_program(t, c))
     assert r.status == "unparsed" and r.answer is None and "shape" in r.note
     assert len(c.calls) == 2
@@ -175,7 +175,7 @@ def test_2b_wrong_shape_twice_is_unparsed(tmp_path):
 
 def test_2b_crash_then_wrong_shape_gets_one_alt_retry(tmp_path):
     t = _program_task(tmp_path, "In which year was Ann Lee born?")
-    c = FakeClient("raise SystemExit(3)", "print('Porto')", "print(1983)")
+    c = FakeClient("raise SystemExit(3)", "print(str('Porto'))", "print(str(1983))")
     r = asyncio.run(solve_with_program(t, c))
     assert r.status == "solved" and r.answer == "1983"
     assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_FAST, config.MODEL_ALT]
@@ -183,7 +183,7 @@ def test_2b_crash_then_wrong_shape_gets_one_alt_retry(tmp_path):
 
 def test_2b_right_shape_one_call(tmp_path):
     t = _program_task(tmp_path, "In which year was Ann Lee born?")
-    c = FakeClient("print(1983)")
+    c = FakeClient("print(str(1983))")
     r = asyncio.run(solve_with_program(t, c))
     assert r.answer == "1983" and len(c.calls) == 1
 
@@ -270,7 +270,7 @@ def test_feedback_answers_are_truncated(tmp_path, monkeypatch):
     assert "1" * 60 in client.calls[1]["messages"][-1]["content"]
 
     pt = _program_task(tmp_path, "Which firm employs Ann Lee?")
-    c = FakeClient(f"print({long})", "print('Bluefin Systems')")
+    c = FakeClient(f"print(str({long}))", "print(str('Bluefin Systems'))")
     asyncio.run(solve_with_program(pt, c))
     fb = c.calls[1]["messages"][-1]["content"]
     assert long not in fb and "1" * 60 in fb
@@ -300,7 +300,7 @@ def test_2a_final_shape_mismatch_keeps_best_guess(tmp_path):
 
 def test_2b_final_shape_mismatch_keeps_best_guess(tmp_path):
     t = _program_task(tmp_path, "Which firm employs Ann Lee?")
-    client = FakeClient("print(1990)", "print(1991)")
+    client = FakeClient("print(str(1990))", "print(str(1991))")
     res = asyncio.run(solve_with_program(t, client))
     assert res.status == "unparsed" and res.extra == {"best_guess": "1991", "shape_mismatch": True}
 
@@ -313,14 +313,14 @@ def test_2b_shape_mismatch_then_no_answer_keeps_the_wrong_shape_guess(tmp_path):
             if model == config.MODEL_ALT:
                 raise LLMUnavailable("HTTP 404")
             return await super().chat(model, messages, max_tokens, **extra)
-    res = asyncio.run(solve_with_program(t, NoSecond("print(1990)")))
+    res = asyncio.run(solve_with_program(t, NoSecond("print(str(1990))")))
     assert res.status == "unparsed" and res.note.startswith("llm unavailable")
     assert res.extra == {"best_guess": "1990", "shape_mismatch": True}
 
 
 def test_2b_shape_mismatch_then_crash_keeps_the_wrong_shape_guess(tmp_path):
     t = _program_task(tmp_path, "Which firm employs Ann Lee?")
-    client = FakeClient("print(1990)", "raise SystemExit(3)")
+    client = FakeClient("print(str(1990))", "raise SystemExit(3)")
     res = asyncio.run(solve_with_program(t, client))
     assert res.status == "unparsed" and res.extra == {"best_guess": "1990", "shape_mismatch": True}
 
@@ -364,7 +364,7 @@ def test_wrong_shape_guess_never_replaces_a_stored_guess(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "solve_with_reason", no_reason, raising=False)
     monkeypatch.setattr(json_route, "_execute", _fake_execute({"search_a": "12 March 1983"}))
     client = FakeClient('{"entity": "{E1}", "hops": ["Born"]}', '{"entity": "{E1}", "hops": ["Born"]}',
-                        "print('12 March 1983')", "raise SystemExit(3)")  # 2b: wrong shape, then a crash
+                        "print(str('12 March 1983'))", "raise SystemExit(3)")  # 2b: wrong shape, then a crash
     scheduler.run(tasks, 100000, client)
     assert len(client.calls) == 4
     assert (tasks / "search_a" / "answer.txt").read_text(encoding="utf-8").strip() == "1983"

@@ -45,7 +45,7 @@ def run(coro):
 
 
 def test_program_route_writes_last_line(tmp_path):
-    c = FakeClient(["```python\nprint('x')\nprint(42)\n```"])
+    c = FakeClient(["```python\nprint('x')\nprint(int('42'))\n```"])
     r = run(solve_with_program(_task(tmp_path), c))
     assert r.status == "solved" and r.answer == "42"
     assert c.calls[0]["model"] == config.MODEL_FAST and c.calls[0]["max_tokens"] == config.PROGRAM_MAX_TOKENS == 900
@@ -209,7 +209,7 @@ def test_blocking_work_does_not_block_event_loop(tmp_path, monkeypatch):
                 ticks += 1
 
         tk = asyncio.create_task(ticker())
-        r = await solve_with_program(_task(tmp_path), FakeClient(["print(7)"]))
+        r = await solve_with_program(_task(tmp_path), FakeClient(["print(int('7'))"]))
         tk.cancel()
         return r, ticks
 
@@ -259,10 +259,10 @@ def test_extract_code_joins_blocks_and_patch_crlf_and_indent():
 
 
 def test_program_route_uses_only_first_block(tmp_path):
-    reply = "```python\nprint(42)\n```\nOutput:\n```text\n42\n```"
+    reply = "```python\nprint(int('42'))\n```\nOutput:\n```text\n42\n```"
     r = run(solve_with_program(_task(tmp_path), FakeClient([reply])))
     assert r.status == "solved" and r.answer == "42"
-    assert extract_code(reply, join_all=False) == "print(42)"
+    assert extract_code(reply, join_all=False) == "print(int('42'))"
 
 
 def test_program_prompt_forbids_answer_file():
@@ -421,7 +421,7 @@ GOOD_PATCH = "FUNC total\n" + GOOD_TOTAL + "\nFUNC reverse_words\n" + GOOD_REVER
 
 
 def test_program_route_moves_to_alt_when_fast_keeps_failing(tmp_path):
-    c = FakeClient([ModelFailing("503"), "print(42)"])
+    c = FakeClient([ModelFailing("503"), "print(int('42'))"])
     r = run(solve_with_program(_task(tmp_path), c))
     assert r.status == "solved" and r.answer == "42"
     assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT]
@@ -438,7 +438,7 @@ def test_program_cut_by_the_budget_is_no_answer(tmp_path):
         async def chat(self, *a, **kw):
             r = await super().chat(*a, **kw)
             return ChatResult(r.text, 10, 10, 11, truncated=True)
-    c = Cut(["print(7)\n# the rest of the program did not fit"])
+    c = Cut(["print(int('7'))\n# the rest of the program did not fit"])
     r = run(solve_with_program(_task(tmp_path), c))
     assert r.status == "unparsed" and "cut" in r.note and len(c.calls) == 1
 
@@ -554,7 +554,7 @@ def test_normalize_answer_exact_int_takes_the_last_number():
 
 
 def test_solve_with_reason_one_call_on_reason_model(tmp_path):
-    c = FakeClient(["print(42)"])
+    c = FakeClient(["print(int('42'))"])
     r = run(solve_with_reason(_task(tmp_path), c))
     assert r.status == "solved" and r.answer == "42"
     assert len(c.calls) == 1 and c.calls[0]["model"] == config.MODEL_REASON
@@ -568,3 +568,47 @@ def test_solve_with_reason_failure_is_unparsed_and_unavailable_noted(tmp_path):
     # IMPOSSIBLE is a verdict, as in solve_with_program: never written as an answer
     r = run(solve_with_reason(_task(tmp_path / "c"), FakeClient(["print('IMPOSSIBLE')"])))
     assert r.status == "infeasible" and r.answer is None
+
+
+# ---- task 41: 2b programs compute, never hard-code
+
+def _math(tmp_path, check="exact_int"):
+    t = _task(tmp_path, check=check, ttype="math")
+    return t
+
+
+def test_bare_literal_program_is_retried_with_the_reason(tmp_path):
+    c = FakeClient(["print(340)", "print(1200 - 40 * 5)"])
+    r = run(solve_with_program(_math(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1000" and len(c.calls) == 2
+    assert "compute" in str(c.calls[1]["messages"][-1]["content"]).lower()
+
+
+def test_bare_literal_twice_falls_back_to_current_behaviour(tmp_path):
+    c = FakeClient(["print(340)", "print(341)"])
+    r = run(solve_with_program(_math(tmp_path), c))
+    assert r.status == "solved" and r.answer == "341" and len(c.calls) == 2
+
+
+def test_literal_via_constant_variable_is_bare(tmp_path):
+    c = FakeClient(["x = 340\nprint(x)", "print(7 * 6)"])
+    r = run(solve_with_program(_math(tmp_path), c))
+    assert r.answer == "42" and len(c.calls) == 2
+
+
+@pytest.mark.parametrize("code", [
+    "stock = 1200\nstock -= 40 * 5\nresult = stock\nprint(result)",
+    "print(1200 - 40 * 5)",
+    "import csv\nrows = list(csv.DictReader(open('s.csv')))\nprint(len(rows))",
+    "print('IMPOSSIBLE')",
+])
+def test_real_programs_pass_without_retry(tmp_path, code):
+    t = _task(tmp_path, files={"s.csv": "a\n1\n2\n"}, ttype="math")
+    c = FakeClient([code])
+    r = run(solve_with_program(t, c))
+    assert len(c.calls) == 1 and r.status in ("solved", "infeasible")
+
+
+def test_program_prompt_forbids_mental_arithmetic():
+    from harness.llm_routes import PROGRAM_SYSTEM
+    assert "never print a number you worked out in your head" in PROGRAM_SYSTEM

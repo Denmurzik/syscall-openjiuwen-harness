@@ -27,6 +27,8 @@ PROGRAM_SYSTEM = ("Write a Python 3 program that prints only the final answer to
                   "the answer is read from the program's output. "
                   "Files are in the current directory. "
                   "If the task cannot be answered from the given data, print IMPOSSIBLE. "
+                  "The program must compute the answer itself from the values in the task, one statement per "
+                  "sentence of the task, in the order of the text: never print a number you worked out in your head. "
                   "Output only code, no explanations, no markdown.")
 PATCH_SYSTEM = ("You fix bugs in mylib.py so that the tests pass. Return only the corrected "
                 "functions, no explanations, in this format, one block per function:\n"
@@ -169,6 +171,47 @@ def describe_workspace(ws: Path) -> str:
     return "\n".join(parts)
 
 
+def is_bare_literal(code: str) -> bool:
+    """True when the last print of the program shows a constant nobody computed: print(340), or a name that is
+    only ever assigned constants. print(1200 - 40 * 5), print(result) and IMPOSSIBLE are not bare."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    prints = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id == "print" and n.args]
+    if not prints:
+        return False
+    last = max(prints, key=lambda n: (n.lineno, n.col_offset))
+    consts: dict[str, bool] = {}  # name -> every assignment to it is a plain constant
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign):
+            is_const = isinstance(n.value, ast.Constant)
+            for t in n.targets:
+                for nm in ast.walk(t):
+                    if isinstance(nm, ast.Name):
+                        consts[nm.id] = consts.get(nm.id, True) and is_const and isinstance(t, ast.Name)
+        elif isinstance(n, (ast.AugAssign, ast.AnnAssign, ast.For, ast.comprehension, ast.NamedExpr)):
+            for nm in ast.walk(n.target):
+                if isinstance(nm, ast.Name):
+                    consts[nm.id] = False
+        elif isinstance(n, (ast.With, ast.FunctionDef, ast.Import, ast.ImportFrom)):
+            for nm in ast.walk(n):
+                if isinstance(nm, ast.Name) and isinstance(nm.ctx, ast.Store):
+                    consts[nm.id] = False
+
+    def constant(e) -> bool:
+        if isinstance(e, ast.Constant):
+            return not (isinstance(e.value, str) and e.value.strip() == "IMPOSSIBLE")
+        if isinstance(e, ast.JoinedStr):
+            return all(constant(v.value) if isinstance(v, ast.FormattedValue) else True for v in e.values)
+        if isinstance(e, ast.Name):
+            return consts.get(e.id) is True
+        return False
+
+    return all(constant(a) for a in last.args)
+
+
 def _program_messages(task: Task) -> list[dict]:
     user = f"{task.instruction}\n\n{describe_workspace(task.workspace)}"
     return [{"role": "system", "content": PROGRAM_SYSTEM}, {"role": "user", "content": user}]
@@ -179,6 +222,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
     messages = _program_messages(task)
     note = ""
     model, attempt, attempts, shape_retried = MODEL_FAST, 0, 2, False
+    literal_retried = False
     guess = None  # the latest wrong-shape answer: a best guess for the scheduler's last pass
     while attempt < attempts:
         try:
@@ -190,6 +234,15 @@ async def solve_with_program(task: Task, client) -> SolveResult:
             note = "program cut by the budget limit"
             break
         code = extract_code(r.text, join_all=False)
+        if not literal_retried and is_bare_literal(code):  # a number worked out in the head: one more try, no run
+            literal_retried, attempts = True, attempts + 1
+            note = "program printed a hard-coded literal"
+            messages = messages + [{"role": "assistant", "content": r.text}, {"role": "user", "content":
+                "Your program prints a constant that no code computed. Compute it in code from the values in the "
+                "task and the files, one statement per sentence of the task. Print the final answer with print(); "
+                "do not write it to a file. Output only code."}]
+            attempt += 1
+            continue
         # subprocess + copytree block for up to 20 s: keep them off the event loop
         res = await asyncio.to_thread(run_program, code, task.workspace)
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
