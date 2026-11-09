@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from harness import scheduler
+from harness.budget import TokenLedger
 from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON
+from harness.llm import LLMClient
 from tests.chaos import fakeproxy
 from tests.chaos.conftest import answers_on_disk, check_common, run_harness
 
@@ -64,6 +67,15 @@ def _spent(run) -> float:
     return float(re.search(r"spent=([\d.]+)", run.stdout).group(1))
 
 
+def _trajectory(tmp: Path) -> list:
+    """What each unit did: the message of a failing test keeps it, the run's directory does not outlive the session."""
+    path = tmp / "run" / "hlogs" / "trajectory.jsonl"
+    if not path.is_file():
+        return []
+    rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    return [(r.get("task_id"), r.get("status"), (r.get("note") or "")[:80]) for r in rows if r.get("phase") == 2]
+
+
 @pytest.mark.parametrize("action", ["500", "503"])
 def test_blip_answers_every_task(action, tmp_path, make_proxy):
     tasks = _math_tasks(tmp_path / "tasks", 12)
@@ -72,7 +84,7 @@ def test_blip_answers_every_task(action, tmp_path, make_proxy):
                       {"BUDGET": 100000, "HARNESS_RETRY_DELAYS": "0.2,0.4,0.8,1.6", "HARNESS_PROXY_DEAD_S": 60},
                       timeout=120)
     assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
-    assert len(answers_on_disk(tasks)) == 12, run.stdout
+    assert len(answers_on_disk(tasks)) == 12, (run.stdout, run.stderr[-800:], _trajectory(tmp_path))
     assert proxy.count("normal") >= 12 and _spent(run) < 6000
 
 
@@ -146,7 +158,8 @@ def _fixable_tasks(root: Path, n: int, reward: int = 2) -> Path:
 
 
 def _patch_for(body):
-    fn = re.search(r"def (\w+)\(n\)", str(body.get("messages"))).group(1)
+    m = re.search(r"def (\w+)\(n\)", str(body.get("messages")))  # none in a ping
+    fn = m.group(1) if m else "x"
     return f"FUNC {fn}\ndef {fn}(n):\n    return 1 if n < 2 else n * {fn}(n - 1)\n"
 
 
@@ -190,3 +203,79 @@ def test_reasoning_model_down_does_not_wait_for_the_dead_limit(tmp_path, make_pr
                       {**ONE_MODEL_ENV, "HARNESS_PROXY_DEAD_S": 100}, timeout=120)
     assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
     assert time.monotonic() - t0 < 60, run.stdout
+
+
+def test_one_model_hanging_routes_with_no_rung_reach_alt(tmp_path, make_proxy):
+    """N1: FAST hangs, ALT is healthy: the timeouts must not add up to a dead proxy."""
+    tasks = _math_tasks(tmp_path / "tasks", 12)
+    seen = {}
+
+    def behavior(n, body):
+        seen[body.get("model")] = seen.get(body.get("model"), 0) + 1
+        return "hang" if body.get("model") == MODEL_FAST else "normal"
+    run = run_harness(tasks, tmp_path / "run", make_proxy(behavior, sleep_s=20),
+                      {"BUDGET": 100000, "HARNESS_LLM_TIMEOUT": 2, "HARNESS_PROXY_DEAD_S": 4,
+                       "HARNESS_RETRY_DELAYS": "0.2,0.4,0.8,1.6,3"}, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert len(answers_on_disk(tasks)) == 12, (run.stdout, seen, _trajectory(tmp_path))
+    assert seen[MODEL_ALT] >= 12
+
+
+def test_one_drop_on_alt_does_not_write_it_off(tmp_path, make_proxy):
+    """N2: FAST is down and the first requests to ALT break: ALT is healthy after that, the run must find it."""
+    tasks = _math_tasks(tmp_path / "tasks", 12)
+    seen = {}
+
+    def behavior(n, body):
+        seen[body.get("model")] = seen.get(body.get("model"), 0) + 1
+        if body.get("model") == MODEL_FAST:
+            return "503"
+        return "reset" if seen.get(MODEL_ALT, 0) <= 3 else "normal"
+    run = run_harness(tasks, tmp_path / "run", make_proxy(behavior), ONE_MODEL_ENV, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert len(answers_on_disk(tasks)) == 12, (run.stdout, seen, _trajectory(tmp_path))
+
+
+def test_whole_proxy_outage_costs_nothing_extra_on_the_ladder(tmp_path, make_proxy, monkeypatch):
+    """N3: a short outage of every model leaves coding tasks on the cheap rung; the most expensive reply: maxout."""
+    monkeypatch.setattr(fakeproxy, "canned", _patch_for)
+    tasks = _fixable_tasks(tmp_path / "tasks", 6)
+    sized = []
+    blip = Blip(3.0, "503")
+
+    def behavior(n, body):
+        action = blip(n, body)
+        if action == "503":
+            return action
+        sized.append((body.get("model"), body.get("max_tokens") or body.get("max_completion_tokens")))
+        return "maxout"
+    run = run_harness(tasks, tmp_path / "run", make_proxy(behavior),
+                      {**ONE_MODEL_ENV, "HARNESS_PROXY_DEAD_S": 60}, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert "solved=6" in run.stdout, (run.stdout, sized, _trajectory(tmp_path))
+    real = [s for s in sized if s[1] != 1]
+    assert {m for m, _ in real} == {MODEL_FAST}, sized
+    assert len(real) == 6 and _spent(run) <= 6 * 450 + 2 * 51, (run.stdout, sized)  # 500/10 + 400; a ping or two
+
+
+def test_failure_while_building_the_model_client_loses_no_task(tmp_path, make_proxy, monkeypatch):
+    """The blip test's flake (solved=10, unparsed=2, spent=500 and every answer from a program): reproduced to the
+    digit by five failures of the first _model() calls, which left their units as an unexpected exception."""
+    monkeypatch.setenv("HARNESS_LOG_DIR", str(tmp_path / "hlogs"))
+    monkeypatch.setenv("HARNESS_RETRY_DELAYS", "0.2,0.4,0.8,1.6")
+    monkeypatch.setenv("HARNESS_PROXY_DEAD_S", "60")
+    monkeypatch.chdir(tmp_path)
+    tasks = _math_tasks(tmp_path / "tasks", 12)
+    proxy = make_proxy(Blip(2.0, "500"))
+    client = LLMClient(proxy.base_url, "k", TokenLedger(100000, 1000), timeout=30)
+    left = {"n": 5}
+    real = client._model
+
+    def flaky(name):
+        if left["n"] > 0:
+            left["n"] -= 1
+            raise PermissionError("the log file is locked")
+        return real(name)
+    client._model = flaky
+    summary = scheduler.run(tasks, 100000, client)
+    assert summary["solved"] == 12, summary

@@ -10,7 +10,7 @@ from harness import llm as llm_mod
 from harness import config
 from harness.budget import TokenLedger
 from harness.config import TIMEOUT_CHARGE
-from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable, ModelFailing, chat_or_alt
+from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable, ModelFailing, ProxyDown, chat_or_alt
 
 
 class FakeModel:
@@ -30,6 +30,7 @@ def make(behavior, timeout=180, monkeypatch=None):
     c = LLMClient("http://x/v1", "k", ledger, timeout=timeout)
     fake = FakeModel(behavior)
     c._model = lambda name: fake
+    c.probe_models = ()  # a proxy with this one model: no other to ask
     return c, fake, ledger
 
 
@@ -711,17 +712,18 @@ def test_other_replies_are_not_marked_as_cut(finish_reason, asked):
 
 # ---------------------------------------------------------------- one model failing is not the proxy dying
 
-def _models(monkeypatch, **behaviors):
+def _models(monkeypatch, timeout=180, **behaviors):
     ledger = TokenLedger(100000, 1000)
-    c = LLMClient("http://x/v1", "k", ledger)
+    c = LLMClient("http://x/v1", "k", ledger, timeout=timeout)
     fakes = {name: FakeModel(b) for name, b in behaviors.items()}
     c._model = lambda name: fakes[name]
+    c.probe_models = tuple(behaviors)
     clock, _ = _fake_time(monkeypatch, c)
     return c, fakes, ledger, clock
 
 
-def _say(c, model, **kw):
-    return asyncio.run(c.chat(model, [{"role": "user", "content": "hi"}], 16, **kw))
+def _say(c, model):
+    return asyncio.run(c.chat(model, [{"role": "user", "content": "hi"}], 16))
 
 
 def _down():
@@ -734,43 +736,96 @@ def _up():
     return beh
 
 
-def test_failing_model_leaves_for_the_other_after_its_pause(monkeypatch):
+async def _hang():
+    await asyncio.Event().wait()
+
+
+def test_model_is_out_when_it_fails_after_another_answered_a_ping(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_up())
     t0 = clock.t
     with pytest.raises(ModelFailing):
-        _say(c, "fast", other="alt")
-    assert fakes["fast"].calls == 2 and fakes["alt"].calls == 0
-    assert clock.t - t0 == config.RETRY_DELAYS[0] and not ledger.exhausted and ledger.spent == 0
+        _say(c, "fast")
+    assert fakes["fast"].calls == 3  # fail, pause, fail, ping elsewhere, one more try now that the proxy is known alive
+    assert fakes["alt"].calls == 1 and fakes["alt"].last_messages != [{"role": "user", "content": "hi"}]
+    assert clock.t - t0 == config.RETRY_DELAYS[0] and not ledger.exhausted
 
 
-def test_model_known_to_fail_is_skipped_during_its_pause_and_retried_after(monkeypatch):
+def test_ping_is_charged_like_any_call_and_asks_for_one_token(monkeypatch):
+    seen = {}
+
+    async def invoke(messages, **kw):
+        seen.update(kw)
+        return _ok(p=10, c=1)
+    c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=None)
+    fakes["alt"].invoke = invoke
+    with pytest.raises(ModelFailing):
+        _say(c, "fast")
+    assert seen == {"max_tokens": 1} and ledger.spent == 2
+
+
+def test_blip_that_ends_during_the_ping_stays_on_the_same_model(monkeypatch):
+    """The ping shows only that the proxy is back: a model that answers the next try was never out."""
+    c, fakes, ledger, clock = _models(monkeypatch, fast=None, alt=_up())
+    n = {"i": 0}
+
+    async def fast():
+        n["i"] += 1
+        if n["i"] <= 2:
+            raise _wrapped(HTTPErr(503))
+        return _ok()
+    fakes["fast"].behavior = fast
+    assert _say(c, "fast").text == "ok"
+    assert fakes["fast"].calls == 3 and c._health["fast"].step == 0
+
+
+def test_model_known_to_fail_is_skipped_during_its_pause_and_probed_after(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_up())
     with pytest.raises(ModelFailing):
-        _say(c, "fast", other="alt")
-    assert _say(c, "alt").text == "ok"
+        _say(c, "fast")
+    calls = fakes["fast"].calls
     t = clock.t
     with pytest.raises(ModelFailing):  # at once: no request, no waiting
-        _say(c, "fast", other="alt")
-    assert fakes["fast"].calls == 2 and clock.t == t
+        _say(c, "fast")
+    assert fakes["fast"].calls == calls and clock.t == t
     clock.t += 100  # the pause is over: it gets a new chance
     with pytest.raises(ModelFailing):
-        _say(c, "fast", other="alt")
-    assert fakes["fast"].calls == 3
+        _say(c, "fast")
+    assert fakes["fast"].calls > calls
     clock.t += 100
     fakes["fast"].behavior = _up()
-    assert _say(c, "fast", other="alt").text == "ok"
-    assert fakes["fast"].calls == 4
-    assert _say(c, "fast", other="alt").text == "ok"  # healthy again: no pause left behind
-    assert fakes["fast"].calls == 5
+    assert _say(c, "fast").text == "ok"
+    calls = fakes["fast"].calls
+    assert _say(c, "fast").text == "ok" and fakes["fast"].calls == calls + 1  # healthy: no pause left behind
 
 
 def test_pause_of_one_model_does_not_hold_another(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_up())
     with pytest.raises(ModelFailing):
-        _say(c, "fast", other="alt")
+        _say(c, "fast")
     t = clock.t
     assert _say(c, "alt").text == "ok"
     assert clock.t == t
+
+
+def test_only_one_call_at_a_time_probes_a_model_that_is_out(monkeypatch):
+    """A hanging model must not take all the slots each time its pause ends."""
+    c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_up())
+
+    async def go():
+        with pytest.raises(ModelFailing):
+            await c.chat("fast", [{"role": "user", "content": "hi"}], 16)
+        clock.t += 100
+        fakes["fast"].behavior = _hang
+        calls = fakes["fast"].calls
+        probe = asyncio.create_task(c.chat("fast", [{"role": "user", "content": "hi"}], 16))
+        await asyncio.sleep(0)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        with pytest.raises(ModelFailing):
+            await c.chat("fast", [{"role": "user", "content": "hi"}], 16)
+        assert fakes["fast"].calls == calls + 1
+        probe.cancel()
+    asyncio.run(go())
 
 
 def test_all_models_failing_is_an_outage_the_call_waits_out(monkeypatch):
@@ -782,22 +837,72 @@ def test_all_models_failing_is_an_outage_the_call_waits_out(monkeypatch):
             raise _wrapped(HTTPErr(503))
         return _ok()
     fakes["fast"].behavior = fast
-    with pytest.raises(ModelFailing):  # nothing known about fast yet
-        _say(c, "alt", other="fast")
-    assert _say(c, "fast", other="alt").text == "ok"  # alt failed too: held until the proxy is back
-    assert clock.t - t0 >= 100 and fakes["fast"].calls > 2 and not ledger.exhausted
+    assert _say(c, "fast").text == "ok"
+    assert clock.t - t0 >= 100 and fakes["fast"].calls > 2 and fakes["alt"].calls >= 2 and not ledger.exhausted
 
 
-def test_call_with_no_other_model_waits_the_outage_out(monkeypatch):
-    c, fakes, ledger, clock = _models(monkeypatch, fast=None)
-    t0 = clock.t
+def test_model_that_answered_nothing_yet_is_not_taken_for_alive(monkeypatch):
+    """The ladder's N3: an outage must not walk a call down to a model nobody has heard from."""
+    c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_down(), reason=_down())
+    with pytest.raises(BudgetExhausted):
+        _say(c, "fast")
+    assert ledger.spent == 0 and clock.t - 1000 >= config.PROXY_DEAD_S
 
-    async def fast():
-        if clock.t - t0 < 100:
+
+def test_success_elsewhere_ends_the_wait_on_a_pause():
+    ledger = TokenLedger(100000, 1000)
+    c = LLMClient("http://x/v1", "k", ledger)
+    bad, good = FakeModel(_down()), FakeModel(_up())
+    c._model = lambda name: bad if name == "bad" else good
+    c.probe_models = ()
+
+    async def go():
+        t = c._now()
+        call = asyncio.create_task(c.chat("bad", [{"role": "user", "content": "hi"}], 16))
+        await asyncio.sleep(0.05)
+        c._health["bad"].pause_until = c._now() + 50  # one long pause into the wait
+        await c.chat("good", [{"role": "user", "content": "hi"}], 16)
+        with pytest.raises(ModelFailing):
+            await call
+        return c._now() - t
+    assert asyncio.run(go()) < 10
+
+
+def test_timeout_moves_the_call_on_when_the_proxy_answers(monkeypatch):
+    """N1: a hanging model is failing like one that returns 503, and the call is charged as before."""
+    c, fakes, ledger, clock = _models(monkeypatch, timeout=0.01, fast=_hang, alt=_up())
+    with pytest.raises(ModelFailing):
+        _say(c, "fast")
+    assert fakes["fast"].calls == 1 and ledger.spent == TIMEOUT_CHARGE + 2  # the flat charge, the ping
+    assert not ledger.exhausted
+    with pytest.raises(ModelFailing):  # skipped during its pause
+        _say(c, "fast")
+    assert fakes["fast"].calls == 1
+    clock.t += 1000
+    fakes["fast"].behavior = _up()
+    assert _say(c, "fast").text == "ok"  # one timeout never writes a model off
+
+
+def test_timeout_while_no_model_answers_is_a_proxy_outage(monkeypatch):
+    c, fakes, ledger, clock = _models(monkeypatch, timeout=0.01, fast=_hang, alt=_hang)
+    with pytest.raises(ProxyDown):
+        _say(c, "fast")
+    assert ledger.spent == TIMEOUT_CHARGE  # the ping that hung is not charged: one token at most
+
+
+def test_one_failure_of_alt_does_not_write_it_off(monkeypatch):
+    """N2: FAST is down, one drop on ALT: it is asked again when its pause ends, and the run goes on."""
+    n = {"i": 0}
+
+    async def alt():
+        n["i"] += 1
+        if n["i"] == 1:
             raise _wrapped(HTTPErr(503))
         return _ok()
-    fakes["fast"].behavior = fast
-    assert _say(c, "fast").text == "ok"
+    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _down(), config.MODEL_ALT: alt})
+    msgs = [{"role": "user", "content": "hi"}]
+    assert asyncio.run(chat_or_alt(c, config.MODEL_FAST, msgs, 16)).text == "ok"
+    assert not ledger.exhausted
 
 
 def test_proxy_is_alive_while_any_model_answers(monkeypatch):
@@ -829,13 +934,26 @@ def test_chat_or_alt_prefers_the_asked_model(monkeypatch):
     assert fakes[config.MODEL_FAST].calls == 1 and fakes[config.MODEL_ALT].calls == 1
 
 
-def test_other_model_is_not_a_request_param(monkeypatch):
-    seen = {}
+def test_chat_or_alt_does_not_ask_alt_twice_when_alt_is_the_one_failing(monkeypatch):
+    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _up(), config.MODEL_ALT: _down()})
+    with pytest.raises(ModelFailing):
+        asyncio.run(chat_or_alt(c, config.MODEL_ALT, [{"role": "user", "content": "hi"}], 16))
+    assert fakes[config.MODEL_FAST].calls == 1  # the ping
 
-    async def invoke(messages, **kw):
-        seen.update(kw)
-        return _ok()
-    c, fakes, ledger, clock = _models(monkeypatch, fast=_up())
-    fakes["fast"].invoke = invoke
-    _say(c, "fast", other="alt", response_format={"type": "json_object"})
-    assert "other" not in seen and "response_format" in seen
+
+def test_failure_while_building_the_model_client_is_no_answer_not_a_crash():
+    """The flake of the blip test: the exception left the unit, so its tasks were lost with no retry."""
+    ledger = TokenLedger(100000, 1000)
+    c = LLMClient("http://x/v1", "k", ledger)
+    fake = FakeModel(_up())
+    left = {"n": 1}
+
+    def model(name):
+        if left["n"]:
+            left["n"] -= 1
+            raise PermissionError("log file is locked")
+        return fake
+    c._model = model
+    with pytest.raises(LLMUnavailable, match="log file is locked"):
+        _say(c, "m")
+    assert _say(c, "m").text == "ok" and ledger.held == 0

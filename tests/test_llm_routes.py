@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from harness.budget import TokenLedger
-from harness.llm import BudgetExhausted, ChatResult, LLMUnavailable, ModelFailing
+from harness.llm import BudgetExhausted, ChatResult, LLMUnavailable, ModelFailing, ProxyDown
 from harness.llm_routes import (apply_patch, extract_code, fix_coding, normalize_answer,
                                 solve_with_program)
 from harness.tasks import Task, copy_task
@@ -117,8 +117,7 @@ def test_fix_coding_third_attempt_only_for_reward_3(tmp_path):
     r = run(fix_coding(t, c))
     assert r.status == "solved" and len(c.calls) == 3
     assert c.calls[2]["model"] == config.MODEL_REASON
-    assert c.calls[2]["extra"] == {"reasoning_effort": "low", "other": config.MODEL_ALT}
-    assert c.calls[2]["max_tokens"] == 3000
+    assert c.calls[2]["extra"] == {"reasoning_effort": "low"} and c.calls[2]["max_tokens"] == 3000
 
 
 def test_fix_coding_garbage_patch_is_unparsed(tmp_path):
@@ -426,7 +425,6 @@ def test_program_route_moves_to_alt_when_fast_keeps_failing(tmp_path):
     r = run(solve_with_program(_task(tmp_path), c))
     assert r.status == "solved" and r.answer == "42"
     assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT]
-    assert c.calls[0]["extra"] == {"other": config.MODEL_ALT} and c.calls[1]["extra"] == {}
 
 
 def test_program_route_keeps_a_note_for_the_retry_pass_when_all_is_down(tmp_path):
@@ -443,21 +441,6 @@ def test_program_cut_by_the_budget_is_no_answer(tmp_path):
     c = Cut(["print(7)\n# the rest of the program did not fit"])
     r = run(solve_with_program(_task(tmp_path), c))
     assert r.status == "unparsed" and "cut" in r.note and len(c.calls) == 1
-
-
-def test_ladder_names_the_next_rung_to_each_call(tmp_path):
-    t = _fixture("coding_0003", tmp_path, reward=3.0)
-    c = FakeClient(["nonsense", "more nonsense", GOOD_PATCH])
-    assert run(fix_coding(t, c)).status == "solved"
-    assert [x["extra"].get("other") for x in c.calls] == [config.MODEL_ALT, config.MODEL_REASON, config.MODEL_ALT]
-
-
-def test_last_rung_has_no_other_when_no_rung_got_an_answer(tmp_path):
-    t = _fixture("coding_0003", tmp_path, reward=3.0)
-    c = FakeClient([ModelFailing("503"), ModelFailing("503"), GOOD_PATCH])
-    assert run(fix_coding(t, c)).status == "solved"
-    assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT, config.MODEL_REASON]
-    assert c.calls[2]["extra"].get("other") is None
 
 
 def test_ladder_passes_a_failing_rung(tmp_path):
@@ -486,3 +469,14 @@ def test_ladder_state_only_when_a_rung_found_the_llm_unavailable(tmp_path):
     t = _fixture("coding_0003", tmp_path)
     r = run(fix_coding(t, FakeClient(["nonsense", "more nonsense"])))
     assert r.extra is None
+
+
+def test_proxy_outage_does_not_advance_the_ladder(tmp_path):
+    """N3: the ladder is about the models, a proxy down says nothing of them. The retry pass asks this rung again."""
+    t = _fixture("coding_0003", tmp_path, reward=3.0)
+    c = FakeClient([ProxyDown("timeout")])
+    r = run(fix_coding(t, c))
+    assert r.status == "unparsed" and r.note.startswith("llm unavailable") and len(c.calls) == 1
+    c = FakeClient([GOOD_PATCH])
+    assert run(fix_coding(t, c, r.extra["ladder"])).status == "solved"
+    assert [x["model"] for x in c.calls] == [config.MODEL_FAST]

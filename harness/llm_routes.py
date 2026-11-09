@@ -9,7 +9,7 @@ import textwrap
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
-from harness.llm import LLMUnavailable, chat_or_alt  # BudgetExhausted is deliberately not caught here
+from harness.llm import LLMUnavailable, ProxyDown, chat_or_alt  # BudgetExhausted is deliberately not caught here
 from harness.result import SolveResult
 from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
@@ -353,12 +353,12 @@ async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveRes
     note = "no attempt made"
     unavailable = None  # a rung that could not run: the task stays open for the scheduler's retry pass
     answered = list(resume.get("answered", ()))
-    rungs = [a for a in attempts if a[0] not in answered]
-    for i, (model, max_tokens, extra) in enumerate(rungs):
-        # the next rung; on the last one, the model that answered this ladder: its answer shows that the proxy is alive
-        other = rungs[i + 1][0] if i + 1 < len(rungs) else (answered[-1] if answered else None)
+    for model, max_tokens, extra in [a for a in attempts if a[0] not in answered]:
         try:
-            r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, other=other, **extra)
+            r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
+        except ProxyDown as e:  # says nothing of this rung: the next one would only cost more. The retry pass asks it again
+            unavailable = e
+            break
         except LLMUnavailable as e:
             unavailable = e
             continue
