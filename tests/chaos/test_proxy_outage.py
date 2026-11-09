@@ -133,12 +133,18 @@ def test_deadline_ends_the_wait_on_the_shared_pause(tasks, tmp_path, make_proxy,
 
 
 def test_max_tokens_stays_within_budget(tmp_path, make_proxy):
-    """The review's maxout: every reply as long as allowed, and a budget smaller than one ladder."""
-    tasks = _coding_tasks(tmp_path / "tasks", 2)
-    proxy = make_proxy(lambda n, b: "maxout")
-    run = run_harness(tasks, tmp_path / "run", proxy, {"BUDGET": 3000}, timeout=150)
+    """The review's maxout: every reply as long as allowed, and a budget smaller than two ladders."""
+    tasks = _fixable_tasks(tmp_path / "tasks", 2, reward=5)  # reward 5: the ladder goes up to the REASON rung
+    seen = []
+
+    def behavior(n, body):
+        seen.append((body.get("model"), body.get("max_tokens")))
+        return "maxout"
+    proxy = make_proxy(behavior)
+    run = run_harness(tasks, tmp_path / "run", proxy, {"BUDGET": 6000}, timeout=150)
     assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
-    assert proxy.requests > 0 and _spent(run) <= 3000, run.stdout
+    assert proxy.requests > 0 and _spent(run) <= 6000, run.stdout
+    assert any(m == MODEL_REASON for m, _ in seen), seen  # the expensive rung was really reached
 
 
 FIXABLE = ("import unittest\n\nimport mylib\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n"
