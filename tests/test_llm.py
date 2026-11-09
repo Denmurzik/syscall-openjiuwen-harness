@@ -1,3 +1,4 @@
+import math
 import asyncio
 import random
 from types import SimpleNamespace
@@ -1247,3 +1248,34 @@ def test_reasoning_model_without_usage_still_charged_the_limit():
     c, fake, ledger = make(ok)
     r = asyncio.run(c.chat("m", [{"role": "user", "content": "hi"}], 400))
     assert r.completion_tokens == 400
+
+
+@pytest.mark.parametrize("text", ["Привет, мир! " * 40, "你好世界，这是一个测试。" * 40])
+def test_noreason_estimate_counts_utf8_bytes(text):
+    async def ok():
+        return SimpleNamespace(content=text, usage_metadata=None)
+    c, fake, ledger = make(ok)
+    r = asyncio.run(c.chat("m-noreason", [{"role": "user", "content": "hi"}], 100000))
+    assert r.completion_tokens == math.ceil(len(text.encode()) / 3 * 1.5)
+    assert r.completion_tokens >= len(text) * 0.8  # about a token per Cyrillic or Chinese char
+
+
+@pytest.mark.parametrize("msg", [
+    "FrameworkError: [181001] model call failed, reason: HTTPStatusError: 404 Not Found",
+    "400 model max context length exceeded, invalid request",
+    "400 max_tokens too large for model, unsupported parameter",
+    "400 model is overloaded, not available right now",
+])
+def test_only_an_explicit_model_not_found_counts(msg):
+    assert not llm_mod._MODEL_MISSING_RE.search(llm_mod._clean_msg(msg))
+
+
+@pytest.mark.parametrize("msg", [
+    "404 The model `x` does not exist",
+    "400 model_not_found",
+    "404 No endpoints found for model x",
+    "400 Unknown model: x",
+    "404 model 'x' not found",
+])
+def test_explicit_model_not_found_matches(msg):
+    assert llm_mod._MODEL_MISSING_RE.search(llm_mod._clean_msg(msg))

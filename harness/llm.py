@@ -46,8 +46,18 @@ _logs_quieted = False
 MODEL_FAILING_AFTER = 2
 _PING = [{"role": "user", "content": "ping"}]
 _MODEL_MISSING_RE = re.compile(
-    r"model.{0,80}(not found|not exist|does not exist|unknown|not available|unsupported|invalid)"
-    r"|(no such|unknown|invalid) model|not found.{0,40}model", re.I | re.S)
+    r"model_not_found|(no such|unknown) model|no endpoints found for model"
+    r"|model\b.{0,60}\b(not found|does not exist|doesn't exist)|(not found|does not exist).{0,30}\bmodel\b",
+    re.I | re.S)
+MODEL_LISTING_TRIES = 2
+MODEL_LISTING_CAP = 5000
+
+
+def _clean_msg(msg: str) -> str:
+    """The framework's own words 'model call failed' are not the proxy saying a model is missing."""
+    return msg.replace("model call failed", "call failed")
+
+
 USAGE_GUESS_MARGIN = 1.5  # length-based estimate of a reply with no usage: len / 3 chars per token, times this
 _MODELS = (config.MODEL_FAST, config.MODEL_ALT, config.MODEL_REASON)
 
@@ -181,7 +191,10 @@ class LLMClient:
         self._models: dict = {}
         self._model_ids: dict[str, str] = {}  # our model name -> the id this proxy knows it by
         self._base_tried = False  # the other spelling of the base URL has been tried (once per run)
-        self._listing_read = False  # GET {base}/models has been tried (once per run)
+        self._base_orig: str | None = None  # set while the other spelling is on trial: the one to go back to
+        self._listing_done = False  # GET {base}/models gave a listing (one per run)
+        self._listing_tries = 0
+        self._fix_gen = 0  # changes whenever the base URL or a model id changes
         self._fix_lock: asyncio.Lock | None = None
         self.structured_ok = True
         self._now = time.monotonic
@@ -205,55 +218,74 @@ class LLMClient:
             m = self._models[name] = Model(cc, mc)
         return m
 
-    async def _fix_endpoint(self, model: str, status: int, msg: str, used_base: str) -> bool:
+    async def _fix_endpoint(self, model: str, status: int, msg: str, gen: int) -> bool:
         """A 404 on the address, or a model id the proxy does not know: the jury's proxy may spell either differently
-        from ours. True when something changed and the call is worth repeating. Each fix is tried once per run."""
+        from ours. True when something changed (now or while this call was failing) and the call is worth repeating.
+        The address is changed only while the original has never answered, and goes back if the other fails too."""
         if self._fix_lock is None:
             self._fix_lock = asyncio.Lock()
         async with self._fix_lock:
-            if used_base != self.base_url:  # another call fixed it while this one was failing
+            if gen != self._fix_gen:  # another call fixed something while this one was failing
                 return True
-            if _MODEL_MISSING_RE.search(msg):
-                return await self._map_model_ids(model)
-            if status == 404 and not self._base_tried:
+            if _MODEL_MISSING_RE.search(_clean_msg(msg)):
+                return await self._map_model_ids()
+            if status != 404:
+                return False
+            if self._base_orig is not None:  # the other spelling is on trial and failed as well
+                self.base_url, self._base_orig = self._base_orig, None
+                self._models.clear()
+                self._fix_gen += 1
+                return False
+            if not self._base_tried and self._served == 0:
                 self._base_tried = True
+                self._base_orig = self.base_url
                 base = self.base_url.rstrip("/")
                 self.base_url = base[:-3] if base.endswith("/v1") else base + "/v1"
                 self._models.clear()
-                logger.warning("HTTP 404 on the base URL; trying the other spelling of it")
+                self._fix_gen += 1
+                logger.warning("HTTP 404 before any answer; trying the other spelling of the base URL")
                 return True
         return False
 
-    async def _map_model_ids(self, model: str) -> bool:
-        """GET {base}/models costs no tokens: ids that end with our names take their place. Once per run."""
-        if self._listing_read:
+    async def _map_model_ids(self) -> bool:
+        """GET {base}/models costs no tokens: ids that end with our names take their place. One listing per run
+        (a failed attempt may be repeated once). Called under the fix lock: the others wait for it."""
+        if self._listing_done or self._listing_tries >= MODEL_LISTING_TRIES:
             return False
-        self._listing_read = True
+        self._listing_tries += 1
         try:
             import httpx
             async with httpx.AsyncClient(timeout=min(self.timeout, 30.0)) as http:
                 resp = await http.get(self.base_url.rstrip("/") + "/models",
                                       headers={"Authorization": f"Bearer {self.api_key}"})
-            ids = [str(d.get("id")) for d in resp.json().get("data", []) if isinstance(d, dict) and d.get("id")]
+            if resp.status_code != 200:
+                raise ValueError(f"HTTP {resp.status_code}")
+            data = resp.json().get("data", [])
+            ids = [str(d["id"]) for d in data[:MODEL_LISTING_CAP] if isinstance(d, dict) and d.get("id")]
         except Exception as exc:
             logger.warning("could not read the model listing: %s", type(exc).__name__)
             return False
+        self._listing_done = True
+        low = {i.lower(): i for i in ids}
         changed = False
         for name in _MODELS:
             if name in ids:
                 continue
-            found = sorted((i for i in ids if i.endswith("/" + name) or i.endswith(":" + name)), key=len)
+            n = name.lower()
+            found = [i for i in ids if i.lower().endswith("/" + n)] or ([low[n]] if n in low else [])
             if found:
-                self._model_ids[name] = found[0]
+                self._model_ids[name] = sorted(found, key=len)[0]
                 changed = True
         if changed:
             self._models.clear()
+            self._fix_gen += 1
             logger.warning("model ids taken from the proxy's listing: %s", self._model_ids)
         return changed
 
     def _proxy_ok(self, model: str) -> None:
         """A real answer. A ping never gets here: passing one says nothing of real work."""
         self._served += 1
+        self._base_orig = None  # an address that answers is the right one
         self._down_since = None
         self._health[model] = _ModelHealth()
 
@@ -363,7 +395,7 @@ class LLMClient:
         extra = dict(extra)
         stripped = False  # structured params dropped for this call as a trial
         recovered = 0  # times the base URL or the model id was changed for this call
-        base = self.base_url
+        gen = self._fix_gen
         prompt_cost = self.ledger.cost(len(str(messages)) // 4, 0)
         min_tokens = config.MIN_REASONING_CALL_TOKENS if "reasoning_effort" in extra else config.MIN_CALL_TOKENS
         while True:
@@ -420,10 +452,10 @@ class LLMClient:
                 else:
                     # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
                     record_call(model, 0, 0, 0.0, error=msg[:100])
-                    if status in (400, 404) and recovered < 2 and await self._fix_endpoint(model, status, msg, base):
+                    if status in (400, 404) and recovered < 2 and await self._fix_endpoint(model, status, msg, gen):
                         recovered += 1
                         m = self._model(model)
-                        base = self.base_url
+                        gen = self._fix_gen
                         continue
                     raise LLMUnavailable(msg) from exc
             else:
@@ -442,7 +474,7 @@ class LLMClient:
         if u is None or not (p or c or not r.content):  # a reply was generated: it cost something
             p, c = len(str(messages)) // 4, limit
             if model.endswith("-noreason"):  # no hidden reasoning: the reply is all it cost
-                c = min(limit, max(1, math.ceil(len(r.content or "") / 3 * USAGE_GUESS_MARGIN)))
+                c = min(limit, max(1, math.ceil(len((r.content or "").encode("utf-8")) / 3 * USAGE_GUESS_MARGIN)))
             logger.warning("no usage from %s; charging estimate %s/%s", model, p, c)
         cost = self.ledger.charge(p, c)
         record_call(model, p, c, cost)

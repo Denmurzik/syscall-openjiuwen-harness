@@ -101,3 +101,45 @@ def test_reasoning_model_without_usage_is_charged_the_limit(make):
     c, _ = make(p)
     r = ask(c, MODEL_REASON, 1)[0]
     assert r.completion_tokens == 50
+
+
+def test_bare_404_on_a_healthy_proxy_never_moves_the_base_url(make):
+    """Review C1: the original URL answered, so a later 404 (a model-specific one) says nothing about the address."""
+    p = Proxy()
+    c, _ = make(p)
+    orig = c.base_url
+
+    async def go():
+        await c.chat(MODEL_FAST, MSG, 50)
+        assert await c._fix_endpoint(MODEL_FAST, 404, "HTTPStatusError: 404 Not Found", c._fix_gen) is False
+        return [await c.chat(MODEL_ALT, MSG, 50) for _ in range(2)]
+    assert len(asyncio.run(go())) == 2
+    assert c.base_url == orig
+
+
+def test_bare_404_before_any_success_is_reverted_when_the_alternate_fails_too(make):
+    p = Proxy(mount="/other")
+    c, _ = make(p, base=p.root_url + "/v1")
+    orig = c.base_url
+    with pytest.raises(LLMUnavailable):
+        ask(c, MODEL_FAST, 1)
+    assert c.base_url == orig
+
+
+def test_concurrent_calls_all_get_the_mapped_ids(make):
+    ids = [f"qwen/{MODEL_FAST}", f"qwen/{MODEL_ALT}", f"qwen/{MODEL_REASON}"]
+    p = Proxy(model_ids=ids)
+    c, _ = make(p)
+
+    async def go():
+        return await asyncio.gather(*[c.chat(m, MSG, 50) for m in (MODEL_FAST, MODEL_ALT, MODEL_REASON) * 3])
+    assert len(asyncio.run(go())) == 9
+    assert p.listings == 1
+
+
+def test_ids_match_without_regard_to_case(make):
+    ids = [f"Qwen/{MODEL_FAST.upper()}"]
+    p = Proxy(model_ids=ids)
+    c, _ = make(p)
+    ask(c, MODEL_FAST, 1)
+    assert p.bodies[0]["model"] == ids[0]
