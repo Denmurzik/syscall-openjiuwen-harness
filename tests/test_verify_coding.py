@@ -605,3 +605,26 @@ def test_check_runs_after_the_final_reason_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "solve_batch", no_groups)
     scheduler.run(tasks, 100000, object())
     assert order == ["reason", "verify"]
+
+
+def test_difference_past_the_cut_is_a_differing_row_and_shown():
+    """Reviewer's P3: outputs equal in their first 24 characters."""
+    from harness.arbitrate import _prompt
+    ours, cand = repr(list(range(20))), repr(list(range(19)) + [-1])
+    item = {"func": "f", "buggy": "def f(n): pass", "candidates": ["a", "b"], "chosen": 0,
+            "calls": [f"f({i})" for i in range(6)] + ["f(20)"],
+            "outputs": [["0"] * 6 + [ours], ["0"] * 6 + [cand]]}
+    rows = _prompt([item], []).split("sample calls:\n")[1].splitlines()
+    assert rows[0].startswith("f(20) -> ")
+    left, right = rows[0][len("f(20) -> "):].split(" | ")
+    assert left != right and left.endswith("18, 19]") and right.endswith("18, -1]")
+    assert left.startswith("…") and len(left) <= 24 and len(right) <= 24
+
+
+def test_long_outputs_differing_early_are_cut_as_before():
+    from harness.arbitrate import _prompt
+    a, b = "x" + "a" * 40, "y" + "a" * 40
+    item = {"func": "f", "buggy": "def f(n): pass", "candidates": ["a", "b"], "chosen": 0,
+            "calls": ["f(1)"], "outputs": [[a], [b]]}
+    row = _prompt([item], []).split("sample calls:\n")[1].splitlines()[0]
+    assert row == "f(1) -> " + a[:23] + "… | " + b[:23] + "…"

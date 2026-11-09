@@ -11,6 +11,7 @@ import ast
 import asyncio
 import dataclasses
 import difflib
+import os
 import re
 import shutil
 import textwrap
@@ -61,6 +62,22 @@ def _short(v: str, n: int = 24) -> str:
     return v if len(v) <= n else v[:n - 1] + "…"
 
 
+def _cells(vals: list[str], n: int = 24) -> list[str]:
+    """Outputs of the options on one call, each at most `n` chars. When they differ only past the cut, each shows
+    a window ending past the first differing character, so the difference stays visible."""
+    p = len(os.path.commonprefix(vals))
+    if all(v == vals[0] for v in vals) or p < n - 1:
+        return [_short(v, n) for v in vals]
+    out = []
+    for v in vals:
+        start = max(0, min(p - (n - 1) // 2, len(v) - (n - 1)))
+        seg = v[start:start + n - 1]
+        if start + n - 1 < len(v):
+            seg = seg[:-1] + "…"
+        out.append("…" + seg if start else seg)
+    return out
+
+
 def _prompt(items: list[dict], asserts: list[str]) -> str:
     parts = []
     for it in items:
@@ -70,8 +87,9 @@ def _prompt(items: list[dict], asserts: list[str]) -> str:
                  f"Candidate fixes (all pass the visible tests), as edits of the buggy version:\n{opts}")
         calls, outs = it.get("calls") or [], it.get("outputs") or []
         if calls and outs:
-            cells = [[_short(o[k]) if k < len(o) else "?" for o in outs] for k in range(len(calls))]
-            differ = [k for k, row in enumerate(cells) if len(set(row)) > 1]
+            raw = [[o[k] if k < len(o) else "?" for o in outs] for k in range(len(calls))]
+            differ = [k for k, row in enumerate(raw) if len(set(row)) > 1]   # on the full outputs, not the cut ones
+            cells = [_cells(row) for row in raw]
             same = [k for k in range(len(calls)) if k not in differ]
             # every row that tells the options apart, then the others up to the limit
             order = differ + same[:max(0, MAX_ROWS - len(differ))]
