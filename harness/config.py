@@ -60,7 +60,9 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
 BATCH_2A = True  # default of HARNESS_BATCH_2A (round 6, task 32): measured, no accuracy loss, see the task report
 
 
-VERIFY_CODING = False  # default of HARNESS_VERIFY_CODING (round 7, task 38), see the task report
+# default of HARNESS_VERIFY_CODING. Round 7, task 38: 0 fixed, 0 broken on the reviewer's set, seed 74 and LIB
+# (none has a wrong green single fix), so the rule keeps it off; 2 fixed, 0 broken on a held-out set, see the report
+VERIFY_CODING = False
 VERIFY_MAX_TOKENS = 400  # output limit of the model writing its own fix, as the first rung of fix_coding
 
 
