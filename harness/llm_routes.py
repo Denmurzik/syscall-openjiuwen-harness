@@ -14,7 +14,7 @@ from harness.llm import (LLMUnavailable, ModelFailing, ProxyDown,  # BudgetExhau
 from harness.result import SolveResult
 from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
-from harness.shape import DESCRIBE, expected_shape, mismatch
+from harness.shape import DESCRIBE, NAME, expected_shape, mismatch
 from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic writer reused
 from harness.solvers.coding_solver import provable_contradiction
 from harness.solvers.testrun import TestReport, run_in_dir
@@ -273,6 +273,33 @@ async def solve_with_program(task: Task, client) -> SolveResult:
     return SolveResult("unparsed", note=note, extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})
 
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
+_BARE_NUMBER = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
+_BARE_NAME = re.compile(r"[^\W\d_][\w .,'&-]{0,59}")
+
+
+def bare_answer(text: str, task: Task) -> str | None:
+    """The reply itself is the answer: after <think> and a fence, one line holding one value of the expected shape.
+    Never IMPOSSIBLE, never a sentence, never code."""
+    body = _THINK_RE.sub("", text)
+    body = extract_code(body, join_all=False) if "```" in body else body
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if len(lines) != 1:
+        return None
+    line = lines[0].strip("\"'").strip()
+    shape = expected_shape(task)
+    if _BARE_NUMBER.fullmatch(line):
+        pass
+    elif shape == NAME and _BARE_NAME.fullmatch(line) and line.upper() != "IMPOSSIBLE" and len(line.split()) <= 6:
+        pass
+    else:
+        return None
+    answer = normalize_answer(line, task.check, task.instruction)
+    if answer is None or answer == "IMPOSSIBLE" or mismatch(task, answer) is not None:
+        return None
+    return answer
+
+
 async def solve_with_reason(task: Task, client) -> SolveResult:
     """One MODEL_REASON program, for the scheduler's last pass over what the cheap routes left open.
     An answer of the right shape settles it as solved; a last line IMPOSSIBLE gives the verdict infeasible."""
@@ -282,6 +309,9 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
         return SolveResult("unparsed", note=f"llm unavailable: {e}")
     if getattr(r, "truncated", False):
         return SolveResult("unparsed", note="reason program cut by the budget limit")
+    bare = bare_answer(r.text, task)  # the model answered without a program (a lone number)
+    if bare is not None:
+        return SolveResult("solved", answer=bare, note="model reason answer")
     res = await asyncio.to_thread(run_program, extract_code(r.text, join_all=False), task.workspace)
     lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
     if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":

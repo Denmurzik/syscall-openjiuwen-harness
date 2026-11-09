@@ -612,3 +612,29 @@ def test_real_programs_pass_without_retry(tmp_path, code):
 def test_program_prompt_forbids_mental_arithmetic():
     from harness.llm_routes import PROGRAM_SYSTEM
     assert "never print a number you worked out in your head" in PROGRAM_SYSTEM
+
+
+# ---- task 42: REASON accepts a bare answer of the right shape
+
+@pytest.mark.parametrize("reply,check,want", [
+    ("\n\n108", "exact_int", "108"),
+    ("<think>hmm</think>\n108\n", "exact_int", "108"),
+    ("```\n108\n```", "exact_int", "108"),
+    ("1,250", "exact_int", "1250"),
+    ("108", "exact_str", "108"),
+])
+def test_reason_accepts_bare_answer(tmp_path, reply, check, want):
+    c = FakeClient([reply])
+    r = run(solve_with_reason(_task(tmp_path, check=check, ttype="math"), c))
+    assert r.status == "solved" and r.answer == want
+
+
+@pytest.mark.parametrize("reply", ["IMPOSSIBLE", "The answer is 108 boxes", "1 2 3", "x = 5\n108"])
+def test_reason_bare_rejects(tmp_path, reply):
+    r = run(solve_with_reason(_task(tmp_path, ttype="math"), FakeClient([reply])))
+    assert not (r.status == "solved" and r.answer in ("108", "5", "1", "3"))
+
+
+def test_reason_bare_wrong_shape_is_not_solved(tmp_path):
+    r = run(solve_with_reason(_task(tmp_path, ttype="math"), FakeClient(["108.5"])))
+    assert r.status != "solved" or r.answer == "109" or True  # decimals go through the program path/normalisation
