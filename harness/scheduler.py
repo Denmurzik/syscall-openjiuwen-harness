@@ -434,18 +434,19 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
 
     # 2b: per-task routes for whatever is still unparsed or only tentatively answered
     # (arbitrated tasks are final; tentative ones with candidates wait for 2c above)
-    def unit_2b(task):
+    def unit_2b(task, resume=None):
         est = estimate_tokens(task)
 
         async def go():
             start = time.monotonic()
             if task.task_type == "coding":
-                res = await fix_coding(task, client)
+                res = await (fix_coding(task, client, resume) if resume else fix_coding(task, client))
             else:
                 res = await solve_with_program(task, client)
             settle(2, task, res, time.monotonic() - start)
             if (res.note or "").startswith(_LLM_UNAVAILABLE):
-                unavailable.append(lambda: unit_2b(task))
+                ladder = (res.extra or {}).get("ladder")
+                unavailable.append(lambda: unit_2b(task, ladder))
         return {"prio": task.reward / est, "estimate": est, "run": go, "name": task.task_id}
 
     units = [unit_2b(t) for t in left if status.get(t.task_id) == "unparsed"

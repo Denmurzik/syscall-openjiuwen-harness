@@ -663,3 +663,19 @@ def test_retry_pass_covers_arbitration(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "arbitrate", fake_arb)
     counts = scheduler.run(tasks, 100000, object())
     assert len(runs) == 2 and counts["solved"] == 1
+
+
+def test_retry_pass_continues_the_ladder_of_a_coding_task(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _make(tasks, "coding_0000", "coding", "fix")
+    seen = []
+
+    async def ladder(task, client, resume=None):
+        seen.append(resume)
+        if resume is None:
+            return SolveResult("unparsed", note="llm unavailable: 503", extra={"ladder": {"answered": ["fast"]}})
+        return SolveResult("solved", answer="DONE")
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "fix_coding", ladder)
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["solved"] == 1 and seen == [None, {"answered": ["fast"]}]

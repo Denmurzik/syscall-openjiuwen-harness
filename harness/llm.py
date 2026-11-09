@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 
 from harness.budget import TokenLedger
@@ -40,8 +41,8 @@ def _quiet_openjiuwen_logs() -> None:
 
 _logs_quieted = False
 
-# a request that keeps failing while others are served is about itself, not about the proxy
-MAX_TRIES_WHILE_OTHERS_SERVED = 2
+# a request or a model that fails this often while something else answers is about itself, not about the proxy
+MODEL_FAILING_AFTER = 2
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class ChatResult:
     prompt_tokens: int
     completion_tokens: int
     cost: float
+    truncated: bool = False  # stopped by a limit the budget cut: not the whole reply the caller asked for
 
 
 class BudgetExhausted(Exception):
@@ -58,6 +60,18 @@ class BudgetExhausted(Exception):
 
 class LLMUnavailable(Exception):
     pass
+
+
+class ModelFailing(LLMUnavailable):
+    """This model keeps failing and another one can still be tried."""
+
+
+@dataclass
+class _ModelHealth:
+    """One model since its last answer: its pause grows once per drop, and nothing here is shared between models."""
+    pause_until: float = float("-inf")
+    pause_set_at: float = float("-inf")
+    step: int = 0
 
 
 def _chain(exc: BaseException):
@@ -127,6 +141,16 @@ def _billed_tokens(u) -> tuple[int, int]:
     return p, c
 
 
+async def chat_or_alt(client, model: str, messages: list[dict], max_tokens: int, **extra) -> ChatResult:
+    """For a route with no rung of its own on MODEL_ALT: the call moves there while `model` keeps failing."""
+    if model == config.MODEL_ALT:
+        return await client.chat(model, messages, max_tokens, **extra)
+    try:
+        return await client.chat(model, messages, max_tokens, other=config.MODEL_ALT, **extra)
+    except ModelFailing:
+        return await client.chat(config.MODEL_ALT, messages, max_tokens, **extra)
+
+
 class LLMClient:
     def __init__(self, base_url: str, api_key: str, ledger: TokenLedger,
                  max_concurrency: int = LLM_CONCURRENCY, timeout: float | None = None):
@@ -139,13 +163,12 @@ class LLMClient:
         self._models: dict = {}
         self.structured_ok = True
         self._now = time.monotonic
-        # proxy outage, shared by all calls
+        # the proxy as a whole: dead only when no model answers
         self._last_ok = float("-inf")
         self._served = 0  # successful replies so far
         self._down_since: float | None = None
-        self._pause_until = float("-inf")
-        self._pause_set_at = float("-inf")
-        self._pause_step = 0
+        self._failing: set[str] = set()  # models that failed since the last answer from any model
+        self._health: defaultdict[str, _ModelHealth] = defaultdict(_ModelHealth)
 
     def _model(self, name: str):
         m = self._models.get(name)
@@ -161,16 +184,16 @@ class LLMClient:
             m = self._models[name] = Model(cc, mc)
         return m
 
-    def _proxy_ok(self) -> None:
+    def _proxy_ok(self, model: str) -> None:
         self._last_ok = self._now()
         self._served += 1
         self._down_since = None
-        self._pause_until = self._pause_set_at = float("-inf")
-        self._pause_step = 0
+        self._failing.clear()
+        self._health[model] = _ModelHealth()
 
-    def _proxy_failed(self, sent: float) -> None:
-        """One failure that suggests a proxy outage. The proxy is declared dead only after
-        HARNESS_PROXY_DEAD_S without a success; until then the shared pause grows, once per drop:
+    def _proxy_failed(self, model: str, sent: float) -> None:
+        """One failure that suggests an outage. The proxy is declared dead only after HARNESS_PROXY_DEAD_S
+        without a success from any model; until then the pause of this model grows, once per drop:
         calls already in flight when it was set fail for the same reason and do not count."""
         now = self._now()
         if self._down_since is None:
@@ -179,31 +202,42 @@ class LLMClient:
         if down >= config.proxy_dead_s():
             self.ledger.mark_exhausted()
             raise BudgetExhausted(f"no successful LLM response for {down:.0f} s")
-        if sent > self._pause_set_at:
-            pause = config.proxy_pause(self._pause_step)
-            self._pause_step += 1
-            self._pause_set_at, self._pause_until = now, now + pause
-            logger.warning("LLM proxy failing for %.0f s, pausing all calls for %s s", down, pause)
+        self._failing.add(model)
+        h = self._health[model]
+        if sent > h.pause_set_at:
+            pause = config.proxy_pause(h.step)
+            h.step += 1
+            h.pause_set_at, h.pause_until = now, now + pause
+            logger.warning("LLM %s failing, no answer from any model for %.0f s, pausing it for %s s",
+                           model, down, pause)
 
-    async def _wait_pause(self) -> None:
+    def _should_leave(self, model: str, tries: int, served_before: int, other: str | None) -> bool:
+        """This call stops waiting for `model` when it keeps failing and the proxy may still be alive: something
+        was served meanwhile, or `other` can still be tried. With no such sign it is an outage: wait it out."""
+        if tries < MODEL_FAILING_AFTER and self._health[model].step < MODEL_FAILING_AFTER:
+            return False
+        return self._served > served_before or (other is not None and other not in self._failing)
+
+    async def _wait_pause(self, model: str) -> None:
         """Out the pause as it stands now: one renewed meanwhile by a failing call must not starve this one,
         or a single bad request would keep the others from proving the proxy alive. In short slices, so a
         success elsewhere or the end of the run is noticed at once; the unit's deadline cancels it like any wait."""
-        until = self._pause_until
+        until = self._health[model].pause_until
         while True:
             if self.ledger.exhausted:
                 raise BudgetExhausted("ledger exhausted")
-            left = min(until, self._pause_until) - self._now()
+            left = min(until, self._health[model].pause_until) - self._now()
             if left <= 0:
                 return
             await asyncio.sleep(min(left, 1.0))
 
-    async def _hold(self, prompt_cost: float, max_tokens: int) -> int:
-        """The output limit this call may use, with its cost set aside in the ledger."""
+    async def _hold(self, prompt_cost: float, max_tokens: int, min_tokens: int) -> int:
+        """The output limit this call may use, with its cost set aside in the ledger. Waits only while a call
+        really in flight holds the budget: each of those ends within the LLM timeout."""
         while True:
             if self.ledger.exhausted:
                 raise BudgetExhausted("ledger exhausted")
-            limit = self.ledger.hold(prompt_cost, max_tokens, config.MIN_CALL_TOKENS)
+            limit = self.ledger.hold(prompt_cost, max_tokens, min_tokens)
             if limit is None:
                 await asyncio.sleep(0.05)
             elif limit > 0:
@@ -211,16 +245,19 @@ class LLMClient:
             else:
                 raise LLMUnavailable("call does not fit the remaining budget")
 
-    async def chat(self, model: str, messages: list[dict], max_tokens: int, **extra) -> ChatResult:
+    async def chat(self, model: str, messages: list[dict], max_tokens: int, *, other: str | None = None,
+                   **extra) -> ChatResult:
+        """`other`: the model the caller can turn to next. While `model` keeps failing and `other` is not known
+        to fail as well, ModelFailing is raised instead of waiting; `model` gets a new try when its pause ends."""
         if self.ledger.exhausted:
             raise BudgetExhausted("ledger exhausted")
         if self._sem is None:
             # bound to the running loop on first use; one loop per client in production
             self._sem = asyncio.Semaphore(self._max_concurrency)
         async with self._sem:
-            return await self._chat(model, messages, max_tokens, extra)
+            return await self._chat(model, messages, max_tokens, extra, other)
 
-    async def _chat(self, model, messages, max_tokens, extra) -> ChatResult:
+    async def _chat(self, model, messages, max_tokens, extra, other=None) -> ChatResult:
         m = self._model(model)
         attempt = 0
         tries = 0  # failed tries of this call that a pause and a retry can help
@@ -228,12 +265,16 @@ class LLMClient:
         extra = dict(extra)
         stripped = False  # structured params dropped for this call as a trial
         prompt_cost = self.ledger.cost(len(str(messages)) // 4, 0)
+        min_tokens = config.MIN_REASONING_CALL_TOKENS if "reasoning_effort" in extra else config.MIN_CALL_TOKENS
         while True:
             if not self.structured_ok or stripped:
                 extra.pop("response_format", None)
                 extra.pop("extra_body", None)
-            await self._wait_pause()
-            limit = await self._hold(prompt_cost, max_tokens)
+            if (tries == 0 and self._now() < self._health[model].pause_until
+                    and self._should_leave(model, tries, served_before, other)):
+                raise ModelFailing(f"{model} keeps failing")
+            await self._wait_pause(model)
+            limit = await self._hold(prompt_cost, max_tokens, min_tokens)
             sent, wait = self._now(), 0.0
             try:
                 r = await asyncio.wait_for(m.invoke(messages, max_tokens=limit, **extra), self.timeout)
@@ -256,32 +297,32 @@ class LLMClient:
                     wait = delays[attempt]
                     attempt += 1
                 elif connect or (status is not None and status >= 500):
-                    # no generation behind it: not charged, safe to repeat after the shared pause
+                    # no generation behind it: not charged, safe to repeat after the pause
                     record_call(model, 0, 0, 0.0, error=msg[:100])
-                    self._proxy_failed(sent)
+                    self._proxy_failed(model, sent)
                     tries += 1
-                    if tries >= MAX_TRIES_WHILE_OTHERS_SERVED and self._served > served_before:
-                        raise LLMUnavailable(msg) from exc
+                    if self._should_leave(model, tries, served_before, other):
+                        raise ModelFailing(msg) from exc
                 elif status is None and _is_transport_failure(exc):
                     # may have been served and billed: charge a flat amount, never repeat in place
                     record_call(model, 0, TIMEOUT_CHARGE, self.ledger.charge(0, TIMEOUT_CHARGE),
                                 error=msg[:100])
-                    self._proxy_failed(sent)
+                    self._proxy_failed(model, sent)
                     raise LLMUnavailable(msg) from exc
                 else:
                     # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
                     raise LLMUnavailable(msg) from exc
             else:
-                self._proxy_ok()
+                self._proxy_ok(model)
                 if stripped:
                     self.structured_ok = False
-                return self._account(model, messages, limit, r)
+                return self._account(model, messages, limit, r, limit < max_tokens)
             finally:
                 self.ledger.release(prompt_cost + limit)
             if wait:
                 await asyncio.sleep(wait)
 
-    def _account(self, model, messages, limit, r) -> ChatResult:
+    def _account(self, model, messages, limit, r, cut: bool) -> ChatResult:
         u = getattr(r, "usage_metadata", None)
         if u is None:
             p = len(str(messages)) // 4
@@ -291,4 +332,5 @@ class LLMClient:
             p, c = _billed_tokens(u)
         cost = self.ledger.charge(p, c)
         record_call(model, p, c, cost)
-        return ChatResult(text=r.content or "", prompt_tokens=p, completion_tokens=c, cost=cost)
+        return ChatResult(text=r.content or "", prompt_tokens=p, completion_tokens=c, cost=cost,
+                          truncated=cut and getattr(r, "finish_reason", None) == "length")

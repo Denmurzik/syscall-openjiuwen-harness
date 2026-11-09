@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON
+from tests.chaos import fakeproxy
 from tests.chaos.conftest import answers_on_disk, check_common, run_harness
 
 pytestmark = pytest.mark.chaos
@@ -125,3 +127,66 @@ def test_max_tokens_stays_within_budget(tmp_path, make_proxy):
     run = run_harness(tasks, tmp_path / "run", proxy, {"BUDGET": 3000}, timeout=150)
     assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
     assert proxy.requests > 0 and _spent(run) <= 3000, run.stdout
+
+
+FIXABLE = ("import unittest\n\nimport mylib\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n"
+           "        self.assertEqual(mylib.{fn}(4), 24)\n\n    def test_b(self):\n"
+           "        self.assertEqual(mylib.{fn}(3), 6)\n\n\nif __name__ == '__main__':\n    unittest.main()\n")
+
+
+def _fixable_tasks(root: Path, n: int, reward: int = 2) -> Path:
+    for i in range(n):
+        d = root / f"coding_{i:04d}"
+        (d / "workspace").mkdir(parents=True)
+        (d / "workspace" / "mylib.py").write_text(f"def easy{i}(n):\n    return n\n", newline="\n", encoding="utf-8")
+        (d / "workspace" / "test_mylib.py").write_text(FIXABLE.format(fn=f"easy{i}"), newline="\n", encoding="utf-8")
+        (d / "task.json").write_text(json.dumps({"task_id": d.name, "task_type": "coding", "reward": reward,
+                                                 "check": "unittest", "instruction": CODING}), encoding="utf-8")
+    return root
+
+
+def _patch_for(body):
+    fn = re.search(r"def (\w+)\(n\)", str(body.get("messages"))).group(1)
+    return f"FUNC {fn}\ndef {fn}(n):\n    return 1 if n < 2 else n * {fn}(n - 1)\n"
+
+
+def _only_fast_down(seen):
+    def behavior(n, body):
+        seen[body.get("model")] = seen.get(body.get("model"), 0) + 1
+        return "503" if body.get("model") == MODEL_FAST else "normal"
+    return behavior
+
+
+ONE_MODEL_ENV = {"BUDGET": 100000, "HARNESS_PROXY_DEAD_S": 20, "HARNESS_RETRY_DELAYS": "0.2,0.4,0.8",
+                 "HARNESS_PHASE1_TIMEOUT_CODING": 4}
+
+
+def test_one_model_down_the_ladder_solves_on_the_next(tmp_path, make_proxy, monkeypatch):
+    monkeypatch.setattr(fakeproxy, "canned", _patch_for)
+    tasks = _fixable_tasks(tmp_path / "tasks", 6)
+    seen = {}
+    run = run_harness(tasks, tmp_path / "run", make_proxy(_only_fast_down(seen)), ONE_MODEL_ENV, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert "solved=6" in run.stdout, (run.stdout, seen)
+    assert seen[MODEL_ALT] >= 6 and seen[MODEL_FAST] >= 2
+
+
+def test_one_model_down_routes_with_no_rung_reach_alt(tmp_path, make_proxy):
+    tasks = _math_tasks(tmp_path / "tasks", 6)
+    seen = {}
+    run = run_harness(tasks, tmp_path / "run", make_proxy(_only_fast_down(seen)), ONE_MODEL_ENV, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert len(answers_on_disk(tasks)) == 6, (run.stdout, seen)
+    assert seen[MODEL_ALT] >= 1
+
+
+def test_reasoning_model_down_does_not_wait_for_the_dead_limit(tmp_path, make_proxy, monkeypatch):
+    """Only the last rung fails and nothing else is left to run: the proxy answered this ladder a moment ago."""
+    monkeypatch.setattr(fakeproxy, "canned", lambda body: "not a patch")
+    tasks = _fixable_tasks(tmp_path / "tasks", 2, reward=5)
+    t0 = time.monotonic()
+    run = run_harness(tasks, tmp_path / "run",
+                      make_proxy(lambda n, b: "503" if b.get("model") == MODEL_REASON else "normal"),
+                      {**ONE_MODEL_ENV, "HARNESS_PROXY_DEAD_S": 100}, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert time.monotonic() - t0 < 60, run.stdout

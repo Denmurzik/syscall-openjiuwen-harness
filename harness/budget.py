@@ -1,3 +1,4 @@
+import math
 import threading
 
 
@@ -6,7 +7,9 @@ class TokenLedger:
         self.budget = budget
         self.reserve = reserve
         self.spent = 0.0
-        self.held = 0.0  # upper bound of what the calls in flight can still cost
+        # what the calls in flight can still cost, in whole tokens rounded up: a sum of floats would not
+        # return to exactly 0, and hold() takes anything above 0 for a call in flight
+        self.held = 0
         self.exhausted = False
         self._lock = threading.Lock()
 
@@ -45,12 +48,12 @@ class TokenLedger:
                 limit = int(left - prompt_cost)
                 if limit < min_tokens:
                     return 0
-            self.held += prompt_cost + limit
+            self.held += math.ceil(prompt_cost + limit)
             return limit
 
     def release(self, amount: float) -> None:
         with self._lock:
-            self.held = max(0.0, self.held - amount)
+            self.held = max(0, self.held - math.ceil(amount))
 
     def mark_exhausted(self) -> None:
         with self._lock:

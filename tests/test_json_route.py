@@ -65,7 +65,7 @@ def test_one_call_per_group():
     client = FakeClient(json.dumps({"start": "{N1}", "ops": [["-", "{N2}"]]}))
     out = asyncio.run(solve_group("math", template, _members(tasks), client))
     assert len(client.calls) == 1
-    assert client.calls[0]["extra"] == {"response_format": {"type": "json_object"}}
+    assert client.calls[0]["extra"] == {"response_format": {"type": "json_object"}, "other": config.MODEL_ALT}
     assert client.calls[0]["max_tokens"] == 250
     assert client.calls[0]["model"] == config.MODEL_FAST
     assert client.calls[0]["messages"][-1] == {"role": "user", "content": template}

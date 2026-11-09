@@ -4,7 +4,7 @@ import json
 import re
 
 from harness.config import MODEL_ALT, MODEL_FAST
-from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable
+from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable, chat_or_alt
 from harness.result import SolveResult
 from harness.shape import DESCRIBE, expected_shape, mismatch
 from harness.solvers import data_solver, math_solver, search_solver
@@ -301,7 +301,7 @@ async def request_spec(task_type: str, template: str, client: LLMClient, model: 
         return None
     messages = [{"role": "system", "content": system}, {"role": "user", "content": template}] + (history or [])
     for attempt in range(2):
-        result = await client.chat(model, messages, MAX_TOKENS, response_format={"type": "json_object"})
+        result = await chat_or_alt(client, model, messages, MAX_TOKENS, response_format={"type": "json_object"})
         spec, error = _parse_json(result.text)
         if spec is not None and task_type == "search":
             spec, error = _from_hops(spec)
@@ -477,7 +477,7 @@ async def _request_batch(task_type: str, templates: list[str], client: LLMClient
     template does not have. None for the whole reply when it cannot be read at all."""
     system = _system_prompt(task_type) + _BATCH_NOTE
     user = "\n".join(f"{i}. {t}" for i, t in enumerate(templates, 1))
-    result = await client.chat(MODEL, [{"role": "system", "content": system}, {"role": "user", "content": user}],
+    result = await chat_or_alt(client, MODEL, [{"role": "system", "content": system}, {"role": "user", "content": user}],
                                MAX_TOKENS * len(templates), response_format={"type": "json_object"})
     value, _ = _parse_json(result.text)
     elements = None if value is None else value.get("specs")

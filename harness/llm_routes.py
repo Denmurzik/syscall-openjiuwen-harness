@@ -9,7 +9,7 @@ import textwrap
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
-from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
+from harness.llm import LLMUnavailable, chat_or_alt  # BudgetExhausted is deliberately not caught here
 from harness.result import SolveResult
 from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
@@ -178,9 +178,12 @@ async def solve_with_program(task: Task, client) -> SolveResult:
     guess = None  # the latest wrong-shape answer: a best guess for the scheduler's last pass
     while attempt < attempts:
         try:
-            r = await client.chat(model, messages, 400)
+            r = await chat_or_alt(client, model, messages, 400)
         except LLMUnavailable as e:
             return SolveResult("unparsed", note=f"llm unavailable: {e}")
+        if getattr(r, "truncated", False):  # a program cut at a line end still runs and prints a wrong answer
+            note = "program cut by the budget limit"
+            break
         code = extract_code(r.text, join_all=False)
         # subprocess + copytree block for up to 20 s: keep them off the event loop
         res = await asyncio.to_thread(run_program, code, task.workspace)
@@ -326,11 +329,14 @@ def _budget_is_free(client) -> bool:
         return False  # fake or foreign clients: keep the old reward threshold
 
 
-async def fix_coding(task: Task, client) -> SolveResult:
+async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveResult:
+    """`resume`: the `ladder` of an earlier result that found the LLM unavailable. Models answer the same at
+    temperature 0, so only the rungs that got no answer are bought again, from the partial fix reached so far."""
+    resume = resume or {}
     ws = Path(task.workspace)
     mylib_path = ws / "mylib.py"
     try:
-        base = mylib_path.read_text(encoding="utf-8")
+        base = resume.get("base") or mylib_path.read_text(encoding="utf-8")
         test_name = _test_file(ws)
         tests = (ws / test_name).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
@@ -346,12 +352,17 @@ async def fix_coding(task: Task, client) -> SolveResult:
         attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))
     note = "no attempt made"
     unavailable = None  # a rung that could not run: the task stays open for the scheduler's retry pass
-    for model, max_tokens, extra in attempts:
+    answered = list(resume.get("answered", ()))
+    rungs = [a for a in attempts if a[0] not in answered]
+    for i, (model, max_tokens, extra) in enumerate(rungs):
+        # the next rung; on the last one, the model that answered this ladder: its answer shows that the proxy is alive
+        other = rungs[i + 1][0] if i + 1 < len(rungs) else (answered[-1] if answered else None)
         try:
-            r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
+            r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, other=other, **extra)
         except LLMUnavailable as e:
             unavailable = e
             continue
+        answered.append(model)
         fixed = apply_patch(base, r.text)
         if fixed is None:
             note = f"{model}: patch did not apply"
@@ -365,4 +376,7 @@ async def fix_coding(task: Task, client) -> SolveResult:
         output = report.output
         if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
             base, base_report = fixed, report  # keep partial progress for the next attempt
-    return SolveResult("unparsed", note=note if unavailable is None else f"llm unavailable: {unavailable}")
+    if unavailable is None:
+        return SolveResult("unparsed", note=note)
+    return SolveResult("unparsed", note=f"llm unavailable: {unavailable}",
+                       extra={"ladder": {"answered": answered, "base": base}})
