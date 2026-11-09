@@ -90,6 +90,11 @@ def test_unit_without_settled_task_records_its_calls(tmp_path, monkeypatch):
         return SolveResult("unparsed", note="no program")
 
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
+
+    async def no_reason(task, client):   # the final REASON pass (task 36) is not what this test is about
+        return SolveResult("unparsed")
+
+    monkeypatch.setattr(scheduler, "solve_with_reason", no_reason, raising=False)
     client = _client()
     scheduler.run(tasks, 100000, client)
     recs = _traj(tmp_path)
@@ -133,6 +138,11 @@ def test_charge_outside_calls_is_reported_unattributed(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scheduler, "solve_group", grp)
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
+
+    async def no_reason(task, client):   # the final REASON pass (task 36) is not what this test is about
+        return SolveResult("unparsed")
+
+    monkeypatch.setattr(scheduler, "solve_with_reason", no_reason, raising=False)
     client = _client()
     scheduler.run(tasks, 100000, client)
     extra = [r for r in _traj(tmp_path) if r.get("status") == "unattributed"]

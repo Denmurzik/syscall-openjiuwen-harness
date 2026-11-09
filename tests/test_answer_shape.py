@@ -1,4 +1,5 @@
 """Answer-shape validation (deterministic) and the one MODEL_ALT retry in routes 2a and 2b."""
+from harness.result import SolveResult
 import asyncio
 import json
 import shutil
@@ -356,6 +357,11 @@ def test_wrong_shape_guess_never_replaces_a_stored_guess(tmp_path, monkeypatch):
     tasks = tmp_path / "tasks"
     _make(tasks, "search_a", "search", INTRO + "In which year was Ann Lee born?" + TAIL)
     monkeypatch.setattr(scheduler, "_phase1_target", year_guess_target)
+
+    async def no_reason(task, client):   # the final REASON pass (task 36) is not what this test is about
+        return SolveResult("unparsed")
+
+    monkeypatch.setattr(scheduler, "solve_with_reason", no_reason, raising=False)
     monkeypatch.setattr(json_route, "_execute", _fake_execute({"search_a": "12 March 1983"}))
     client = FakeClient('{"entity": "{E1}", "hops": ["Born"]}', '{"entity": "{E1}", "hops": ["Born"]}',
                         "print('12 March 1983')", "raise SystemExit(3)")  # 2b: wrong shape, then a crash

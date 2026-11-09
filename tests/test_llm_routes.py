@@ -218,7 +218,7 @@ def test_blocking_work_does_not_block_event_loop(tmp_path, monkeypatch):
 
 
 def test_normalize_answer_edge_cases():
-    assert normalize_answer("2024-03-15", "exact_int") is None  # several numbers, no answer marker
+    assert normalize_answer("2024-03-15", "exact_int") == "15"
     assert normalize_answer("total -5", "exact_int") == "-5"
     assert normalize_answer("2.5", "exact_int") == "3"
     assert normalize_answer("-0.4", "exact_int") == "0"
@@ -540,19 +540,16 @@ def test_apply_patch_still_rejects_nonsense():
     assert apply_patch(_PSRC, "just prose") is None
 
 
-def test_normalize_answer_strips_period_and_result_prefix():
-    assert normalize_answer("Osaka.", "exact_str") == "Osaka"
+def test_normalize_answer_strips_result_prefix_but_keeps_periods():
     assert normalize_answer("Result: Osaka", "exact_str") == "Osaka"
-    assert normalize_answer("Result: Osaka.", "exact_str") == "Osaka"
+    assert normalize_answer("Acme Inc.", "exact_str") == "Acme Inc."
+    assert normalize_answer("U.S.A.", "exact_str") == "U.S.A."
     assert normalize_answer("Dr. Smith", "exact_str") == "Dr. Smith"
     assert normalize_answer("3.5", "exact_str") == "3.5"
 
 
-def test_normalize_answer_exact_int_without_marker_is_not_guessed():
-    assert normalize_answer("158 units in 2024", "exact_int") is None
-    assert normalize_answer("Answer: 158 units in 2024", "exact_int") == "158"
-    assert normalize_answer("Result: 158 in 2024", "exact_int") == "158"
-    assert normalize_answer("debug 3\n42", "exact_int") == "42"
+def test_normalize_answer_exact_int_takes_the_last_number():
+    assert normalize_answer("Total for 2024: 158", "exact_int") == "158"
     assert normalize_answer("total -5", "exact_int") == "-5"
 
 
@@ -568,5 +565,6 @@ def test_solve_with_reason_failure_is_unparsed_and_unavailable_noted(tmp_path):
     assert run(solve_with_reason(_task(tmp_path / "a"), FakeClient(["raise SystemExit(3)"]))).status == "unparsed"
     r = run(solve_with_reason(_task(tmp_path / "b"), FakeClient([LLMUnavailable("down")])))
     assert r.status == "unparsed" and r.note.startswith("llm unavailable")
-    # an IMPOSSIBLE verdict of the reasoning model is not trusted as final here: the task stays open
-    assert run(solve_with_reason(_task(tmp_path / "c"), FakeClient(["print('IMPOSSIBLE')"]))).status != "infeasible"
+    # IMPOSSIBLE is a verdict, as in solve_with_program: never written as an answer
+    r = run(solve_with_reason(_task(tmp_path / "c"), FakeClient(["print('IMPOSSIBLE')"])))
+    assert r.status == "infeasible" and r.answer is None

@@ -103,42 +103,25 @@ def _with_decimals(ans: str, instruction: str | None) -> str:
         return ans
 
 
-_MARKER = re.compile(r"\b(?:answer|result)\b[ \t]*(?:is\b|=|:)?[ \t]*", re.I)
 _PREFIX = re.compile(r"^(?:answer|result)\s*:\s*", re.I)
-
-
-def _exact_int(stdout: str) -> str | None:
-    """The number of the last line that has one. A line with several numbers needs an answer marker
-    ("Answer: 158 units in 2024"): without one the answer is not guessed."""
-    for line in reversed(stdout.splitlines()):
-        line = re.sub(r"(?<=\d),(?=\d{3})", "", line)
-        nums = _NUM.findall(line)
-        if not nums:
-            continue
-        if len(nums) > 1:
-            m = _MARKER.search(line)
-            nums = _NUM.findall(line[m.end():])[:1] if m else []
-            if not nums:
-                return None
-        try:
-            n = Decimal(nums[0]).to_integral_value(rounding=ROUND_HALF_UP)
-            out = format(n, "f")
-        except (InvalidOperation, OverflowError, ValueError):
-            return None
-        return "0" if n == 0 else out
-    return None
 
 
 def normalize_answer(stdout: str, check: str | None, instruction: str | None = None) -> str | None:
     if check == "exact_int":
-        return _exact_int(stdout)
+        nums = _NUM.findall(re.sub(r"(?<=\d),(?=\d{3})", "", stdout))
+        if not nums:
+            return None
+        try:
+            n = Decimal(nums[-1]).to_integral_value(rounding=ROUND_HALF_UP)
+            out = format(n, "f")
+        except (InvalidOperation, OverflowError, ValueError):
+            return None
+        return "0" if n == 0 else out
     lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
     if not lines:
         return None
     ans = _PREFIX.sub("", lines[-1]).strip()
     ans = ans.strip("\"'").strip()
-    if ans.endswith(".") and not ans.endswith(".."):
-        ans = ans[:-1].rstrip()
     return _with_decimals(ans, instruction) if ans else None
 
 
@@ -247,6 +230,9 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
     if getattr(r, "truncated", False):
         return SolveResult("unparsed", note="reason program cut by the budget limit")
     res = await asyncio.to_thread(run_program, extract_code(r.text, join_all=False), task.workspace)
+    lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+    if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
+        return SolveResult("infeasible", note="reason program printed IMPOSSIBLE")
     answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
     if answer is None:
         return SolveResult("unparsed", note="reason program gave no usable answer")

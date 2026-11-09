@@ -794,10 +794,10 @@ def _reason_setup(tmp_path, monkeypatch, rewards, *, spent=0.0, budget=100000):
     return tasks, dirs, asked, Client()
 
 
-def test_final_reason_pass_takes_unparsed_above_the_median_reward(tmp_path, monkeypatch):
-    tasks, dirs, asked, client = _reason_setup(tmp_path, monkeypatch, [1, 1, 1, 5, 6])
+def test_final_reason_pass_takes_unparsed_from_the_median_reward_up(tmp_path, monkeypatch):
+    tasks, dirs, asked, client = _reason_setup(tmp_path, monkeypatch, [1, 1, 5, 6, 7])
     counts = scheduler.run(tasks, 100000, client)
-    assert sorted(asked) == ["s03", "s04"] and counts["solved"] == 2
+    assert sorted(asked) == ["s02", "s03", "s04"] and counts["solved"] == 3
     assert (dirs[3] / "answer.txt").read_text() == "R\n" and not (dirs[0] / "answer.txt").exists()
 
 

@@ -499,7 +499,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         rewards = rewards if rewards is not None else [t.reward for t in left]
         median = statistics.median(rewards) if rewards else 0
         cands = [t for t in left if status.get(t.task_id) == "unparsed" and t.task_type in JSON_TYPES
-                 and t.task_id not in tentative and t.reward > median]
+                 and t.task_id not in tentative and t.reward >= median]
         cands.sort(key=lambda t: -t.reward)
 
         def unit_reason(task):
