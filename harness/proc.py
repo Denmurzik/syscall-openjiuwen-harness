@@ -6,6 +6,12 @@ from pathlib import Path
 
 MAX_OUT = 8 * 1024
 _RLIMIT_AS = 2 * 1024 ** 3
+_RLIMIT_FSIZE = 1024 ** 3
+
+# Subprocesses run task code and model-written code: they never need the proxy key, so it is not passed on.
+_NOT_INHERITED = ("LLM_API_KEY", "LLM_BASE_URL", "BUDGET")
+# One BLAS/OpenMP thread: under RLIMIT_AS and a pids limit a thread pool per core can fail at import.
+_SINGLE_THREAD = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}
 
 
 @dataclass(frozen=True)
@@ -28,7 +34,8 @@ def _cut(b: bytes | str | None) -> str:
 
 
 def _posix_descendants(pid: int, proc_root: str = "/proc") -> list[int]:
-    """Pids of all descendants of `pid` (via /proc); best effort, [] when /proc is unavailable."""
+    """Pids of all descendants of `pid` (via /proc); best effort, [] when /proc is unavailable.
+    Only our own descendants: a timed-out program must not outlive its task."""
     children: dict[int, list[int]] = {}
     try:
         for name in os.listdir(proc_root):
@@ -53,6 +60,7 @@ def _posix_descendants(pid: int, proc_root: str = "/proc") -> list[int]:
 
 
 def kill_pids(pids: list[int]) -> None:
+    # Only our own descendants (snapshot from _posix_descendants), never unrelated processes.
     import signal
     for c in pids:
         try:
@@ -82,6 +90,7 @@ def kill_tree_of_process(proc) -> None:
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
+    # Only our own child's process group: a timed-out program must not outlive its task.
     try:
         if os.name == "posix":
             import signal
@@ -98,12 +107,13 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 
 def make_limits(timeout: float):
-    """preexec_fn that sets RLIMIT_AS / RLIMIT_CPU; never raises (a failing preexec breaks every Popen)."""
+    """preexec_fn that sets RLIMIT_AS / RLIMIT_CPU / RLIMIT_FSIZE; never raises (a failing preexec breaks every Popen)."""
     import resource
 
     def limits():
         for res, wanted in ((resource.RLIMIT_AS, _RLIMIT_AS),
-                            (resource.RLIMIT_CPU, int(timeout) * 4 + 5)):
+                            (resource.RLIMIT_CPU, int(timeout) * 4 + 5),
+                            (resource.RLIMIT_FSIZE, _RLIMIT_FSIZE)):
             try:
                 _, hard = resource.getrlimit(res)
                 if hard != resource.RLIM_INFINITY:
@@ -116,9 +126,8 @@ def make_limits(timeout: float):
 
 def run_python(args: list[str], cwd: Path, timeout: float, stdin: str | None = None,
                env: dict | None = None) -> ProcResult:
-    kwargs: dict = {}
-    if env is not None:
-        kwargs["env"] = {**os.environ, **env}
+    base = {k: v for k, v in os.environ.items() if k not in _NOT_INHERITED}
+    kwargs: dict = {"env": {**base, **_SINGLE_THREAD, **(env or {})}}
     if os.name == "posix":
         import resource
 

@@ -33,7 +33,7 @@ except Exception:
 sys.stdout = io.StringIO()
 ns = {"__name__": "mylib"}
 try:
-    exec(compile(req["src"], "mylib.py", "exec"), ns)
+    exec(compile(req["src"], "mylib.py", "exec"), ns)  # src is the task's own mylib.py, run in a throw-away directory
     fn = ns[req["func"]]
 except BaseException as e:
     for _ in ast.literal_eval(req["inputs"]):

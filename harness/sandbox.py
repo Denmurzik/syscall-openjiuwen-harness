@@ -1,4 +1,6 @@
-"""Run model-written programs against a throw-away copy of a task workspace."""
+"""Run model-written programs against a throw-away copy of a task workspace.
+
+Not a security boundary: isolation comes from the container. This only protects the real workspace from accidents."""
 import shutil
 import tempfile
 from pathlib import Path
