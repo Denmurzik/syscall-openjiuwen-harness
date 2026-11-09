@@ -1,0 +1,144 @@
+{"phase": 1, "task_id": "coding_0003", "status": "solved", "cost": 0, "elapsed": 1.333, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0035", "status": "solved", "cost": 0, "elapsed": 1.571, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0015", "status": "solved", "cost": 0, "elapsed": 5.035, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "coding_0023", "status": "solved", "cost": 0, "elapsed": 8.367, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0043", "status": "solved", "cost": 0, "elapsed": 3.621, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0051", "status": "unparsed", "cost": 0, "elapsed": 0.554, "note": "mylib.py not found"}
+{"phase": 1, "task_id": "coding_0039", "status": "solved", "cost": 0, "elapsed": 7.396, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "coding_0059", "status": "unparsed", "cost": 0, "elapsed": 0.369, "note": "mylib.py not found"}
+{"phase": 1, "task_id": "coding_0011", "status": "solved", "cost": 0, "elapsed": 11.788, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0055", "status": "solved", "cost": 0, "elapsed": 3.151, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0067", "status": "solved", "cost": 0, "elapsed": 2.654, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0063", "status": "solved", "cost": 0, "elapsed": 7.967, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "coding_0019", "status": "solved", "cost": 0, "elapsed": 19.51, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0007", "status": "solved", "cost": 0, "elapsed": 20.101, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "coding_0071", "status": "solved", "cost": 0, "elapsed": 9.271, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0027", "status": "infeasible", "cost": 0, "elapsed": 23.685, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "coding_0079", "status": "solved", "cost": 0, "elapsed": 8.86, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "coding_0083", "status": "solved", "cost": 0, "elapsed": 10.022, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "data_analysis_0002", "status": "unparsed", "cost": 0, "elapsed": 0.306, "note": "unrecognized question: \"I need the typical units per order (arithmetic mean), restricted to product 'gizmo', with the region being 'east', limited to months 1 through 1, both ends included, rounded to"}
+{"phase": 1, "task_id": "data_analysis_0006", "status": "unparsed", "cost": 0, "elapsed": 0.307, "note": "unrecognized question: 'How many order rows are there?'"}
+{"phase": 1, "task_id": "data_analysis_0010", "status": "infeasible", "cost": 0, "elapsed": 0.347, "note": "the file has no discount column"}
+{"phase": 1, "task_id": "data_analysis_0014", "status": "unparsed", "cost": 0, "elapsed": 0.347, "note": "unrecognized question: \"Report the mean number of units per order, with the region being 'west', rounded to 2 decimal places.\""}
+{"phase": 1, "task_id": "data_analysis_0018", "status": "unparsed", "cost": 0, "elapsed": 0.326, "note": "unrecognized question: \"Among the rows where the product is 'widget' and the region is 'south' and the month lies between 8 and 9 inclusive, please work out the total of per-row units times price.\""}
+{"phase": 1, "task_id": "data_analysis_0022", "status": "infeasible", "cost": 0, "elapsed": 0.286, "note": "no such file: sales.csv"}
+{"phase": 1, "task_id": "data_analysis_0026", "status": "unparsed", "cost": 0, "elapsed": 0.326, "note": "unrecognized question: \"What does the sum of units times price, computed row by row, come to, with the region being 'north', during month 10?\""}
+{"phase": 1, "task_id": "data_analysis_0030", "status": "solved", "cost": 0, "elapsed": 0.306, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0034", "status": "solved", "cost": 0, "elapsed": 0.327, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0038", "status": "solved", "cost": 0, "elapsed": 0.326, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0042", "status": "solved", "cost": 0, "elapsed": 0.347, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0046", "status": "solved", "cost": 0, "elapsed": 0.286, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0050", "status": "unparsed", "cost": 0, "elapsed": 0.306, "note": "unrecognized question: \"I need the typical price (arithmetic mean), restricted to product 'gadget', with the region being 'east', rounded to 2 decimal places.\""}
+{"phase": 1, "task_id": "data_analysis_0054", "status": "solved", "cost": 0, "elapsed": 0.347, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0058", "status": "solved", "cost": 0, "elapsed": 0.286, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0062", "status": "unparsed", "cost": 0, "elapsed": 0.326, "note": "unrecognized question: \"I need the top units value of a single order, with the region being 'central'.\""}
+{"phase": 1, "task_id": "data_analysis_0066", "status": "solved", "cost": 0, "elapsed": 0.306, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0070", "status": "solved", "cost": 0, "elapsed": 0.327, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0074", "status": "solved", "cost": 0, "elapsed": 0.331, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0078", "status": "solved", "cost": 0, "elapsed": 0.367, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0082", "status": "unparsed", "cost": 0, "elapsed": 0.326, "note": "unrecognized question: 'Report the mean price, rounded to 2 decimal places.'"}
+{"phase": 1, "task_id": "data_analysis_0086", "status": "unparsed", "cost": 0, "elapsed": 0.306, "note": "unrecognized question: \"Among the rows where the product is 'gadget' and the month lies between 8 and 10 inclusive, please work out the total of per-row units times price.\""}
+{"phase": 1, "task_id": "data_analysis_0090", "status": "solved", "cost": 0, "elapsed": 0.327, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0094", "status": "solved", "cost": 0, "elapsed": 0.306, "note": ""}
+{"phase": 1, "task_id": "data_analysis_0098", "status": "unparsed", "cost": 0, "elapsed": 0.327, "note": "unrecognized question: \"I need the count of order rows, restricted to product 'gadget', with the region being 'south'.\""}
+{"phase": 1, "task_id": "math_0000", "status": "unparsed", "cost": 0, "elapsed": 0.326, "note": "unrecognized sentence: 'Initially there are 39604 boxes in a warehouse.'"}
+{"phase": 1, "task_id": "math_0004", "status": "unparsed", "cost": 0, "elapsed": 0.306, "note": "unrecognized sentence: 'At the outset a warehouse holds 10502 boxes.'"}
+{"phase": 1, "task_id": "math_0008", "status": "solved", "cost": 0, "elapsed": 0.306, "note": ""}
+{"phase": 1, "task_id": "math_0012", "status": "unparsed", "cost": 0, "elapsed": 0.327, "note": "unrecognized sentence: 'Initially there are 50733 boxes in a warehouse.'"}
+{"phase": 1, "task_id": "math_0016", "status": "unparsed", "cost": 0, "elapsed": 0.306, "note": "unrecognized sentence: 'To begin with, a warehouse contains 50126 boxes.'"}
+{"phase": 1, "task_id": "math_0020", "status": "unparsed", "cost": 0, "elapsed": 0.285, "note": "unrecognized sentence: 'Initially there are 3548 boxes in a warehouse.'"}
+{"phase": 1, "task_id": "math_0024", "status": "infeasible", "cost": 0, "elapsed": 0.327, "note": "division by zero"}
+{"phase": 1, "task_id": "math_0028", "status": "unparsed", "cost": 0, "elapsed": 0.349, "note": "unrecognized sentence: 'At the outset a warehouse holds 7339 boxes.'"}
+{"phase": 1, "task_id": "math_0032", "status": "unparsed", "cost": 0, "elapsed": 0.329, "note": "unrecognized sentence: 'To begin with, a warehouse contains 38487 boxes.'"}
+{"phase": 1, "task_id": "math_0036", "status": "unparsed", "cost": 0, "elapsed": 0.306, "note": "unrecognized sentence: 'To begin with, a warehouse contains 10094 boxes.'"}
+{"phase": 1, "task_id": "math_0040", "status": "solved", "cost": 0, "elapsed": 0.327, "note": ""}
+{"phase": 1, "task_id": "math_0044", "status": "unparsed", "cost": 0, "elapsed": 0.348, "note": "unrecognized sentence: 'Initially there are 9379 boxes in a warehouse.'"}
+{"phase": 1, "task_id": "math_0048", "status": "solved", "cost": 0, "elapsed": 0.347, "note": ""}
+{"phase": 1, "task_id": "math_0052", "status": "solved", "cost": 0, "elapsed": 0.347, "note": ""}
+{"phase": 1, "task_id": "coding_0091", "status": "solved", "cost": 0, "elapsed": 22.222, "note": "repaired by mutation, ambiguous"}
+{"phase": 1, "task_id": "math_0056", "status": "unparsed", "cost": 0, "elapsed": 0.344, "note": "unrecognized sentence: 'At the outset a warehouse holds 49426 boxes.'"}
+{"phase": 1, "task_id": "math_0060", "status": "solved", "cost": 0, "elapsed": 0.308, "note": ""}
+{"phase": 1, "task_id": "math_0064", "status": "unparsed", "cost": 0, "elapsed": 0.34, "note": "unrecognized sentence: \"The warehouse's opening stock is 49993 boxes.\""}
+{"phase": 1, "task_id": "math_0072", "status": "solved", "cost": 0, "elapsed": 0.312, "note": ""}
+{"phase": 1, "task_id": "math_0068", "status": "solved", "cost": 0, "elapsed": 0.333, "note": ""}
+{"phase": 1, "task_id": "math_0076", "status": "unparsed", "cost": 0, "elapsed": 0.308, "note": "unrecognized sentence: \"The warehouse's opening stock is 30073 boxes.\""}
+{"phase": 1, "task_id": "math_0080", "status": "unparsed", "cost": 0, "elapsed": 0.33, "note": "unrecognized sentence: \"The warehouse's opening stock is 18347 boxes.\""}
+{"phase": 1, "task_id": "math_0084", "status": "unparsed", "cost": 0, "elapsed": 0.348, "note": "unrecognized sentence: 'At the outset a warehouse holds 2664 boxes.'"}
+{"phase": 1, "task_id": "math_0088", "status": "unparsed", "cost": 0, "elapsed": 0.368, "note": "unrecognized sentence: 'At the outset a warehouse holds 25517 boxes.'"}
+{"phase": 1, "task_id": "math_0096", "status": "unparsed", "cost": 0, "elapsed": 0.327, "note": "unrecognized sentence: 'At the outset a warehouse holds 16776 boxes.'"}
+{"phase": 1, "task_id": "math_0092", "status": "solved", "cost": 0, "elapsed": 0.355, "note": ""}
+{"phase": 1, "task_id": "coding_0075", "status": "infeasible", "cost": 0, "elapsed": 31.665, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "search_0005", "status": "solved", "cost": 0, "elapsed": 1.813, "note": ""}
+{"phase": 1, "task_id": "search_0001", "status": "solved", "cost": 0, "elapsed": 2.414, "note": ""}
+{"phase": 1, "task_id": "search_0009", "status": "solved", "cost": 0, "elapsed": 2.375, "note": ""}
+{"phase": 1, "task_id": "search_0013", "status": "unparsed", "cost": 0, "elapsed": 2.506, "note": "unrecognized question: 'The employer of the mentor of the mentor of Alice Chowdhury keeps its headquarters in which city?'"}
+{"phase": 1, "task_id": "coding_0099", "status": "solved", "cost": 0, "elapsed": 22.717, "note": "repaired by mutation"}
+{"phase": 1, "task_id": "search_0021", "status": "unparsed", "cost": 0, "elapsed": 1.944, "note": "unrecognized question: 'Which year saw the foundation of the employer of the mentor of Chen Nguyen?'"}
+{"phase": 1, "task_id": "search_0017", "status": "solved", "cost": 0, "elapsed": 2.298, "note": ""}
+{"phase": 1, "task_id": "search_0025", "status": "solved", "cost": 0, "elapsed": 1.814, "note": ""}
+{"phase": 1, "task_id": "search_0033", "status": "solved", "cost": 0, "elapsed": 2.102, "note": ""}
+{"phase": 1, "task_id": "search_0037", "status": "solved", "cost": 0, "elapsed": 1.902, "note": ""}
+{"phase": 1, "task_id": "search_0029", "status": "unparsed", "cost": 0, "elapsed": 2.353, "note": "unrecognized question: 'State which firm employs the mentor of the mentor of the mentor of Jonas Popescu.'"}
+{"phase": 1, "task_id": "search_0041", "status": "solved", "cost": 0, "elapsed": 1.664, "note": ""}
+{"phase": 1, "task_id": "search_0053", "status": "unparsed", "cost": 0, "elapsed": 2.198, "note": "unrecognized question: 'State the city of the headquarters belonging to the employer of the mentor of the mentor of Sofia Jansen.'"}
+{"phase": 1, "task_id": "coding_0087", "status": "infeasible", "cost": 0, "elapsed": 35.11, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "coding_0047", "status": "infeasible", "cost": 0, "elapsed": 47.968, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "search_0057", "status": "solved", "cost": 0, "elapsed": 2.377, "note": ""}
+{"phase": 1, "task_id": "search_0045", "status": "solved", "cost": 0, "elapsed": 3.937, "note": ""}
+{"phase": 1, "task_id": "search_0049", "status": "infeasible", "cost": 0, "elapsed": 4.169, "note": "no reading has an answer"}
+{"phase": 1, "task_id": "search_0061", "status": "unparsed", "cost": 0, "elapsed": 2.384, "note": "unrecognized question: 'State the year in which the mentor of the mentor of Marco Khan came into the world.'"}
+{"phase": 1, "task_id": "search_0065", "status": "unparsed", "cost": 0, "elapsed": 2.578, "note": "unrecognized question: 'In what year did the mentor of Farid Fischer enter the world?'"}
+{"phase": 1, "task_id": "search_0069", "status": "solved", "cost": 0, "elapsed": 1.775, "note": ""}
+{"phase": 1, "task_id": "search_0073", "status": "unparsed", "cost": 0, "elapsed": 2.425, "note": "unrecognized question: 'Find the year of birth recorded for the mentor of the mentor of the mentor of Tanya Popescu.'"}
+{"phase": 1, "task_id": "search_0081", "status": "solved", "cost": 0, "elapsed": 1.878, "note": ""}
+{"phase": 1, "task_id": "search_0085", "status": "unparsed", "cost": 0, "elapsed": 1.796, "note": "unrecognized question: 'Look up the individual assigned as the mentor of the mentor of the mentor of the mentor of Maya Rossi.'"}
+{"phase": 1, "task_id": "search_0093", "status": "unparsed", "cost": 0, "elapsed": 1.242, "note": "unrecognized question: 'Which company pays the salary of the mentor of Carla Sato?'"}
+{"phase": 1, "task_id": "search_0089", "status": "unparsed", "cost": 0, "elapsed": 2.099, "note": "unrecognized question: 'Tell me which person is mentoring the mentor of Boris Horvat.'"}
+{"phase": 1, "task_id": "search_0077", "status": "infeasible", "cost": 0, "elapsed": 3.401, "note": "no reading has an answer"}
+{"phase": 1, "task_id": "search_0097", "status": "solved", "cost": 0, "elapsed": 1.423, "note": ""}
+{"phase": 1, "task_id": "coding_0095", "status": "infeasible", "cost": 0, "elapsed": 37.701, "note": "tests contradict each other"}
+{"phase": 1, "task_id": "coding_0031", "status": "infeasible", "cost": 0, "elapsed": 85.054, "note": "tests contradict each other"}
+{"phase": 2, "task_id": "data_analysis_0098", "status": "solved", "unit": "batch:data_analysis:2", "model": "qwen3.8-27b-noreason", "cost": 180.2, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 892, "completion_tokens": 91, "cost": 180.2}], "elapsed": 7.214, "note": ""}
+{"phase": 2, "task_id": "search_0013", "status": "solved", "unit": "batch:search:4", "model": "qwen3.8-27b-noreason", "cost": 237.7, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 817, "completion_tokens": 156, "cost": 237.7}], "elapsed": 13.223, "note": ""}
+{"phase": 2, "task_id": "search_0021", "status": "solved", "unit": "batch:search:4", "model": null, "cost": 0, "calls": [], "elapsed": 13.901, "note": ""}
+{"phase": 2, "task_id": "search_0029", "status": "solved", "unit": "batch:search:4", "model": null, "cost": 0, "calls": [], "elapsed": 14.884, "note": ""}
+{"phase": 2, "task_id": "search_0053", "status": "solved", "unit": "batch:search:4", "model": null, "cost": 0, "calls": [], "elapsed": 15.675, "note": ""}
+{"phase": 2, "task_id": "math_0000", "status": "solved", "unit": "batch:math:4", "model": "qwen3.8-27b-noreason", "cost": 369.6, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 1026, "completion_tokens": 267, "cost": 369.6}], "elapsed": 12.113, "note": ""}
+{"phase": 2, "task_id": "math_0004", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 12.121, "note": ""}
+{"phase": 2, "task_id": "math_0012", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 12.129, "note": ""}
+{"phase": 2, "task_id": "math_0016", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 12.141, "note": ""}
+{"phase": 2, "task_id": "search_0093", "status": "solved", "unit": "batch:search:2", "model": "qwen3.8-27b-noreason", "cost": 139.7, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 737, "completion_tokens": 66, "cost": 139.7}], "elapsed": 11.865, "note": ""}
+{"phase": 2, "task_id": "search_0089", "status": "solved", "unit": "batch:search:2", "model": null, "cost": 0, "calls": [], "elapsed": 12.884, "note": ""}
+{"phase": 2, "task_id": "data_analysis_0026", "status": "solved", "unit": "batch:data_analysis:4", "model": "qwen3.8-27b-noreason", "cost": 317.1, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 981, "completion_tokens": 219, "cost": 317.1}], "elapsed": 8.585, "note": ""}
+{"phase": 2, "task_id": "data_analysis_0050", "status": "solved", "unit": "batch:data_analysis:4", "model": null, "cost": 0, "calls": [], "elapsed": 8.596, "note": ""}
+{"phase": 2, "task_id": "data_analysis_0082", "status": "solved", "unit": "batch:data_analysis:4", "model": null, "cost": 0, "calls": [], "elapsed": 8.616, "note": ""}
+{"phase": 2, "task_id": "math_0044", "status": "solved", "unit": "batch:math:4", "model": "qwen3.8-27b-noreason", "cost": 353.4, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 1084, "completion_tokens": 245, "cost": 353.4}], "elapsed": 8.789, "note": ""}
+{"phase": 2, "task_id": "math_0056", "status": "infeasible", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 8.798, "note": "division by zero"}
+{"phase": 2, "task_id": "math_0064", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 8.798, "note": ""}
+{"phase": 2, "task_id": "math_0076", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 8.808, "note": ""}
+{"phase": 2, "task_id": "data_analysis_0002", "status": "solved", "unit": "batch:data_analysis:4", "model": "qwen3.8-27b-noreason", "cost": 327.6, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 1016, "completion_tokens": 226, "cost": 327.6}], "elapsed": 2.219, "note": ""}
+{"phase": 2, "task_id": "data_analysis_0006", "status": "solved", "unit": "batch:data_analysis:4", "model": null, "cost": 0, "calls": [], "elapsed": 2.23, "note": ""}
+{"phase": 2, "task_id": "data_analysis_0014", "status": "solved", "unit": "batch:data_analysis:4", "model": null, "cost": 0, "calls": [], "elapsed": 2.244, "note": ""}
+{"phase": 2, "task_id": "data_analysis_0018", "status": "solved", "unit": "batch:data_analysis:4", "model": null, "cost": 0, "calls": [], "elapsed": 2.254, "note": ""}
+{"phase": 2, "task_id": "search_0061", "status": "solved", "unit": "batch:search:4", "model": "qwen3.8-27b-noreason", "cost": 230.0, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 820, "completion_tokens": 148, "cost": 230.0}], "elapsed": 2.29, "note": ""}
+{"phase": 2, "task_id": "search_0065", "status": "solved", "unit": "batch:search:4", "model": null, "cost": 0, "calls": [], "elapsed": 3.21, "note": ""}
+{"phase": 2, "task_id": "search_0073", "status": "solved", "unit": "batch:search:4", "model": null, "cost": 0, "calls": [], "elapsed": 4.06, "note": ""}
+{"phase": 2, "task_id": "search_0085", "status": "solved", "unit": "batch:search:4", "model": null, "cost": 0, "calls": [], "elapsed": 4.682, "note": ""}
+{"phase": 2, "task_id": "math_0080", "status": "solved", "unit": "batch:math:4", "model": "qwen3.8-27b-noreason", "cost": 367.8, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 1088, "completion_tokens": 259, "cost": 367.8}], "elapsed": 4.841, "note": ""}
+{"phase": 2, "task_id": "math_0084", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 4.849, "note": ""}
+{"phase": 2, "task_id": "math_0088", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 4.866, "note": ""}
+{"phase": 2, "task_id": "math_0096", "status": "infeasible", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 4.874, "note": "division by zero"}
+{"phase": 2, "task_id": "math_0020", "status": "infeasible", "unit": "batch:math:4", "model": "qwen3.8-27b-noreason", "cost": 312.4, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 1024, "completion_tokens": 210, "cost": 312.4}], "elapsed": 3.265, "note": "division by zero"}
+{"phase": 2, "task_id": "math_0028", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 3.266, "note": ""}
+{"phase": 2, "task_id": "math_0032", "status": "infeasible", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 3.274, "note": "division by zero"}
+{"phase": 2, "task_id": "math_0036", "status": "solved", "unit": "batch:math:4", "model": null, "cost": 0, "calls": [], "elapsed": 3.275, "note": ""}
+{"phase": 2, "task_id": "coding_0015", "status": "solved", "unit": "arbitrate:coding_0015", "model": "qwen3.8-27b-noreason", "cost": 53.0, "calls": [{"model": "qwen3.6-35b-a3b-noreason", "prompt_tokens": 245, "completion_tokens": 2, "cost": 26.5}, {"model": "qwen3.8-27b-noreason", "prompt_tokens": 245, "completion_tokens": 2, "cost": 26.5}], "elapsed": 1.09, "note": "arbitration kept the choice (models confirmed)"}
+{"phase": 2, "task_id": "coding_0039", "status": "solved", "unit": "arbitrate:coding_0039", "model": "qwen3.8-27b-noreason", "cost": 53.2, "calls": [{"model": "qwen3.6-35b-a3b-noreason", "prompt_tokens": 246, "completion_tokens": 2, "cost": 26.6}, {"model": "qwen3.8-27b-noreason", "prompt_tokens": 246, "completion_tokens": 2, "cost": 26.6}], "elapsed": 1.103, "note": "arbitration kept the choice (models confirmed)"}
+{"phase": 2, "task_id": "coding_0063", "status": "solved", "unit": "arbitrate:coding_0063", "model": "qwen3.8-27b-noreason", "cost": 62.0, "calls": [{"model": "qwen3.6-35b-a3b-noreason", "prompt_tokens": 290, "completion_tokens": 2, "cost": 31.0}, {"model": "qwen3.8-27b-noreason", "prompt_tokens": 290, "completion_tokens": 2, "cost": 31.0}], "elapsed": 2.089, "note": "arbitration kept the choice (models confirmed)"}
+{"phase": 2, "task_id": "coding_0007", "status": "solved", "unit": "arbitrate:coding_0007", "model": "qwen3.8-27b-noreason", "cost": 67.0, "calls": [{"model": "qwen3.6-35b-a3b-noreason", "prompt_tokens": 315, "completion_tokens": 2, "cost": 33.5}, {"model": "qwen3.8-27b-noreason", "prompt_tokens": 315, "completion_tokens": 2, "cost": 33.5}], "elapsed": 1.411, "note": "arbitration chose options [2]"}
+{"phase": 2, "task_id": "coding_0083", "status": "solved", "unit": "arbitrate:coding_0083", "model": "qwen3.8-27b-noreason", "cost": 79.6, "calls": [{"model": "qwen3.6-35b-a3b-noreason", "prompt_tokens": 378, "completion_tokens": 2, "cost": 39.8}, {"model": "qwen3.8-27b-noreason", "prompt_tokens": 378, "completion_tokens": 2, "cost": 39.8}], "elapsed": 1.639, "note": "arbitration kept the choice (models confirmed)"}
+{"phase": 2, "task_id": "coding_0091", "status": "solved", "unit": "arbitrate:coding_0091", "model": "qwen3.8-27b-noreason", "cost": 153.4, "calls": [{"model": "qwen3.6-35b-a3b-noreason", "prompt_tokens": 717, "completion_tokens": 5, "cost": 76.7}, {"model": "qwen3.8-27b-noreason", "prompt_tokens": 717, "completion_tokens": 5, "cost": 76.7}], "elapsed": 1.311, "note": "arbitration kept the choice (models confirmed)"}
+{"phase": 2, "task_id": "coding_0059", "status": "unparsed", "unit": "coding_0059", "model": null, "cost": 0, "calls": [], "elapsed": 0.001, "note": "cannot read workspace: [Errno 2] No such file or directory: '/data/tasks/coding_0059/workspace/mylib.py'"}
+{"phase": 2, "task_id": "coding_0051", "status": "unparsed", "unit": "coding_0051", "model": null, "cost": 0, "calls": [], "elapsed": 0.001, "note": "cannot read workspace: [Errno 2] No such file or directory: '/data/tasks/coding_0051/workspace/mylib.py'"}
+{"phase": 2, "task_id": "data_analysis_0062", "status": "infeasible", "unit": "data_analysis_0062", "model": "qwen3.8-27b-noreason", "cost": 129.6, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 276, "completion_tokens": 102, "cost": 129.6}], "elapsed": 2.495, "note": "program printed IMPOSSIBLE"}
+{"phase": 2, "task_id": "data_analysis_0086", "status": "infeasible", "unit": "data_analysis_0086", "model": "qwen3.8-27b-noreason", "cost": 313.6, "calls": [{"model": "qwen3.8-27b-noreason", "prompt_tokens": 209, "completion_tokens": 98, "cost": 118.9}, {"model": "qwen3.8-27b-noreason", "prompt_tokens": 437, "completion_tokens": 151, "cost": 194.7}], "elapsed": 8.292, "note": "program printed IMPOSSIBLE"}
