@@ -14,7 +14,7 @@ def test_defaults(monkeypatch):
     assert config.stop_new_before_deadline_s() == config.STOP_NEW_BEFORE_DEADLINE_S
     assert config.phase1_timeout("coding") == 100 and config.phase1_timeout("math") == 15
     assert config.retry_delays() == config.RETRY_DELAYS
-    assert config.proxy_dead_s() == config.PROXY_DEAD_S == 300
+    assert config.proxy_dead_s() == config.DEADLINE_S
 
 
 def test_overrides_read_at_call_time(monkeypatch):
@@ -50,7 +50,7 @@ def test_invalid_falls_back_with_warning(monkeypatch, caplog, bad):
 @pytest.mark.parametrize("bad", ["abc", "-1", "nan", "inf"])
 def test_invalid_proxy_dead_s_falls_back(monkeypatch, bad):
     monkeypatch.setenv("HARNESS_PROXY_DEAD_S", bad)
-    assert config.proxy_dead_s() == config.PROXY_DEAD_S
+    assert config.proxy_dead_s() == config.DEADLINE_S
 
 
 def test_proxy_pause_grows_to_a_minute(monkeypatch):
@@ -59,3 +59,13 @@ def test_proxy_pause_grows_to_a_minute(monkeypatch):
     monkeypatch.setenv("HARNESS_RETRY_DELAYS", "0.05")
     assert [config.proxy_pause(i) for i in range(3)] == [0.05, 0.1, 0.2]
     assert config.proxy_pause(5000) == 60
+
+
+def test_dead_limit_follows_the_run_deadline_unless_set(monkeypatch):
+    """At the end of the budget the proxy does nothing and the run is stopped: there is nothing to detect, only an
+    outage to survive."""
+    monkeypatch.delenv("HARNESS_PROXY_DEAD_S", raising=False)
+    monkeypatch.setenv("HARNESS_DEADLINE_S", "45")
+    assert config.proxy_dead_s() == 45
+    monkeypatch.setenv("HARNESS_PROXY_DEAD_S", "3")
+    assert config.proxy_dead_s() == 3

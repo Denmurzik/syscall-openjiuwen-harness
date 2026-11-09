@@ -374,12 +374,10 @@ class LLMClient:
 
     def _account(self, model, messages, limit, r, cut: bool) -> ChatResult:
         u = getattr(r, "usage_metadata", None)
-        if u is None:
-            p = len(str(messages)) // 4
-            c = limit
-            logger.warning("no usage_metadata from %s; charging estimate %s/%s", model, p, c)
-        else:
-            p, c = _billed_tokens(u)
+        p, c = (0, 0) if u is None else _billed_tokens(u)
+        if u is None or not (p or c or not r.content):  # a reply was generated: it cost something
+            p, c = len(str(messages)) // 4, limit
+            logger.warning("no usage from %s; charging estimate %s/%s", model, p, c)
         cost = self.ledger.charge(p, c)
         record_call(model, p, c, cost)
         return ChatResult(text=r.content or "", prompt_tokens=p, completion_tokens=c, cost=cost,

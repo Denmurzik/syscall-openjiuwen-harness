@@ -12,6 +12,12 @@ from harness.budget import TokenLedger
 from harness.config import TIMEOUT_CHARGE
 
 CHARGE_16 = 17  # a timed-out call of "hi" with a limit of 16: what it can cost at most, far below TIMEOUT_CHARGE
+DEAD_S = 300  # the default is the run deadline: these tests want the limit within reach
+
+
+@pytest.fixture(autouse=True)
+def _dead_limit(monkeypatch):
+    monkeypatch.setenv("HARNESS_PROXY_DEAD_S", str(DEAD_S))
 from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable, ModelFailing, ProxyDown, chat_or_alt
 
 
@@ -205,7 +211,7 @@ def test_real_httpx_connect_error_waits_for_the_proxy(monkeypatch):
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
         run(c)
-    assert clock.t - t0 >= config.PROXY_DEAD_S and ledger.spent == 0 and ledger.exhausted
+    assert clock.t - t0 >= DEAD_S and ledger.spent == 0 and ledger.exhausted
 
 
 def test_real_remote_protocol_error_not_retried_but_charged():
@@ -362,7 +368,7 @@ def test_5xx_alone_never_kills_before_dead_s(monkeypatch):
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
         run(c)
-    assert clock.t - t0 >= config.PROXY_DEAD_S and ledger.exhausted and ledger.spent == 0
+    assert clock.t - t0 >= DEAD_S and ledger.exhausted and ledger.spent == 0
     assert 6 <= fake.calls <= 15  # the pause grows: not a hammering of the proxy
 
 
@@ -848,7 +854,7 @@ def test_model_that_answered_nothing_yet_is_not_taken_for_alive(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_down(), reason=_down())
     with pytest.raises(BudgetExhausted):
         _say(c, "fast")
-    assert ledger.spent == 0 and clock.t - 1000 >= config.PROXY_DEAD_S
+    assert ledger.spent == 0 and clock.t - 1000 >= DEAD_S
 
 
 def test_success_elsewhere_ends_the_wait_on_a_pause():
@@ -912,7 +918,7 @@ def test_proxy_is_alive_while_any_model_answers(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _down(), config.MODEL_ALT: _up()})
     t0 = clock.t
     msgs = [{"role": "user", "content": "hi"}]
-    while clock.t - t0 < 3 * config.PROXY_DEAD_S:
+    while clock.t - t0 < 3 * DEAD_S:
         assert asyncio.run(chat_or_alt(c, config.MODEL_FAST, msgs, 16)).text == "ok"
         clock.t += 10
     assert not ledger.exhausted and fakes[config.MODEL_FAST].calls >= 10
@@ -924,7 +930,7 @@ def test_proxy_is_dead_when_no_model_answers(monkeypatch):
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
         asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
-    assert clock.t - t0 >= config.PROXY_DEAD_S and ledger.exhausted and ledger.spent == 0
+    assert clock.t - t0 >= DEAD_S and ledger.exhausted and ledger.spent == 0
     assert fakes[config.MODEL_FAST].calls >= 2 and fakes[config.MODEL_ALT].calls >= 2
 
 
@@ -994,7 +1000,7 @@ def test_chat_or_alt_ends_when_the_proxy_is_declared_dead(monkeypatch):
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
         asyncio.run(_hi(c))
-    assert clock.t - t0 >= config.PROXY_DEAD_S and ledger.exhausted
+    assert clock.t - t0 >= DEAD_S and ledger.exhausted
 
 
 def test_chat_or_alt_follows_a_cancelled_unit():
@@ -1126,3 +1132,50 @@ def test_failure_while_building_the_model_client_is_no_answer_not_a_crash():
     with pytest.raises(LLMUnavailable, match="log file is locked"):
         _say(c, "m")
     assert _say(c, "m").text == "ok" and ledger.held == 0
+
+
+def test_outage_longer_than_the_old_limit_is_survived_by_default(monkeypatch):
+    """N6: six minutes without an answer must not switch the LLM off for the rest of the hour."""
+    monkeypatch.delenv("HARNESS_PROXY_DEAD_S")
+    monkeypatch.delenv("HARNESS_DEADLINE_S", raising=False)
+    c, fake, ledger = make(None)
+    clock, _ = _fake_time(monkeypatch, c)
+    t0 = clock.t
+
+    async def beh():
+        if clock.t - t0 < 360:
+            raise _wrapped(HTTPErr(503))
+        return _ok()
+    fake.behavior = beh
+    assert run(c).text == "ok"
+    assert not ledger.exhausted
+
+
+@pytest.mark.parametrize("usage", [
+    SimpleNamespace(),
+    SimpleNamespace(input_tokens=0, output_tokens=0),
+    SimpleNamespace(input_tokens=None, output_tokens=None),
+    SimpleNamespace(total_tokens=2000),
+])
+def test_reply_with_empty_usage_is_charged_the_estimate(usage):
+    """N7: a reply was generated, so it cost something: the same estimate as with no usage at all."""
+    async def beh():
+        return SimpleNamespace(content="hello", usage_metadata=usage)
+    c, fake, ledger, seen = _budgeted(100000, 1000, beh)
+    r = asyncio.run(_ask(c, 400, 400))
+    assert ledger.spent == r.cost and r.completion_tokens == 400 and r.prompt_tokens > 0
+    assert 400 < ledger.spent < 420
+
+
+def test_empty_reply_with_empty_usage_costs_nothing():
+    async def beh():
+        return SimpleNamespace(content="", usage_metadata=SimpleNamespace(input_tokens=0, output_tokens=0))
+    c, fake, ledger, seen = _budgeted(100000, 1000, beh)
+    assert asyncio.run(_ask(c, 400)).cost == 0 and ledger.spent == 0
+
+
+def test_reported_usage_is_never_replaced_by_the_estimate():
+    async def beh():
+        return SimpleNamespace(content="hello", usage_metadata=SimpleNamespace(input_tokens=0, output_tokens=3))
+    c, fake, ledger, seen = _budgeted(100000, 1000, beh)
+    assert asyncio.run(_ask(c, 400)).cost == 3

@@ -32,7 +32,6 @@ RESERVE_FRACTION = 0.01
 TIMEOUT_CHARGE = 1500  # charged for an LLM call that ended by timeout
 MIN_CALL_TOKENS = 100  # a call cut to fit the budget is not made with a smaller output limit
 MIN_REASONING_CALL_TOKENS = 1000  # the same for a call with reasoning: below this it reasons and never answers
-PROXY_DEAD_S = 300  # no successful reply for this long, with failures all along: the proxy is gone
 PROXY_PAUSE_MAX_S = 60
 
 RETRY_DELAYS = (2, 4, 8, 16, 30)  # the shared account ceiling resets within ~40 s
@@ -85,7 +84,10 @@ def deadline_s() -> float:
 
 
 def proxy_dead_s() -> float:
-    return _env_float("HARNESS_PROXY_DEAD_S", PROXY_DEAD_S, 0.0)
+    """No successful reply for this long, with failures all along: the proxy is gone. The run deadline by default: at
+    the end of the budget the proxy does nothing and the run is stopped, so there is nothing to detect early, while
+    giving up on an outage would lose the rest of the hour."""
+    return _env_float("HARNESS_PROXY_DEAD_S", deadline_s(), 0.0)
 
 
 def stop_new_before_deadline_s() -> float:
