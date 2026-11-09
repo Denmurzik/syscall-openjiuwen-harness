@@ -30,7 +30,7 @@ class Proxy:
 
     Actions: normal, 429, 429_retry_after, 500, 502, 503, 402, 403, 400_structured (400 only when
     the request carries response_format/extra_body, else normal), timeout, hang, reset, empty,
-    malformed, no_usage, huge_usage.
+    malformed, no_usage, huge_usage, maxout (completion_tokens equal to the request's max_tokens).
     """
 
     def __init__(self, behavior=None, sleep_s: float = 30.0):
@@ -129,6 +129,9 @@ class Proxy:
                             "message": {"role": "assistant", "content": canned(body)}}]}
         if usage == "default":
             msg["usage"] = {"prompt_tokens": 300, "completion_tokens": 20, "total_tokens": 320}
+        elif usage == "maxout":
+            n = body.get("max_tokens") or body.get("max_completion_tokens") or 1
+            msg["usage"] = {"prompt_tokens": 500, "completion_tokens": n, "total_tokens": 500 + n}
         elif usage == "huge":
             msg["usage"] = {"prompt_tokens": 10 ** 12, "completion_tokens": 10 ** 12,
                             "total_tokens": 2 * 10 ** 12}
@@ -142,6 +145,8 @@ class Proxy:
             self._ok(h, body)
         elif action == "no_usage":
             self._ok(h, body, usage=None)
+        elif action == "maxout":
+            self._ok(h, body, usage="maxout")
         elif action == "huge_usage":
             self._ok(h, body, usage="huge")
         elif action == "429":

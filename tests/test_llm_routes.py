@@ -152,8 +152,40 @@ def test_budget_exhausted_propagates(tmp_path):
 def test_llm_unavailable_is_unparsed(tmp_path):
     r = run(solve_with_program(_task(tmp_path), FakeClient([LLMUnavailable("down")])))
     assert r.status == "unparsed" and "down" in r.note
-    r = run(fix_coding(_fixture("coding_0003", tmp_path / "x"), FakeClient([LLMUnavailable("down")])))
-    assert r.status == "unparsed" and "down" in r.note
+    c = FakeClient([LLMUnavailable("down"), LLMUnavailable("down")])
+    r = run(fix_coding(_fixture("coding_0003", tmp_path / "x"), c))
+    assert r.status == "unparsed" and r.note == "llm unavailable: down" and len(c.calls) == 2
+
+
+def _broken_coding(tmp_path):
+    return _task(tmp_path, check="unittest", ttype="coding", reward=2.0, files={
+        "mylib.py": "def fact(n):\n    return n\n",
+        "test_mylib.py": ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
+                          "    def test_a(self):\n        self.assertEqual(mylib.fact(4), 24)\n\n\n"
+                          "if __name__ == '__main__':\n    unittest.main()\n")})
+
+
+FACT_PATCH = "FUNC fact\ndef fact(n):\n    return 1 if n < 2 else n * fact(n - 1)\n"
+
+
+def test_unavailable_rung_moves_to_the_next_model(tmp_path):
+    c = FakeClient([LLMUnavailable("HTTP 500"), FACT_PATCH])
+    r = run(fix_coding(_broken_coding(tmp_path), c))
+    assert r.status == "solved" and [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT]
+    assert "patched by" in r.note
+
+
+def test_unavailable_rung_is_remembered_after_a_worse_later_rung(tmp_path):
+    """A rung that could not run leaves the task open for the scheduler's retry pass."""
+    c = FakeClient([LLMUnavailable("HTTP 500"), "not a patch"])
+    r = run(fix_coding(_broken_coding(tmp_path), c))
+    assert r.status == "unparsed" and r.note.startswith("llm unavailable")
+
+
+def test_budget_exhausted_mid_ladder_still_propagates(tmp_path):
+    c = FakeClient([LLMUnavailable("HTTP 500"), BudgetExhausted("dead")])
+    with pytest.raises(BudgetExhausted):
+        run(fix_coding(_broken_coding(tmp_path), c))
 
 
 def test_blocking_work_does_not_block_event_loop(tmp_path, monkeypatch):

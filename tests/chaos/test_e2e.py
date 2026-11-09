@@ -53,7 +53,7 @@ def test_budget_exhausted_hang(tasks, tmp_path, make_proxy, baseline):
     proxy = make_proxy(exhausted_after(k, "hang"), sleep_s=20)
     run = run_harness(tasks, tmp_path / "run", proxy, {"BUDGET": 50000}, timeout=150)
     check_common(run, tasks, baseline, bound=100)
-    # 3 consecutive timeouts end the run; in-flight concurrency adds at most 3 more
+    # timeouts for HARNESS_PROXY_DEAD_S (3 s here, 2 s per timeout) end the run: two rounds of 3 calls
     assert proxy.count("hang") <= 6, proxy.actions
 
 
@@ -83,6 +83,6 @@ def test_deadline_ends_run_while_proxy_hangs(tasks, tmp_path, make_proxy, baseli
     proxy = make_proxy(lambda n, b: "hang", sleep_s=60)
     run = run_harness(tasks, tmp_path / "run", proxy,
                       {"BUDGET": 50000, "HARNESS_LLM_TIMEOUT": 30, "HARNESS_DEADLINE_S": 45,
-                       "HARNESS_STOP_NEW_BEFORE_DEADLINE_S": 10},
+                       "HARNESS_STOP_NEW_BEFORE_DEADLINE_S": 10, "HARNESS_PROXY_DEAD_S": 1000},
                       timeout=150)
     check_common(run, tasks, baseline, bound=90)

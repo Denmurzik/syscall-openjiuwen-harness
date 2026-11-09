@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 
 from harness.budget import TokenLedger
@@ -39,7 +40,8 @@ def _quiet_openjiuwen_logs() -> None:
 
 _logs_quieted = False
 
-MAX_CONSECUTIVE_FAILURES = 3
+# a request that keeps failing while others are served is about itself, not about the proxy
+MAX_TRIES_WHILE_OTHERS_SERVED = 2
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,17 @@ def _is_transport_failure(exc: BaseException) -> bool:
                for n in _names(exc))
 
 
+def _billed_tokens(u) -> tuple[int, int]:
+    """(prompt, completion) to charge. Reasoning counts on top of completion_tokens only when the proxy
+    reports it outside them: the total shows it, or it is larger than the completion_tokens it should be in."""
+    p = int(getattr(u, "input_tokens", 0) or 0)
+    c = int(getattr(u, "output_tokens", 0) or 0)
+    reasoning = int(getattr(u, "reasoning_tokens", 0) or 0)
+    if reasoning > 0 and (int(getattr(u, "total_tokens", 0) or 0) >= p + c + reasoning or reasoning > c):
+        c += reasoning
+    return p, c
+
+
 class LLMClient:
     def __init__(self, base_url: str, api_key: str, ledger: TokenLedger,
                  max_concurrency: int = LLM_CONCURRENCY, timeout: float | None = None):
@@ -124,8 +137,15 @@ class LLMClient:
         self._max_concurrency = max_concurrency
         self._sem: asyncio.Semaphore | None = None
         self._models: dict = {}
-        self._failures = 0
         self.structured_ok = True
+        self._now = time.monotonic
+        # proxy outage, shared by all calls
+        self._last_ok = float("-inf")
+        self._served = 0  # successful replies so far
+        self._down_since: float | None = None
+        self._pause_until = float("-inf")
+        self._pause_set_at = float("-inf")
+        self._pause_step = 0
 
     def _model(self, name: str):
         m = self._models.get(name)
@@ -141,12 +161,55 @@ class LLMClient:
             m = self._models[name] = Model(cc, mc)
         return m
 
-    def _count_failure(self) -> None:
-        """Count a failure that suggests the proxy is gone; 3 in a row exhaust the run."""
-        self._failures += 1
-        if self._failures >= MAX_CONSECUTIVE_FAILURES:
+    def _proxy_ok(self) -> None:
+        self._last_ok = self._now()
+        self._served += 1
+        self._down_since = None
+        self._pause_until = self._pause_set_at = float("-inf")
+        self._pause_step = 0
+
+    def _proxy_failed(self, sent: float) -> None:
+        """One failure that suggests a proxy outage. The proxy is declared dead only after
+        HARNESS_PROXY_DEAD_S without a success; until then the shared pause grows, once per drop:
+        calls already in flight when it was set fail for the same reason and do not count."""
+        now = self._now()
+        if self._down_since is None:
+            self._down_since = max(sent, self._last_ok)
+        down = now - self._down_since
+        if down >= config.proxy_dead_s():
             self.ledger.mark_exhausted()
-            raise BudgetExhausted(f"{self._failures} consecutive failed LLM calls")
+            raise BudgetExhausted(f"no successful LLM response for {down:.0f} s")
+        if sent > self._pause_set_at:
+            pause = config.proxy_pause(self._pause_step)
+            self._pause_step += 1
+            self._pause_set_at, self._pause_until = now, now + pause
+            logger.warning("LLM proxy failing for %.0f s, pausing all calls for %s s", down, pause)
+
+    async def _wait_pause(self) -> None:
+        """Out the pause as it stands now: one renewed meanwhile by a failing call must not starve this one,
+        or a single bad request would keep the others from proving the proxy alive. In short slices, so a
+        success elsewhere or the end of the run is noticed at once; the unit's deadline cancels it like any wait."""
+        until = self._pause_until
+        while True:
+            if self.ledger.exhausted:
+                raise BudgetExhausted("ledger exhausted")
+            left = min(until, self._pause_until) - self._now()
+            if left <= 0:
+                return
+            await asyncio.sleep(min(left, 1.0))
+
+    async def _hold(self, prompt_cost: float, max_tokens: int) -> int:
+        """The output limit this call may use, with its cost set aside in the ledger."""
+        while True:
+            if self.ledger.exhausted:
+                raise BudgetExhausted("ledger exhausted")
+            limit = self.ledger.hold(prompt_cost, max_tokens, config.MIN_CALL_TOKENS)
+            if limit is None:
+                await asyncio.sleep(0.05)
+            elif limit > 0:
+                return limit
+            else:
+                raise LLMUnavailable("call does not fit the remaining budget")
 
     async def chat(self, model: str, messages: list[dict], max_tokens: int, **extra) -> ChatResult:
         if self.ledger.exhausted:
@@ -160,17 +223,20 @@ class LLMClient:
     async def _chat(self, model, messages, max_tokens, extra) -> ChatResult:
         m = self._model(model)
         attempt = 0
+        tries = 0  # failed tries of this call that a pause and a retry can help
+        served_before = self._served
         extra = dict(extra)
         stripped = False  # structured params dropped for this call as a trial
+        prompt_cost = self.ledger.cost(len(str(messages)) // 4, 0)
         while True:
             if not self.structured_ok or stripped:
                 extra.pop("response_format", None)
                 extra.pop("extra_body", None)
-            if self.ledger.exhausted:
-                raise BudgetExhausted("ledger exhausted")
+            await self._wait_pause()
+            limit = await self._hold(prompt_cost, max_tokens)
+            sent, wait = self._now(), 0.0
             try:
-                r = await asyncio.wait_for(
-                    m.invoke(messages, max_tokens=max_tokens, **extra), self.timeout)
+                r = await asyncio.wait_for(m.invoke(messages, max_tokens=limit, **extra), self.timeout)
             except Exception as exc:
                 status = _status_of(exc)
                 if status in (402, 403):
@@ -183,33 +249,46 @@ class LLMClient:
                     logger.warning("HTTP 400 with structured output; retrying without it")
                     stripped = True
                     continue
-                connect = status is None and _is_connect_error(exc)
-                delays = config.retry_delays()
-                if (status == 429 or connect) and attempt < len(delays):
-                    await asyncio.sleep(delays[attempt])
-                    attempt += 1
-                    continue
                 msg = f"{type(exc).__name__}: {exc}"[:300]
-                if connect:
-                    self._count_failure()
-                elif status is not None and status >= 500 or (status is None and _is_transport_failure(exc)):
-                    # may have been served and billed: charge a flat amount, never retry
+                delays = config.retry_delays()
+                connect = status is None and _is_connect_error(exc)
+                if status == 429 and attempt < len(delays):
+                    wait = delays[attempt]
+                    attempt += 1
+                elif connect or (status is not None and status >= 500):
+                    # no generation behind it: not charged, safe to repeat after the shared pause
+                    record_call(model, 0, 0, 0.0, error=msg[:100])
+                    self._proxy_failed(sent)
+                    tries += 1
+                    if tries >= MAX_TRIES_WHILE_OTHERS_SERVED and self._served > served_before:
+                        raise LLMUnavailable(msg) from exc
+                elif status is None and _is_transport_failure(exc):
+                    # may have been served and billed: charge a flat amount, never repeat in place
                     record_call(model, 0, TIMEOUT_CHARGE, self.ledger.charge(0, TIMEOUT_CHARGE),
                                 error=msg[:100])
-                    self._count_failure()
-                # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
-                raise LLMUnavailable(msg) from exc
-            self._failures = 0
-            if stripped:
-                self.structured_ok = False
-            u = getattr(r, "usage_metadata", None)
-            if u is None:
-                p = len(str(messages)) // 4
-                c = max_tokens
-                logger.warning("no usage_metadata from %s; charging estimate %s/%s", model, p, c)
+                    self._proxy_failed(sent)
+                    raise LLMUnavailable(msg) from exc
+                else:
+                    # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
+                    raise LLMUnavailable(msg) from exc
             else:
-                p = int(getattr(u, "input_tokens", 0) or 0)
-                c = int(getattr(u, "output_tokens", 0) or 0)
-            cost = self.ledger.charge(p, c)
-            record_call(model, p, c, cost)
-            return ChatResult(text=r.content or "", prompt_tokens=p, completion_tokens=c, cost=cost)
+                self._proxy_ok()
+                if stripped:
+                    self.structured_ok = False
+                return self._account(model, messages, limit, r)
+            finally:
+                self.ledger.release(prompt_cost + limit)
+            if wait:
+                await asyncio.sleep(wait)
+
+    def _account(self, model, messages, limit, r) -> ChatResult:
+        u = getattr(r, "usage_metadata", None)
+        if u is None:
+            p = len(str(messages)) // 4
+            c = limit
+            logger.warning("no usage_metadata from %s; charging estimate %s/%s", model, p, c)
+        else:
+            p, c = _billed_tokens(u)
+        cost = self.ledger.charge(p, c)
+        record_call(model, p, c, cost)
+        return ChatResult(text=r.content or "", prompt_tokens=p, completion_tokens=c, cost=cost)

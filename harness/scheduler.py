@@ -34,6 +34,7 @@ BudgetExhausted = None
 
 # infeasible notes that do not depend on the model's reading of the question
 _MODEL_INDEPENDENT = ("division by zero", "start entity not found")
+_LLM_UNAVAILABLE = "llm unavailable"  # note of a result whose model call never got an answer
 
 
 # name and model calls of the phase-2 unit running in this context (None outside phase 2)
@@ -408,42 +409,53 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     units.sort(key=lambda u: -u["prio"])
     await _drive(units, t0, deadline_s, ledger, state)
 
+    unavailable: list = []  # factories of the 2c/2b units whose model call got no answer
+
     # 2c: model arbitration among behaviourally different green fixes (cheap: before 2b)
-    units = []
-    for task in [t for t in left if (tentative.get(t.task_id) is not None
-                                     and (tentative[t.task_id].extra or {}).get("ambiguous"))]:
+    def unit_2c(task):
         extra = tentative[task.task_id].extra
         # expected cost: one call per arbitration model. The rare retry without the regex (a second call per
         # model, only when a reply cannot be read) is not counted; the ledger reserve covers it
         est = (len(str(extra.get("ambiguous"))) // 30 + 10) * len(config.ARBITRATE_MODELS)
 
-        def make(task=task, extra=extra):
-            async def go():
-                start = time.monotonic()
-                res = await arbitrate(task, extra, client)
-                if res.status == "solved":
-                    res = SolveResult("solved", res.answer, res.note)  # final: no longer tentative
-                settle(2, task, res, time.monotonic() - start)
-            return go
-        units.append({"prio": 1e9, "estimate": est, "run": make(), "name": f"arbitrate:{task.task_id}"})
+        async def go():
+            start = time.monotonic()
+            res = await arbitrate(task, extra, client)
+            if res.status == "solved":
+                res = SolveResult("solved", res.answer, res.note)  # final: no longer tentative
+            settle(2, task, res, time.monotonic() - start)
+            if (res.note or "").startswith(_LLM_UNAVAILABLE):
+                unavailable.append(lambda: unit_2c(task))
+        return {"prio": 1e9, "estimate": est, "run": go, "name": f"arbitrate:{task.task_id}"}
+
+    units = [unit_2c(t) for t in left if (tentative.get(t.task_id) is not None
+                                          and (tentative[t.task_id].extra or {}).get("ambiguous"))]
     await _drive(units, t0, deadline_s, ledger, state)
 
     # 2b: per-task routes for whatever is still unparsed or only tentatively answered
     # (arbitrated tasks are final; tentative ones with candidates wait for 2c above)
-    units = []
-    for task in [t for t in left if status.get(t.task_id) == "unparsed"
-                 or (t.task_id in tentative and not (tentative[t.task_id].extra or {}).get("ambiguous"))]:
+    def unit_2b(task):
         est = estimate_tokens(task)
 
-        def make(task=task):
-            async def go():
-                start = time.monotonic()
-                if task.task_type == "coding":
-                    res = await fix_coding(task, client)
-                else:
-                    res = await solve_with_program(task, client)
-                settle(2, task, res, time.monotonic() - start)
-            return go
-        units.append({"prio": task.reward / est, "estimate": est, "run": make(), "name": task.task_id})
+        async def go():
+            start = time.monotonic()
+            if task.task_type == "coding":
+                res = await fix_coding(task, client)
+            else:
+                res = await solve_with_program(task, client)
+            settle(2, task, res, time.monotonic() - start)
+            if (res.note or "").startswith(_LLM_UNAVAILABLE):
+                unavailable.append(lambda: unit_2b(task))
+        return {"prio": task.reward / est, "estimate": est, "run": go, "name": task.task_id}
+
+    units = [unit_2b(t) for t in left if status.get(t.task_id) == "unparsed"
+             or (t.task_id in tentative and not (tentative[t.task_id].extra or {}).get("ambiguous"))]
     units.sort(key=lambda u: -u["prio"])
     await _drive(units, t0, deadline_s, ledger, state)
+
+    # one more pass over what found the model unavailable, unless the run is over (dead proxy, spent budget,
+    # deadline). A proxy that is still failing here holds these calls until it recovers or is declared dead
+    if unavailable and not state["stop"] and not ledger.exhausted:
+        units = [make() for make in unavailable]
+        units.sort(key=lambda u: -u["prio"])
+        await _drive(units, t0, deadline_s, ledger, state)

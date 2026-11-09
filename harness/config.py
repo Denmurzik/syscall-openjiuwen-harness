@@ -30,6 +30,9 @@ DEADLINE_S = 3300
 STOP_NEW_BEFORE_DEADLINE_S = 150
 RESERVE_FRACTION = 0.01
 TIMEOUT_CHARGE = 1500  # charged for an LLM call that ended by timeout
+MIN_CALL_TOKENS = 100  # a call cut to fit the budget is not made with a smaller output limit
+PROXY_DEAD_S = 300  # no successful reply for this long, with failures all along: the proxy is gone
+PROXY_PAUSE_MAX_S = 60
 
 RETRY_DELAYS = (2, 4, 8, 16, 30)  # the shared account ceiling resets within ~40 s
 
@@ -80,6 +83,10 @@ def deadline_s() -> float:
     return _env_float("HARNESS_DEADLINE_S", DEADLINE_S, 0.0)
 
 
+def proxy_dead_s() -> float:
+    return _env_float("HARNESS_PROXY_DEAD_S", PROXY_DEAD_S, 0.0)
+
+
 def stop_new_before_deadline_s() -> float:
     return _env_float("HARNESS_STOP_NEW_BEFORE_DEADLINE_S", STOP_NEW_BEFORE_DEADLINE_S, 0.0)
 
@@ -112,3 +119,11 @@ def retry_delays() -> tuple:
             _warned.add("HARNESS_RETRY_DELAYS")
             _log.warning("invalid HARNESS_RETRY_DELAYS=%r, using default %r", raw, RETRY_DELAYS)
         return RETRY_DELAYS
+
+
+def proxy_pause(step: int) -> float:
+    """Length of the shared pause after `step` earlier ones of an outage: the retry delays, then doubling."""
+    delays = retry_delays()
+    if step < len(delays):
+        return min(delays[step], PROXY_PAUSE_MAX_S)
+    return min(delays[-1] * 2 ** min(step - len(delays) + 1, 20), PROXY_PAUSE_MAX_S)

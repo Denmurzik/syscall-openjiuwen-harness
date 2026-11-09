@@ -53,7 +53,8 @@ def harness_env(tmp: Path, proxy: Proxy | None, env_extra: dict | None) -> dict:
         env.pop(k, None)
     env.update({"CHAOS_ROOT": str(ROOT), "HARNESS_LOG_DIR": str(tmp / "hlogs"),
                 "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
-                "HARNESS_LLM_TIMEOUT": "2", "HARNESS_RETRY_DELAYS": "0.05,0.05,0.05,0.05,0.05"})
+                "HARNESS_LLM_TIMEOUT": "2", "HARNESS_RETRY_DELAYS": "0.05,0.05,0.05,0.05,0.05",
+                "HARNESS_PROXY_DEAD_S": "3"})
     if proxy is not None:
         env["LLM_BASE_URL"] = proxy.base_url
         env["LLM_API_KEY"] = "test-key"

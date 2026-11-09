@@ -345,11 +345,13 @@ async def fix_coding(task: Task, client) -> SolveResult:
     if task.reward >= 3 or _budget_is_free(client):
         attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))
     note = "no attempt made"
+    unavailable = None  # a rung that could not run: the task stays open for the scheduler's retry pass
     for model, max_tokens, extra in attempts:
         try:
             r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
         except LLMUnavailable as e:
-            return SolveResult("unparsed", note=f"llm unavailable: {e}")
+            unavailable = e
+            continue
         fixed = apply_patch(base, r.text)
         if fixed is None:
             note = f"{model}: patch did not apply"
@@ -363,4 +365,4 @@ async def fix_coding(task: Task, client) -> SolveResult:
         output = report.output
         if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
             base, base_report = fixed, report  # keep partial progress for the next attempt
-    return SolveResult("unparsed", note=note)
+    return SolveResult("unparsed", note=note if unavailable is None else f"llm unavailable: {unavailable}")

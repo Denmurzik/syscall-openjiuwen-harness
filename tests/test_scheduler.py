@@ -573,3 +573,93 @@ def test_coding_child_time_limit_follows_phase1_timeout(monkeypatch, env, limit)
     assert out.get_nowait()[0] == "c"
     assert seen["limit"] == pytest.approx(limit)
     assert config.coding_time_limit() == pytest.approx(limit)
+
+
+# ---------------------------------------------------------------- retry pass for llm-unavailable tasks (I1)
+
+def _open_tasks(tmp_path, monkeypatch, n=3):
+    """Tasks only the model can answer; 2a settles nothing."""
+    tasks = tmp_path / "tasks"
+    for i in range(n):
+        _make(tasks, f"math_{i:04d}", "math", f"Riddle number {i} with no parseable numbers")
+
+    async def no_spec(ttype, template, members, client):
+        return {}
+
+    async def no_batch(ttype, chunk, client, on_group=None):
+        return {}
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_group", no_spec)
+    monkeypatch.setattr(scheduler, "solve_batch", no_batch)
+    return tasks
+
+
+def test_retry_pass_reruns_tasks_that_found_the_llm_unavailable(tmp_path, monkeypatch):
+    tasks = _open_tasks(tmp_path, monkeypatch)
+    runs = {}
+
+    async def prog(task, client):
+        runs[task.task_id] = runs.get(task.task_id, 0) + 1
+        if runs[task.task_id] == 1:
+            return SolveResult("unparsed", note="llm unavailable: HTTP 500")
+        return SolveResult("solved", answer="7")
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["solved"] == 3 and runs == {f"math_{i:04d}": 2 for i in range(3)}
+    assert (tasks / "math_0000" / "answer.txt").read_text(encoding="utf-8").strip() == "7"
+
+
+def test_retry_pass_runs_only_once(tmp_path, monkeypatch):
+    tasks = _open_tasks(tmp_path, monkeypatch, n=2)
+    runs = {}
+
+    async def prog(task, client):
+        runs[task.task_id] = runs.get(task.task_id, 0) + 1
+        return SolveResult("unparsed", note="llm unavailable: HTTP 500")
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["unparsed"] == 2 and set(runs.values()) == {2}
+
+
+def test_no_retry_pass_for_other_failures(tmp_path, monkeypatch):
+    tasks = _open_tasks(tmp_path, monkeypatch, n=2)
+    runs = {}
+
+    async def prog(task, client):
+        runs[task.task_id] = runs.get(task.task_id, 0) + 1
+        return SolveResult("unparsed", note="program exit code 1")
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    scheduler.run(tasks, 100000, object())
+    assert set(runs.values()) == {1}
+
+
+def test_no_retry_pass_once_the_proxy_is_dead(tmp_path, monkeypatch):
+    tasks = _open_tasks(tmp_path, monkeypatch, n=4)
+    runs = []
+
+    async def prog(task, client):
+        runs.append(task.task_id)
+        if len(runs) == 1:
+            return SolveResult("unparsed", note="llm unavailable: HTTP 500")
+        raise BudgetExhausted("no successful LLM response")
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    scheduler.run(tasks, 100000, object())
+    assert len(set(runs)) == len(runs)
+
+
+def test_retry_pass_covers_arbitration(tmp_path, monkeypatch):
+    """2c that found the LLM unavailable is asked again; the written tentative answer stays meanwhile."""
+    tasks = tmp_path / "tasks"
+    d = _coding(tasks)
+    runs = []
+
+    async def fake_arb(task, extra, client):
+        runs.append(task.task_id)
+        assert (d / "answer.txt").is_file()
+        if len(runs) == 1:
+            return SolveResult("unparsed", note="llm unavailable: HTTP 500")
+        return SolveResult("solved", "DONE", "kept")
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_amb_target)
+    monkeypatch.setattr(scheduler, "arbitrate", fake_arb)
+    counts = scheduler.run(tasks, 100000, object())
+    assert len(runs) == 2 and counts["solved"] == 1
