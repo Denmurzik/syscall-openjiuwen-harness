@@ -189,7 +189,8 @@ def test_4xx_never_exhausts(status):
     for _ in range(5):
         with pytest.raises(LLMUnavailable):
             run(c)
-    assert not ledger.exhausted and ledger.spent == 0 and fake.calls == 5
+    # a 404 is tried once more on the other spelling of the base URL (once per run)
+    assert not ledger.exhausted and ledger.spent == 0 and fake.calls == (6 if status == 404 else 5)
 
 
 def _req():
@@ -1088,7 +1089,7 @@ def test_chat_or_alt_gives_up_on_what_waiting_cannot_change(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _raiser(lambda: HTTPErr(404))})
     with pytest.raises(LLMUnavailable):
         asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
-    assert fakes[config.MODEL_FAST].calls == 1
+    assert fakes[config.MODEL_FAST].calls == 2  # the second one is the other spelling of the base URL
 
 
 def test_ping_leaves_the_health_of_the_pinged_model_and_the_dead_clock_alone(monkeypatch):
@@ -1221,3 +1222,28 @@ def test_other_models_keep_the_asked_limit_and_no_effort(monkeypatch):
     fakes[config.MODEL_ALT].invoke = invoke
     asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 400))
     assert seen.get("max_tokens") == 400 and "reasoning_effort" not in seen
+
+
+def test_noreason_without_usage_is_charged_by_reply_length():
+    """Expert 2.5: len(reply)/3 with a margin of 1.5, not the whole limit; the key text is not needed for it."""
+    async def ok():
+        return SimpleNamespace(content="a" * 300, usage_metadata=None)
+    c, fake, ledger = make(ok)
+    r = asyncio.run(c.chat("m-noreason", [{"role": "user", "content": "hi"}], 400))
+    assert r.completion_tokens == 150
+
+
+def test_noreason_estimate_never_exceeds_the_limit():
+    async def ok():
+        return SimpleNamespace(content="a" * 3000, usage_metadata=None)
+    c, fake, ledger = make(ok)
+    r = asyncio.run(c.chat("m-noreason", [{"role": "user", "content": "hi"}], 100))
+    assert r.completion_tokens == 100
+
+
+def test_reasoning_model_without_usage_still_charged_the_limit():
+    async def ok():
+        return SimpleNamespace(content="a" * 30, usage_metadata=None)
+    c, fake, ledger = make(ok)
+    r = asyncio.run(c.chat("m", [{"role": "user", "content": "hi"}], 400))
+    assert r.completion_tokens == 400

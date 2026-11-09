@@ -45,6 +45,10 @@ _logs_quieted = False
 # a request or a model that fails this often while something else answers is about itself, not about the proxy
 MODEL_FAILING_AFTER = 2
 _PING = [{"role": "user", "content": "ping"}]
+_MODEL_MISSING_RE = re.compile(
+    r"model.{0,80}(not found|not exist|does not exist|unknown|not available|unsupported|invalid)"
+    r"|(no such|unknown|invalid) model|not found.{0,40}model", re.I | re.S)
+USAGE_GUESS_MARGIN = 1.5  # length-based estimate of a reply with no usage: len / 3 chars per token, times this
 _MODELS = (config.MODEL_FAST, config.MODEL_ALT, config.MODEL_REASON)
 
 
@@ -175,6 +179,10 @@ class LLMClient:
         self._max_concurrency = max_concurrency
         self._sem: asyncio.Semaphore | None = None
         self._models: dict = {}
+        self._model_ids: dict[str, str] = {}  # our model name -> the id this proxy knows it by
+        self._base_tried = False  # the other spelling of the base URL has been tried (once per run)
+        self._listing_read = False  # GET {base}/models has been tried (once per run)
+        self._fix_lock: asyncio.Lock | None = None
         self.structured_ok = True
         self._now = time.monotonic
         # the proxy as a whole: dead only when no model answers
@@ -193,9 +201,55 @@ class LLMClient:
             from openjiuwen.core.foundation.llm import Model, ModelClientConfig, ModelRequestConfig
             cc = ModelClientConfig(client_provider="OpenAI", api_key=self.api_key,
                                    api_base=self.base_url, verify_ssl=True)
-            mc = ModelRequestConfig(model=name, temperature=0.0)
+            mc = ModelRequestConfig(model=self._model_ids.get(name, name), temperature=0.0)
             m = self._models[name] = Model(cc, mc)
         return m
+
+    async def _fix_endpoint(self, model: str, status: int, msg: str, used_base: str) -> bool:
+        """A 404 on the address, or a model id the proxy does not know: the jury's proxy may spell either differently
+        from ours. True when something changed and the call is worth repeating. Each fix is tried once per run."""
+        if self._fix_lock is None:
+            self._fix_lock = asyncio.Lock()
+        async with self._fix_lock:
+            if used_base != self.base_url:  # another call fixed it while this one was failing
+                return True
+            if _MODEL_MISSING_RE.search(msg):
+                return await self._map_model_ids(model)
+            if status == 404 and not self._base_tried:
+                self._base_tried = True
+                base = self.base_url.rstrip("/")
+                self.base_url = base[:-3] if base.endswith("/v1") else base + "/v1"
+                self._models.clear()
+                logger.warning("HTTP 404 on the base URL; trying the other spelling of it")
+                return True
+        return False
+
+    async def _map_model_ids(self, model: str) -> bool:
+        """GET {base}/models costs no tokens: ids that end with our names take their place. Once per run."""
+        if self._listing_read:
+            return False
+        self._listing_read = True
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=min(self.timeout, 30.0)) as http:
+                resp = await http.get(self.base_url.rstrip("/") + "/models",
+                                      headers={"Authorization": f"Bearer {self.api_key}"})
+            ids = [str(d.get("id")) for d in resp.json().get("data", []) if isinstance(d, dict) and d.get("id")]
+        except Exception as exc:
+            logger.warning("could not read the model listing: %s", type(exc).__name__)
+            return False
+        changed = False
+        for name in _MODELS:
+            if name in ids:
+                continue
+            found = sorted((i for i in ids if i.endswith("/" + name) or i.endswith(":" + name)), key=len)
+            if found:
+                self._model_ids[name] = found[0]
+                changed = True
+        if changed:
+            self._models.clear()
+            logger.warning("model ids taken from the proxy's listing: %s", self._model_ids)
+        return changed
 
     def _proxy_ok(self, model: str) -> None:
         """A real answer. A ping never gets here: passing one says nothing of real work."""
@@ -308,6 +362,8 @@ class LLMClient:
         alive = False  # the proxy answers something, so one more failure of this model is about the model
         extra = dict(extra)
         stripped = False  # structured params dropped for this call as a trial
+        recovered = 0  # times the base URL or the model id was changed for this call
+        base = self.base_url
         prompt_cost = self.ledger.cost(len(str(messages)) // 4, 0)
         min_tokens = config.MIN_REASONING_CALL_TOKENS if "reasoning_effort" in extra else config.MIN_CALL_TOKENS
         while True:
@@ -364,6 +420,11 @@ class LLMClient:
                 else:
                     # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
                     record_call(model, 0, 0, 0.0, error=msg[:100])
+                    if status in (400, 404) and recovered < 2 and await self._fix_endpoint(model, status, msg, base):
+                        recovered += 1
+                        m = self._model(model)
+                        base = self.base_url
+                        continue
                     raise LLMUnavailable(msg) from exc
             else:
                 self._proxy_ok(model)
@@ -380,6 +441,8 @@ class LLMClient:
         p, c = (0, 0) if u is None else _billed_tokens(u)
         if u is None or not (p or c or not r.content):  # a reply was generated: it cost something
             p, c = len(str(messages)) // 4, limit
+            if model.endswith("-noreason"):  # no hidden reasoning: the reply is all it cost
+                c = min(limit, max(1, math.ceil(len(r.content or "") / 3 * USAGE_GUESS_MARGIN)))
             logger.warning("no usage from %s; charging estimate %s/%s", model, p, c)
         cost = self.ledger.charge(p, c)
         record_call(model, p, c, cost)

@@ -33,7 +33,14 @@ class Proxy:
     malformed, no_usage, huge_usage, maxout (completion_tokens equal to the request's max_tokens).
     """
 
-    def __init__(self, behavior=None, sleep_s: float = 30.0):
+    def __init__(self, behavior=None, sleep_s: float = 30.0, mount: str = "/v1", model_ids=None):
+        """mount: the path prefix the API lives under (anything else is a 404 "page not found").
+        model_ids: when given, only these ids are served; other models get 404 "model not found",
+        and GET {mount}/models lists them."""
+        self.mount = mount
+        self.model_ids = list(model_ids) if model_ids is not None else None
+        self.misses: list = []  # paths of requests that did not reach the API
+        self.listings = 0  # GET {mount}/models requests
         self.behavior = behavior or (lambda n, body: NORMAL)
         self.sleep_s = sleep_s
         self.requests = 0
@@ -57,6 +64,16 @@ class Proxy:
                         body = json.loads(raw or b"{}")
                     except ValueError:
                         body = {}
+                    if self.path != proxy.mount + "/chat/completions":
+                        with proxy._lock:
+                            proxy.misses.append(self.path)
+                        return proxy._send(self, 404, b"404 page not found", ctype="text/plain")
+                    if proxy.model_ids is not None and body.get("model") not in proxy.model_ids:
+                        with proxy._lock:
+                            proxy.misses.append(self.path)
+                        return proxy._send(self, 404, json.dumps({"error": {
+                            "message": f"The model `{body.get('model')}` does not exist", "type": "x",
+                            "code": "model_not_found"}}).encode())
                     with proxy._lock:
                         proxy.requests += 1
                         idx = proxy.requests
@@ -72,6 +89,11 @@ class Proxy:
                     pass
 
             def do_GET(self):
+                if proxy.model_ids is not None and self.path == proxy.mount + "/models":
+                    with proxy._lock:
+                        proxy.listings += 1
+                    data = {"object": "list", "data": [{"id": i, "object": "model"} for i in proxy.model_ids]}
+                    return proxy._send(self, 200, json.dumps(data).encode())
                 self.send_response(404)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -88,7 +110,11 @@ class Proxy:
 
     @property
     def base_url(self) -> str:
-        return f"http://127.0.0.1:{self.port}/v1"
+        return f"http://127.0.0.1:{self.port}{self.mount}"
+
+    @property
+    def root_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
 
     def start(self):
         self.thread.start()
