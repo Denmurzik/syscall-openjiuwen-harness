@@ -430,15 +430,18 @@ def test_2d_runs_after_the_stage_and_its_estimate_is_held_back(tmp_path, monkeyp
     assert reserves == [pytest.approx(len(str({"verify": [{"func": "f"}]})) // 30 + config.VERIFY_MAX_TOKENS)]
 
 
-def test_search_answers_are_not_confirmed(tmp_path, monkeypatch):
-    """Live: a search vote costs ~1240 a task against ~150 for math and data, and changed nothing on either set."""
-    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42", "search_b": "Bob"})
+def test_search_answers_are_confirmed(tmp_path, monkeypatch):
+    """Lead's ruling: search stays in (a search task phase 1 could not parse is where 2a errs most)."""
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42", "search_b": "Bob Ray"})
     tj = tasks / "search_b" / "task.json"
-    tj.write_text(tj.read_text(encoding="utf-8").replace('"math"', '"search"'), encoding="utf-8")
+    tj.write_text(tj.read_text(encoding="utf-8").replace('"math"', '"search"').replace('"exact_int"', '"exact_str"'),
+                  encoding="utf-8")
     seen = []
-    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
+    votes = lambda t, m: "Ann Lee" if t.task_id == "search_b" else "42"   # noqa: E731
+    monkeypatch.setattr(scheduler, "confirm_program", _program(votes, seen))
     scheduler.run(tasks, 100000, client)
-    assert {tid for tid, _, _ in seen} == {"math_a"} and config.CONFIRM_TYPES == ("math", "data_analysis")
+    assert {tid for tid, _, _ in seen} == {"math_a", "search_b"} and "search" in config.CONFIRM_TYPES
+    assert _answers(tasks) == {"math_a": "42", "search_b": "Ann Lee"}
 
 
 def test_no_vote_once_half_the_budget_is_spent(tmp_path, monkeypatch):
