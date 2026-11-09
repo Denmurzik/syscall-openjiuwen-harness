@@ -830,7 +830,7 @@ def test_final_reason_pass_skipped_when_half_the_budget_is_spent(tmp_path, monke
     assert asked == []
 
 
-def test_final_reason_pass_leaves_infeasible_alone(tmp_path, monkeypatch):
+def test_final_reason_pass_retries_a_model_impossible(tmp_path, monkeypatch):
     tasks, dirs, asked, client = _reason_setup(tmp_path, monkeypatch, [1, 1, 5])
 
     async def prog(task, client):
@@ -838,4 +838,4 @@ def test_final_reason_pass_leaves_infeasible_alone(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     scheduler.run(tasks, 100000, client)
-    assert asked == []
+    assert sorted(asked) == ["s00", "s01", "s02"]

@@ -313,3 +313,34 @@ def test_raw_spec_is_logged(caplog):
         asyncio.run(solve_batch("math", items, client))
     msgs = [r.getMessage() for r in caplog.records if "2a spec" in r.getMessage()]
     assert len(msgs) == 2 and "a" in msgs[0] and "N1" in msgs[0]
+
+
+def test_deadline_cancel_during_reask_keeps_the_settled_members(monkeypatch):
+    import harness.json_route as jr
+    orig = jr._execute_all
+
+    def mixed(members, spec):
+        out = orig(members, spec)
+        if len(members) == 2:
+            out[members[1][0].task_id] = SolveResult("unparsed", note="json route failed: X")
+        return out
+    monkeypatch.setattr(jr, "_execute_all", mixed)
+    ta, sa = _item("a", 100, 7, "flood")
+    tb, sb = _item("b", 100, 7, "flood")
+    items = [(ta, sa + sb), _item("c", 50, 5, "fire")]
+
+    class Slow(FakeClient):
+        async def chat(self, *a, **k):
+            if len(self.calls) >= 1:
+                self.calls.append(1)
+                await asyncio.sleep(5)
+            return await super().chat(*a, **k)
+    got = {}
+
+    async def run():
+        c = Slow(batch_reply(SPEC, SPEC))
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(solve_batch("math", items, c, on_group=lambda m, r: got.update(r)), 0.5)
+    asyncio.run(run())
+    assert got["a"].status == "solved" and got["c"].status == "solved"
+

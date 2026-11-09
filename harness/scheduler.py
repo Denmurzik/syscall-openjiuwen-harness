@@ -271,6 +271,7 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
         by_id = {t.task_id: t for t in tasks}
         tentative: dict[str, SolveResult] = {}   # written but not final: phase 2 may improve it
         guesses: dict[str, SolveResult] = {}     # unanswered tasks with a stored best guess
+        soft_infeasible: set[str] = set()        # a model IMPOSSIBLE: not proven, the final REASON pass may still try
         written: set[str] = set()                # tasks whose answer.txt holds a guess of ours, not a final answer
 
         def put_guess(task: Task, res: SolveResult) -> None:
@@ -306,6 +307,7 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
             elif prior_tentative and phase >= 2:
                 st = "solved"   # a failed later attempt never takes back a written answer
             elif res.status == "infeasible" and phase >= 2 and not any(m in (res.note or "") for m in _MODEL_INDEPENDENT):
+                soft_infeasible.add(task.task_id)
                 pass   # the model's IMPOSSIBLE is often wrong and a wrong answer costs nothing: the guess stays
             elif res.status == "infeasible" and phase >= 2:
                 guesses.pop(task.task_id, None)   # a model-independent verdict withdraws the stored guess
@@ -330,7 +332,7 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
         left = [by_id[i] for i, s in status.items() if s == "unparsed" or i in tentative]
         if client is not None and left:
             _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative,
-                    [t.reward for t in tasks])
+                    [t.reward for t in tasks], soft_infeasible=soft_infeasible)
         _write_guesses(by_id, guesses, tentative, status, written)
     except Exception:
         log.exception("scheduler failed")
@@ -367,16 +369,16 @@ def _write_guesses(by_id: dict, guesses: dict, tentative: dict, status: dict, wr
             log.exception("cannot write best guess for %s", tid)
 
 
-def _phase2(*args) -> None:
+def _phase2(*args, **kw) -> None:
     # one event loop for the whole phase: openjiuwen caches an HTTP pool bound to the first loop
     try:
-        asyncio.run(_phase2_async(*args))
+        asyncio.run(_phase2_async(*args, **kw))
     except Exception:
         log.exception("phase 2 failed")
 
 
 async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, traj,
-                        tentative=None, rewards=None) -> None:
+                        tentative=None, rewards=None, soft_infeasible=()) -> None:
     tentative = tentative if tentative is not None else {}
     try:
         os.chdir(_log_dir())  # openjiuwen writes ./logs relative to cwd
@@ -503,7 +505,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     if not state["stop"] and not ledger.exhausted and ledger.spent < REASON_PASS_SPEND_LIMIT * ledger.budget:
         rewards = rewards if rewards is not None else [t.reward for t in left]
         median = statistics.median(rewards) if rewards else 0
-        cands = [t for t in left if status.get(t.task_id) == "unparsed" and t.task_type in JSON_TYPES
+        cands = [t for t in left if (status.get(t.task_id) == "unparsed" or t.task_id in soft_infeasible) and t.task_type in JSON_TYPES
                  and t.task_id not in tentative and t.reward >= median]
         cands.sort(key=lambda t: -t.reward)
 

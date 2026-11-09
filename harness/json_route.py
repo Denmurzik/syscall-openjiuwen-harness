@@ -541,22 +541,32 @@ async def solve_batch(task_type: str, items: list[tuple[str, list[tuple[Task, di
     specs = specs or [None] * len(items)
     exhausted: list[BudgetExhausted] = []
 
+    def publish(part, res):
+        out.update(res)
+        if on_group is not None:
+            on_group(part, res)
+
     async def one(template, members, spec):
         try:
             res = await solve_group(task_type, template, members, client, spec=spec)
-            again = [(t, s) for t, s in members if spec is not None and t.task_id in res and _worth_reask(res[t.task_id])]
-            if again:  # the batched spec was wrong in a way the checks cannot call broken: its own call, once
-                try:
-                    res = {**res, **await solve_group(task_type, template, again, client)}
-                except BudgetExhausted as e:
-                    res = {**res, **(getattr(e, "results", None) or {})}
-                    exhausted.append(e)
         except BudgetExhausted as e:  # keep what this group's retry produced; the others finish first
-            res = getattr(e, "results", None) or {}
+            publish(members, getattr(e, "results", None) or {})
             exhausted.append(e)
-        out.update(res)
-        if on_group is not None:
-            on_group(members, res)
+            return
+        again = [(t, s) for t, s in members if spec is not None and t.task_id in res and _worth_reask(res[t.task_id])]
+        if not again:
+            publish(members, res)
+            return
+        ids = {t.task_id for t, _ in again}
+        # what the re-ask will not change is handed over first: a deadline cancel during it loses nothing
+        publish([m for m in members if m[0].task_id not in ids], {k: v for k, v in res.items() if k not in ids})
+        # the batched spec was wrong in a way the checks cannot call broken: its own call, once
+        try:
+            res2 = await solve_group(task_type, template, again, client)
+        except BudgetExhausted as e:
+            res2 = {**{k: v for k, v in res.items() if k in ids}, **(getattr(e, "results", None) or {})}
+            exhausted.append(e)
+        publish(again, res2)
 
     outcomes = await asyncio.gather(*(one(t, m, s) for (t, m), s in zip(items, specs)),
                                     return_exceptions=True)
