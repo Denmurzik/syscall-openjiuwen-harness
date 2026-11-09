@@ -48,7 +48,7 @@ def test_program_route_writes_last_line(tmp_path):
     c = FakeClient(["```python\nprint('x')\nprint(42)\n```"])
     r = run(solve_with_program(_task(tmp_path), c))
     assert r.status == "solved" and r.answer == "42"
-    assert c.calls[0]["model"] == config.MODEL_FAST and c.calls[0]["max_tokens"] == 400
+    assert c.calls[0]["model"] == config.MODEL_FAST and c.calls[0]["max_tokens"] == config.PROGRAM_MAX_TOKENS == 900
 
 
 def test_program_route_impossible(tmp_path):

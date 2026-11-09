@@ -20,7 +20,7 @@ from harness.solvers.coding_solver import provable_contradiction
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
 
-from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON  # noqa: E402,F401
+from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON, PROGRAM_MAX_TOKENS  # noqa: E402,F401
 
 PROGRAM_SYSTEM = ("Write a Python 3 program that prints only the final answer to stdout. "
                   "Never write answer.txt or any file: the task text mentions answer.txt, ignore that, "
@@ -182,7 +182,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
     guess = None  # the latest wrong-shape answer: a best guess for the scheduler's last pass
     while attempt < attempts:
         try:
-            r = await chat_or_alt(client, model, messages, 400)
+            r = await chat_or_alt(client, model, messages, PROGRAM_MAX_TOKENS)
         except LLMUnavailable as e:
             return SolveResult("unparsed", note=f"llm unavailable: {e}",
                                extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})

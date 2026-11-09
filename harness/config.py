@@ -33,6 +33,7 @@ TIMEOUT_CHARGE = 1500  # charged for an LLM call that ended by timeout
 MIN_CALL_TOKENS = 100  # a call cut to fit the budget is not made with a smaller output limit
 MIN_REASONING_CALL_TOKENS = 1000  # the same for a call with reasoning: below this it reasons and never answers
 REASON_FALLBACK_TOKENS = 1500  # output limit of a route's call that fell through to MODEL_REASON, at least
+PROGRAM_MAX_TOKENS = 900  # output limit of a 2b program: search programs that read the KB were cut at 400
 PROXY_PAUSE_MAX_S = 60
 
 RETRY_DELAYS = (2, 4, 8, 16, 30)  # the shared account ceiling resets within ~40 s
