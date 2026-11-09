@@ -171,6 +171,9 @@ def describe_workspace(ws: Path) -> str:
     return "\n".join(parts)
 
 
+_NOT_CONST = object()
+
+
 def is_bare_literal(code: str) -> bool:
     """True when the last print of the program shows a constant nobody computed: print(340), or a name that is
     only ever assigned constants. print(1200 - 40 * 5), print(result) and IMPOSSIBLE are not bare."""
@@ -182,34 +185,43 @@ def is_bare_literal(code: str) -> bool:
               and n.func.id == "print" and n.args]
     if not prints:
         return False
-    last = max(prints, key=lambda n: (n.lineno, n.col_offset))
-    consts: dict[str, bool] = {}  # name -> every assignment to it is a plain constant
+    consts: dict[str, object] = {}  # name -> its constant value while every assignment to it is a plain constant
     for n in ast.walk(tree):
         if isinstance(n, ast.Assign):
-            is_const = isinstance(n.value, ast.Constant)
+            ok = isinstance(n.value, ast.Constant)
             for t in n.targets:
                 for nm in ast.walk(t):
                     if isinstance(nm, ast.Name):
-                        consts[nm.id] = consts.get(nm.id, True) and is_const and isinstance(t, ast.Name)
+                        if ok and isinstance(t, ast.Name) and consts.get(nm.id, n.value.value) == n.value.value:
+                            consts[nm.id] = n.value.value
+                        else:
+                            consts[nm.id] = _NOT_CONST
         elif isinstance(n, (ast.AugAssign, ast.AnnAssign, ast.For, ast.comprehension, ast.NamedExpr)):
             for nm in ast.walk(n.target):
                 if isinstance(nm, ast.Name):
-                    consts[nm.id] = False
+                    consts[nm.id] = _NOT_CONST
         elif isinstance(n, (ast.With, ast.FunctionDef, ast.Import, ast.ImportFrom)):
             for nm in ast.walk(n):
                 if isinstance(nm, ast.Name) and isinstance(nm.ctx, ast.Store):
-                    consts[nm.id] = False
+                    consts[nm.id] = _NOT_CONST
 
-    def constant(e) -> bool:
+    def value(e):
+        """The constant an expression stands for, or _NOT_CONST."""
         if isinstance(e, ast.Constant):
-            return not (isinstance(e.value, str) and e.value.strip() == "IMPOSSIBLE")
+            return e.value
         if isinstance(e, ast.JoinedStr):
-            return all(constant(v.value) if isinstance(v, ast.FormattedValue) else True for v in e.values)
+            if all(isinstance(v, ast.Constant) for v in e.values):
+                return "".join(v.value for v in e.values)
+            return _NOT_CONST
         if isinstance(e, ast.Name):
-            return consts.get(e.id) is True
-        return False
+            return consts.get(e.id, _NOT_CONST)
+        return _NOT_CONST
 
-    return all(constant(a) for a in last.args)
+    def bare(call) -> bool:
+        vals = [value(a) for a in call.args]
+        return all(v is not _NOT_CONST and not (isinstance(v, str) and v.strip() == "IMPOSSIBLE") for v in vals)
+
+    return all(bare(c) for c in prints)  # one computed print (or an IMPOSSIBLE verdict) makes it a real program
 
 
 def _program_messages(task: Task) -> list[dict]:
@@ -275,7 +287,30 @@ async def solve_with_program(task: Task, client) -> SolveResult:
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
 _BARE_NUMBER = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
-_BARE_NAME = re.compile(r"[^\W\d_][\w .,'&-]{0,59}")
+_BARE_NAME = re.compile(r"[^\W\d_][\w.,'&-]*(?: [^\W\d_][\w.,'&-]*){0,4}")
+_PARTICLES = {"de", "da", "do", "dos", "das", "del", "della", "di", "du", "van", "von", "der", "den", "la", "le",
+              "el", "al", "bin", "ibn", "of", "the", "and", "&", "y", "e", "ter", "ten", "dos"}
+_PLACEHOLDERS = {"unknown", "none", "n/a", "na", "null", "nil", "impossible", "no answer", "not found",
+                 "not available", "undefined", "unclear"}
+_SENTENCE_WORDS = {"is", "are", "was", "were", "be", "it", "this", "that", "answer", "cannot", "can't", "cant",
+                   "not", "no", "i", "we", "there", "has", "have", "had", "does", "do", "did"}
+
+
+def _looks_like_name(line: str) -> bool:
+    if not _BARE_NAME.fullmatch(line) or line.casefold().rstrip(".") in _PLACEHOLDERS:
+        return False
+    words = line.split()
+    if line.endswith(".") and len(words) > 1 and not re.fullmatch(r"(?:[A-Z][\w'-]*\.? ?)+", line):
+        return False
+    if len(words) > 1 and line.endswith(".") and not words[-1][:1].isupper():
+        return False
+    for w in words:
+        base = w.strip(".,")
+        if base.casefold() in _SENTENCE_WORDS and base.casefold() not in {"the", "of"}:
+            return False
+        if not (base[:1].isupper() or base.casefold() in _PARTICLES):
+            return False
+    return not (len(words) > 1 and line.endswith(".") and words[0].casefold() in _SENTENCE_WORDS) and bool(words)
 
 
 def bare_answer(text: str, task: Task) -> str | None:
@@ -290,7 +325,7 @@ def bare_answer(text: str, task: Task) -> str | None:
     shape = expected_shape(task)
     if _BARE_NUMBER.fullmatch(line):
         pass
-    elif shape == NAME and _BARE_NAME.fullmatch(line) and line.upper() != "IMPOSSIBLE" and len(line.split()) <= 6:
+    elif shape == NAME and _looks_like_name(line):
         pass
     else:
         return None

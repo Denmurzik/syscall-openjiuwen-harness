@@ -638,3 +638,40 @@ def test_reason_bare_rejects(tmp_path, reply):
 def test_reason_bare_wrong_shape_is_not_solved(tmp_path):
     r = run(solve_with_reason(_task(tmp_path, ttype="math"), FakeClient(["108.5"])))
     assert r.status != "solved" or r.answer == "109" or True  # decimals go through the program path/normalisation
+
+
+# ---- fix round 1
+
+@pytest.mark.parametrize("code", [
+    "rows = [1, 2]\nif rows:\n    print(sum(rows))\nelse:\n    print('N/A')",
+    "try:\n    print(int('4') * 2)\nexcept ValueError:\n    print(0)",
+    "r = 'IMPOSSIBLE'\nprint(r)",
+    "print(f'IMPOSSIBLE')",
+])
+def test_not_bare_fallback_branches_and_impossible(code):
+    from harness.llm_routes import is_bare_literal
+    assert not is_bare_literal(code)
+
+
+@pytest.mark.parametrize("code", ["print(340)", "x = 340\nprint(x)", "if 1:\n    print(1)\nelse:\n    print(2)"])
+def test_still_bare(code):
+    from harness.llm_routes import is_bare_literal
+    assert is_bare_literal(code)
+
+
+def _name_task(tmp_path):
+    import dataclasses
+    t = _task(tmp_path, check="exact_str", ttype="search")
+    return dataclasses.replace(t, instruction="Where is the headquarters of the employer of Ana Lima?")
+
+
+@pytest.mark.parametrize("reply,ok", [
+    ("Ana Lima", True), ("Bluefin Systems", True), ("Jonas de Souza", True), ("Porto", True),
+    ("Unknown", False), ("None", False), ("N/A", False), ("Not found", False), ("Impossible.", False),
+    ("No answer", False), ("Null", False), ("It is Ana Lima.", False), ("The answer is Ana", False),
+    ("I cannot determine", False), ("Ana Lima is here", False),
+])
+def test_bare_name(tmp_path, reply, ok):
+    from harness.llm_routes import bare_answer
+    got = bare_answer(reply, _name_task(tmp_path))
+    assert (got == reply) if ok else got is None
