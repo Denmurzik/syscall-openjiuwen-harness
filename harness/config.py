@@ -60,20 +60,33 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
 BATCH_2A = True  # default of HARNESS_BATCH_2A (round 6, task 32): measured, no accuracy loss, see the task report
 
 
-def batch_2a() -> bool:
-    """Several small 2a groups of one type in one call. Read at call time: HARNESS_BATCH_2A=1/0."""
-    raw = os.environ.get("HARNESS_BATCH_2A")
+VERIFY_CODING = False  # default of HARNESS_VERIFY_CODING (round 7, task 38), see the task report
+VERIFY_MAX_TOKENS = 400  # output limit of the model writing its own fix, as the first rung of fix_coding
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
-        return BATCH_2A
+        return default
     v = raw.strip().lower()
     if v in ("1", "true", "yes", "on"):
         return True
     if v in ("0", "false", "no", "off"):
         return False
-    if "HARNESS_BATCH_2A" not in _warned:
-        _warned.add("HARNESS_BATCH_2A")
-        _log.warning("invalid HARNESS_BATCH_2A=%r, using default %r", raw, BATCH_2A)
-    return BATCH_2A
+    if name not in _warned:
+        _warned.add(name)
+        _log.warning("invalid %s=%r, using default %r", name, raw, default)
+    return default
+
+
+def batch_2a() -> bool:
+    """Several small 2a groups of one type in one call. Read at call time: HARNESS_BATCH_2A=1/0."""
+    return _env_bool("HARNESS_BATCH_2A", BATCH_2A)
+
+
+def verify_coding() -> bool:
+    """A model checks green single coding fixes on its own. Read at call time: HARNESS_VERIFY_CODING=1/0."""
+    return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)
 
 
 def llm_timeout() -> float:

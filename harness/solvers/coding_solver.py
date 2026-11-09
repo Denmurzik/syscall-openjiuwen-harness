@@ -897,6 +897,35 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
     return {"ambiguous": found, "visible_asserts": asserts}, cur
 
 
+def _tests_of(test_src: str, func: str) -> str:
+    """Source of the test methods that use `func`."""
+    refs = _test_refs(test_src)
+    return "\n".join(textwrap.dedent(" " * fn.col_offset + (ast.get_source_segment(test_src, fn) or ""))
+                     for cls in ast.parse(test_src).body if isinstance(cls, ast.ClassDef)
+                     for fn in cls.body if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and func in refs.get(fn.name, ()))
+
+
+def _verify_hint(original: str, cur: str, test_src: str) -> dict | None:
+    """What a model needs to write its own fix of the changed top-level functions and what its fix is compared
+    on; never our fix. Functions with no literal visible call have no probe inputs, so they are not checked."""
+    orig_units = {u.qualname: u for u in _units(original)}
+    items: list[dict] = []
+    asserts: list[str] = []
+    for u in _units(cur):
+        old = orig_units.get(u.qualname)
+        if old is None or "." in u.qualname or _segment(cur, u) == _segment(original, old):
+            continue
+        call = visible_call(test_src, u.qualname)
+        if call is None:
+            continue
+        args, stmt = call
+        items.append({"func": u.qualname, "buggy": textwrap.dedent(_segment(original, old)).strip("\n"),
+                      "inputs": inputs_from_call(args), "tests": _tests_of(test_src, u.qualname) or stmt})
+        asserts.append(stmt)
+    return {"verify": items, "visible_asserts": asserts} if items else None
+
+
 def _partial(ws: Path, mylib: Path, cur: str, report: TestReport) -> SolveResult:
     _write_mylib(mylib, cur)
     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
@@ -966,6 +995,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         if extra:
             return SolveResult("solved", answer="DONE", note="repaired by mutation, ambiguous",
                                tentative=True, extra=extra)
+        hint = _verify_hint(original, preferred, test_src) if config.verify_coding() else None
+        if hint:   # on disk and answered already: a check that never comes changes nothing
+            return SolveResult("solved", answer="DONE", note="repaired by mutation, unchecked",
+                               tentative=True, extra=hint)
         return SolveResult("solved", answer="DONE", note="repaired by mutation")
     except _OutOfTime:
         return SolveResult("unparsed", note="time limit reached")

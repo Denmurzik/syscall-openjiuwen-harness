@@ -31,6 +31,7 @@ solve_with_program = None
 solve_with_reason = None
 fix_coding = None
 arbitrate = None
+verify_fix = None
 BudgetExhausted = None
 
 REASON_PASS_MAX_CALLS = 10      # hard cap of the final reasoning pass, whatever the ledger shows
@@ -182,7 +183,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
 
 
 def _load_phase2() -> None:
-    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, BudgetExhausted
+    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, verify_fix, BudgetExhausted
     from harness import arbitrate as arbitrate_mod, json_route, llm, llm_routes
     if solve_group is None:
         solve_group = json_route.solve_group
@@ -200,6 +201,8 @@ def _load_phase2() -> None:
         fix_coding = llm_routes.fix_coding
     if arbitrate is None:
         arbitrate = arbitrate_mod.arbitrate
+    if verify_fix is None:
+        verify_fix = arbitrate_mod.verify_fix
     BudgetExhausted = llm.BudgetExhausted
 
 
@@ -482,7 +485,28 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         return {"prio": task.reward / est, "estimate": est, "run": go, "name": task.task_id}
 
     units = [unit_2b(t) for t in left if status.get(t.task_id) == "unparsed"
-             or (t.task_id in tentative and not (tentative[t.task_id].extra or {}).get("ambiguous"))]
+             or (t.task_id in tentative and not (tentative[t.task_id].extra or {}).keys() & {"ambiguous", "verify"})]
+    units.sort(key=lambda u: -u["prio"])
+    await _drive(units, t0, deadline_s, ledger, state)
+
+    # 2d: an independent model check of green single coding fixes. Last: an open task is worth more than a
+    # second opinion on an answered one, and the written fix stays whatever happens here
+    def unit_2d(task, extra):
+        est = len(str(extra)) // 30 + config.VERIFY_MAX_TOKENS  # the arbitration behind a difference: left to the reserve
+
+        async def go():
+            start = time.monotonic()
+            res = await verify_fix(task, extra, client)
+            if res.status == "solved":
+                res = SolveResult("solved", res.answer, res.note)  # final: no longer tentative
+            settle(2, task, res, time.monotonic() - start)
+            if (res.note or "").startswith(_LLM_UNAVAILABLE):
+                resume = res.extra or extra
+                unavailable.append(lambda: unit_2d(task, resume))
+        return {"prio": task.reward / est, "estimate": est, "run": go, "name": f"verify:{task.task_id}"}
+
+    units = [unit_2d(t, tentative[t.task_id].extra) for t in left
+             if t.task_id in tentative and (tentative[t.task_id].extra or {}).get("verify")]
     units.sort(key=lambda u: -u["prio"])
     await _drive(units, t0, deadline_s, ledger, state)
 

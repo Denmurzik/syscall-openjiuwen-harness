@@ -1,4 +1,5 @@
-"""Model arbitration among behaviourally different green fixes of a coding task.
+"""Model arbitration among behaviourally different green fixes of a coding task, and the independent
+check of a green single fix that feeds it (`verify_fix`).
 
 One call per model per task (MODEL_FAST and MODEL_ALT, concurrently, independently), all
 ambiguous functions in one prompt, the answer is option numbers. A function's phase-1 choice
@@ -15,14 +16,20 @@ import textwrap
 from pathlib import Path
 
 from harness.llm import LLMUnavailable  # BudgetExhausted is deliberately not caught here
-from harness.config import ARBITRATE_MODELS
-from harness.llm_routes import _run_candidate, write_mylib
+from harness.config import ARBITRATE_MODELS, MODEL_FAST, VERIFY_MAX_TOKENS
+from harness.llm_routes import _cap, _run_candidate, apply_patch, write_mylib
 from harness.result import SolveResult
-from harness.solvers.coding_solver import _segment, _splice, _units
+from harness.solvers.coding_solver import _norm, _segment, _splice, _units
+from harness.solvers.probe import behaviour
 from harness.tasks import Task
 
 MAX_FUNCS = 4          # numbers + commas must fit in max_tokens
 MAX_TOKENS = 8
+VERIFY_TESTS_CAP = 2000  # chars of visible tests per function shown to the model writing its own fix
+VERIFY_SYSTEM = ("Fix the bugs in these Python functions. The visible tests are only examples, hidden tests "
+                 "check other inputs: write what the function name means, not what merely fits the examples. "
+                 "Return only the corrected functions, no explanations, in this format, one block per function:\n"
+                 "FUNC <name>\n<complete new text of the function>")
 SYSTEM = ("Pick, for each function, the option that implements what the function name means. "
           "Reply with the option numbers only, comma-separated, in the order of the functions.")
 
@@ -178,3 +185,66 @@ async def arbitrate(task: Task, extra: dict, client) -> SolveResult:
             shutil.rmtree(ws / "__pycache__", ignore_errors=True)
             return SolveResult("solved", answer="DONE", note=f"arbitration chose options {[p + 1 for p in pk]}")
     return SolveResult("solved", answer="DONE", note="arbitrated choice failed the tests, kept")
+
+
+def _verify_prompt(items: list[dict]) -> str:
+    return "\n\n".join(f"Function `{it['func']}`, buggy version:\n{it['buggy']}\n\n"
+                        f"Visible tests:\n{_cap(it.get('tests', ''), VERIFY_TESTS_CAP)}" for it in items)
+
+
+def _differing(ws: Path, current: str, reply: str, items: list[dict]) -> list[dict]:
+    """Arbitration items for the functions whose fix in `reply` passes the visible tests and behaves differently
+    from ours on the probe inputs. Our fix is the phase-1 choice (option 1)."""
+    theirs = apply_patch(current, reply)
+    if theirs is None:
+        return []
+    ours_units, their_units = ({u.qualname: u for u in _units(s)} for s in (current, theirs))
+    out = []
+    for it in items:
+        func, inputs = it["func"], it["inputs"]
+        u, v = ours_units.get(func), their_units.get(func)
+        if u is None or v is None:
+            continue
+        ours = textwrap.dedent(_segment(current, u)).strip("\n")
+        cand = textwrap.dedent(_segment(theirs, v)).strip("\n")
+        if _norm(ours) == _norm(cand):
+            continue
+        new = _splice(current, u, cand)   # only this function of the reply, in the file as it is now
+        behaves = [behaviour(current, func, inputs), behaviour(new, func, inputs)]
+        if behaves[0] == behaves[1] or not _run_candidate(ws, new).ok:
+            continue
+        out.append({"func": func, "buggy": it["buggy"], "candidates": [ours, cand], "chosen": 0,
+                    "calls": [f"{func}({', '.join(map(repr, a))})" for a in inputs], "outputs": behaves})
+    return out
+
+
+async def verify_fix(task: Task, extra: dict, client) -> SolveResult:
+    """MODEL_FAST writes its own fix from the buggy function and the visible tests, without seeing ours. Same
+    behaviour on the probe inputs: ours is confirmed, no more calls. Different and green: 2c arbitration decides,
+    so ours is replaced only when both models agree on the other. Any doubt keeps ours. `unparsed` only when a
+    model was unavailable, with what a later try can resume from."""
+    if extra.get("ambiguous"):   # the candidate is paid for already, only the arbitration is left
+        res = await arbitrate(task, extra, client)
+        return SolveResult("unparsed", note=res.note, extra=extra) if res.status != "solved" else res
+    items = list(extra.get("verify") or [])[:MAX_FUNCS]
+    ws = Path(task.workspace)
+    try:
+        current = (ws / "mylib.py").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return SolveResult("solved", answer="DONE", note=f"check skipped: {e}")
+    try:
+        r = await client.chat(MODEL_FAST, [{"role": "system", "content": VERIFY_SYSTEM},
+                                           {"role": "user", "content": _verify_prompt(items)}], VERIFY_MAX_TOKENS)
+    except LLMUnavailable as e:
+        return SolveResult("unparsed", note=f"llm unavailable: {e}")
+    if getattr(r, "truncated", False):
+        return SolveResult("solved", answer="DONE", note="check: reply cut by the budget limit, kept")
+    try:
+        differ = await asyncio.to_thread(_differing, ws, current, r.text, items)
+    except Exception as e:
+        return SolveResult("solved", answer="DONE", note=f"check failed, kept: {e!r}"[:200])
+    if not differ:
+        return SolveResult("solved", answer="DONE", note="check: no other green behaviour, kept")
+    next_extra = {"ambiguous": differ, "visible_asserts": list(extra.get("visible_asserts") or [])}
+    res = await arbitrate(task, next_extra, client)
+    return SolveResult("unparsed", note=res.note, extra=next_extra) if res.status != "solved" else res
