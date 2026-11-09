@@ -8,7 +8,7 @@ import pytest
 
 from harness import config
 from harness.json_route import solve_group
-from harness.llm import ChatResult
+from harness.llm import ChatResult, LLMUnavailable
 from harness.llm_routes import solve_with_program
 from harness.shape import INT, NAME, YEAR, expected_shape, mismatch
 from harness.tasks import Task
@@ -302,6 +302,19 @@ def test_2b_final_shape_mismatch_keeps_best_guess(tmp_path):
     client = FakeClient("print(1990)", "print(1991)")
     res = asyncio.run(solve_with_program(t, client))
     assert res.status == "unparsed" and res.extra == {"best_guess": "1991", "shape_mismatch": True}
+
+
+def test_2b_shape_mismatch_then_no_answer_keeps_the_wrong_shape_guess(tmp_path):
+    t = _program_task(tmp_path, "Which firm employs Ann Lee?")
+
+    class NoSecond(FakeClient):
+        async def chat(self, model, messages, max_tokens, **extra):
+            if model == config.MODEL_ALT:
+                raise LLMUnavailable("HTTP 404")
+            return await super().chat(model, messages, max_tokens, **extra)
+    res = asyncio.run(solve_with_program(t, NoSecond("print(1990)")))
+    assert res.status == "unparsed" and res.note.startswith("llm unavailable")
+    assert res.extra == {"best_guess": "1990", "shape_mismatch": True}
 
 
 def test_2b_shape_mismatch_then_crash_keeps_the_wrong_shape_guess(tmp_path):

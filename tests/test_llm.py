@@ -919,7 +919,8 @@ def test_proxy_is_alive_while_any_model_answers(monkeypatch):
 
 
 def test_proxy_is_dead_when_no_model_answers(monkeypatch):
-    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _down(), config.MODEL_ALT: _down()})
+    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _down(), config.MODEL_ALT: _down(),
+                                                      config.MODEL_REASON: _down()})
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
         asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
@@ -936,54 +937,145 @@ def test_chat_or_alt_prefers_the_asked_model(monkeypatch):
     assert fakes[config.MODEL_FAST].calls == 1 and fakes[config.MODEL_ALT].calls == 1
 
 
-def test_chat_or_alt_on_alt_alone_waits_for_it(monkeypatch):
-    n = {"i": 0}
-
-    async def alt():
-        n["i"] += 1
-        if n["i"] <= 4:
-            raise _wrapped(HTTPErr(503))
-        return _ok()
-    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _up(), config.MODEL_ALT: alt})
-    r = asyncio.run(chat_or_alt(c, config.MODEL_ALT, [{"role": "user", "content": "hi"}], 16))
-    assert r.text == "ok" and fakes[config.MODEL_ALT].calls == 5
+def _all_models(**behaviors):
+    return {m: behaviors.get(m) for m in (config.MODEL_FAST, config.MODEL_ALT, config.MODEL_REASON)}
 
 
-def test_chat_or_alt_waits_for_the_earliest_pause_when_both_are_out_then_asks_for_real(monkeypatch):
+class PingsPass(FakeModel):
+    """Real calls follow the behavior, a 1-token request always gets through."""
+    async def invoke(self, messages, **kw):
+        if kw.get("max_tokens") == 1:
+            return _ok()
+        return await super().invoke(messages, **kw)
+
+
+def _hi(c, model=config.MODEL_FAST):
+    return chat_or_alt(c, model, [{"role": "user", "content": "hi"}], 16)
+
+
+def test_chat_or_alt_asking_for_alt_moves_to_fast_when_alt_fails(monkeypatch):
+    """N5: no special case for ALT: it is one more model in the same order."""
+    c, fakes, ledger, clock = _models(monkeypatch, **_all_models())
+    fakes[config.MODEL_ALT].behavior = _down()
+    fakes[config.MODEL_FAST].behavior = fakes[config.MODEL_REASON].behavior = _up()
+    assert asyncio.run(_hi(c, config.MODEL_ALT)).text == "ok"
+    assert not ledger.exhausted and fakes[config.MODEL_REASON].calls == 0
+
+
+def test_chat_or_alt_goes_on_to_reason_when_fast_and_alt_fail(monkeypatch):
+    """M9: the order is fixed, whichever model was asked for."""
+    c, fakes, ledger, clock = _models(monkeypatch, **_all_models())
+    fakes[config.MODEL_FAST].behavior = fakes[config.MODEL_ALT].behavior = _down()
+    fakes[config.MODEL_REASON].behavior = _up()
+    assert asyncio.run(_hi(c)).text == "ok"
+    assert not ledger.exhausted
+
+
+def test_chat_or_alt_waits_only_when_every_model_fails_then_asks_for_real(monkeypatch):
     """N4: only pings pass for a while. The call neither gives up nor takes a ping for an answer."""
-    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: None, config.MODEL_ALT: None, "reason": _up()})
+    c, fakes, ledger, clock = _models(monkeypatch, **_all_models())
     t0 = clock.t
 
     async def real():
         if clock.t - t0 < 100:
             raise _wrapped(HTTPErr(503))
         return _ok()
-    fakes[config.MODEL_FAST].behavior = fakes[config.MODEL_ALT].behavior = real
-    r = asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
-    assert r.text == "ok" and clock.t - t0 >= 100 and not ledger.exhausted
+    for m in fakes:
+        fakes[m] = PingsPass(real)
+    assert asyncio.run(_hi(c)).text == "ok"
+    assert clock.t - t0 >= 100 and not ledger.exhausted
 
 
 def test_chat_or_alt_ends_when_the_proxy_is_declared_dead(monkeypatch):
     """Even if a ping passes all along: only real answers keep the proxy alive."""
-    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _down(), config.MODEL_ALT: _down(), "reason": _up()})
+    c, fakes, ledger, clock = _models(monkeypatch, **_all_models())
+    for m in fakes:
+        fakes[m] = PingsPass(_down())
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
-        asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
+        asyncio.run(_hi(c))
     assert clock.t - t0 >= config.PROXY_DEAD_S and ledger.exhausted
 
 
 def test_chat_or_alt_follows_a_cancelled_unit():
     ledger = TokenLedger(100000, 1000)
     c = LLMClient("http://x/v1", "k", ledger)
-    c.probe_models = ("reason",)
-    c._model = lambda name: FakeModel(_up() if name == "reason" else _down())
+    c.probe_models = ()
+    c._model = lambda name: FakeModel(_down())
 
     async def go():
-        await asyncio.wait_for(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16), 0.3)
+        await asyncio.wait_for(_hi(c), 0.3)
     t = c._now()
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(go())
     assert c._now() - t < 1.5 and ledger.held == 0
+
+
+def test_a_swallowed_cancel_does_not_extend_the_wait():
+    """M8: on 3.11 wait_for can lose a cancel when the request ends in the same iteration of the loop."""
+    ledger = TokenLedger(100000, 1000)
+    c = LLMClient("http://x/v1", "k", ledger)
+    asks = {"n": 0}
+
+    async def chat(model, messages, max_tokens, **extra):
+        asks["n"] += 1
+        if asks["n"] > 60:
+            return "the wait was never ended"
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            pass  # what wait_for does in that case
+        raise ModelFailing("503")
+    c.chat = chat
+
+    async def go():
+        return await asyncio.wait_for(_hi(c), 0.1)
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(go())
+    assert asks["n"] < 10
+
+
+def test_wait_for_model_always_yields_and_ignores_models_with_no_pause():
+    """M7: a model with no pause (-inf) in the min made it return at once, and the ladder spun with the loop frozen."""
+    c = LLMClient("http://x/v1", "k", TokenLedger(100000, 1000))
+    c._health["paused"].pause_until, c._health["paused"].step = c._now() + 0.3, 1
+    beats = []
+
+    async def heart():
+        while True:
+            beats.append(1)
+            await asyncio.sleep(0.01)
+
+    async def go():
+        h = asyncio.create_task(heart())
+        await asyncio.sleep(0)
+        beats.clear()
+        t = c._now()
+        await c.wait_for_model(["paused", "never_failed"])
+        took = c._now() - t
+        h.cancel()
+        return took
+    took = asyncio.run(go())
+    assert took >= 0.2 and len(beats) >= 2
+
+
+def test_wait_for_model_yields_when_there_is_nothing_to_wait_for():
+    c = LLMClient("http://x/v1", "k", TokenLedger(100000, 1000))
+    beats = []
+
+    async def heart():
+        while True:
+            beats.append(1)
+            await asyncio.sleep(0)
+
+    async def go():
+        h = asyncio.create_task(heart())
+        await asyncio.sleep(0)
+        beats.clear()
+        await c.wait_for_model(["never_failed"])
+        h.cancel()
+    asyncio.run(go())
+    assert beats
 
 
 def test_chat_or_alt_gives_up_on_what_waiting_cannot_change(monkeypatch):

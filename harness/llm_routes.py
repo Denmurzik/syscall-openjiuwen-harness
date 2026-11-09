@@ -181,7 +181,8 @@ async def solve_with_program(task: Task, client) -> SolveResult:
         try:
             r = await chat_or_alt(client, model, messages, 400)
         except LLMUnavailable as e:
-            return SolveResult("unparsed", note=f"llm unavailable: {e}")
+            return SolveResult("unparsed", note=f"llm unavailable: {e}",
+                               extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})
         if getattr(r, "truncated", False):  # a program cut at a line end still runs and prints a wrong answer
             note = "program cut by the budget limit"
             break

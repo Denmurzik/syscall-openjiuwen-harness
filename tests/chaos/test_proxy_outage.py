@@ -327,3 +327,40 @@ def test_proxy_that_answers_only_pings_is_dead(tasks, tmp_path, make_proxy, base
     run = run_harness(tasks, tmp_path / "run", make_proxy(Heavy(10 ** 6)),
                       {"BUDGET": 100000, "HARNESS_PROXY_DEAD_S": 8, "HARNESS_RETRY_DELAYS": "1,2,4,8"}, timeout=150)
     check_common(run, tasks, baseline, bound=120)
+
+
+def _search_tasks(root: Path, n: int) -> Path:
+    for i in range(n):
+        d = root / f"search_{i:04d}"
+        (d / "workspace" / "kb").mkdir(parents=True)
+        (d / "task.json").write_text(json.dumps({
+            "task_id": d.name, "task_type": "search", "reward": 5, "check": "exact_str",
+            "instruction": f"The directory kb/ contains a small knowledge base of markdown files. In what year was Zed{i} "
+                           "born?" + TAIL}), encoding="utf-8")
+    return root
+
+
+def test_alt_down_a_route_asking_for_alt_moves_to_fast(tmp_path, make_proxy, monkeypatch):
+    """N5: the shape retry asks ALT by name. With ALT down and FAST healthy nothing may stand still."""
+    def canned(body):
+        text = str(body.get("messages"))
+        if "knowledge base" in str((body.get("messages") or [{}])[0].get("content", ""))[:400] and "Python 3 program" not in text:
+            return '{"impossible": true}'
+        return 'print("abc")' if any(f"Zed{i} " in text for i in range(3)) else "print(1990)"
+    monkeypatch.setattr(fakeproxy, "canned", canned)
+    tasks = _search_tasks(tmp_path / "tasks", 12)
+    run = run_harness(tasks, tmp_path / "run", make_proxy(lambda n, b: "503" if b.get("model") == MODEL_ALT else "normal"),
+                      ONE_MODEL_ENV, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    # 9 real answers and the 3 wrong-shape ones, written as best guesses when FAST repeats them
+    assert len(answers_on_disk(tasks)) == 12, (run.stdout, _trajectory(tmp_path))
+
+
+def test_only_reason_answers_routes_still_get_answers(tmp_path, make_proxy):
+    """M9: FAST and ALT down for good, REASON healthy: the rule is any model that answers."""
+    tasks = _math_tasks(tmp_path / "tasks", 6)
+    run = run_harness(tasks, tmp_path / "run",
+                      make_proxy(lambda n, b: "503" if b.get("model") in (MODEL_FAST, MODEL_ALT) else "normal"),
+                      ONE_MODEL_ENV, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert len(answers_on_disk(tasks)) == 6, (run.stdout, _trajectory(tmp_path))
