@@ -518,6 +518,37 @@ def _plain_case(cls: ast.ClassDef) -> bool:
     return True
 
 
+_REFLECTIVE_MODULES = {"os", "sys", "inspect", "importlib", "builtins"}
+
+
+def _reflective(tree: ast.AST) -> bool:
+    """True when the code can reach interpreter internals: a dunder name or attribute (other
+    than `__name__` / `__main__`) or an import of os / sys / inspect / importlib / builtins."""
+    for n in ast.walk(tree):
+        name = n.id if isinstance(n, ast.Name) else n.attr if isinstance(n, ast.Attribute) else None
+        if name and name.startswith("__") and name.endswith("__") and name not in ("__name__", "__main__"):
+            return True
+        if isinstance(n, ast.Import) and any(a.name.split(".")[0] in _REFLECTIVE_MODULES for a in n.names):
+            return True
+        if isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] in _REFLECTIVE_MODULES:
+            return True
+    return False
+
+
+def _mentions_unittest(tree: ast.AST) -> bool:
+    """A library that touches `unittest` can change what the assertions do."""
+    return any((isinstance(n, ast.Name) and n.id == "unittest")
+               or (isinstance(n, ast.Import) and any(a.name.split(".")[0] == "unittest" for a in n.names))
+               or (isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "unittest")
+               for n in ast.walk(tree))
+
+
+def _renames_mylib_name(tree: ast.AST) -> bool:
+    """`from mylib import g as f`: the name checked for purity is not the function that runs."""
+    return any(isinstance(n, ast.ImportFrom) and n.module == "mylib"
+               and any(a.asname and a.asname != a.name for a in n.names) for n in ast.walk(tree))
+
+
 def provable_contradiction(test_src: str, mylib_src: str) -> bool:
     """Strict proof for an early `infeasible`; any doubt -> False. Needs two plain top-level
     `self.assertEqual(<mylib call with literal args>, <literal>)` statements of one test method,
@@ -531,6 +562,9 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
     if not aliases and not names:
         return False
     if not _plain_test_file(tree, aliases | names):
+        return False
+    if _renames_mylib_name(tree) or _reflective(tree) or _reflective(lib) \
+            or _mentions_unittest(lib):
         return False
     for node in ast.walk(lib):
         if isinstance(node, (ast.Global, ast.Nonlocal)):
