@@ -573,3 +573,35 @@ def test_budget_exhausted_in_the_check_cancels_nothing_before_it(tmp_path, monke
     monkeypatch.setattr(scheduler, "fix_coding", fake_fix)
     counts = scheduler.run(tasks, 100000, object())
     assert order == ["fix", "fix", "verify"] and counts["solved"] == 2
+
+
+def test_check_runs_after_the_final_reason_pass(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _coding(tasks, "c_verify", 9.0)
+    d = tasks / "m_open"
+    (d / "workspace").mkdir(parents=True)
+    (d / "task.json").write_text(json.dumps({"task_id": "m_open", "task_type": "math", "instruction": "x?",
+                                             "reward": 9.0, "check": "exact_int"}), encoding="utf-8")
+    order = []
+
+    async def fake_verify(task, extra, client):
+        order.append("verify")
+        return SolveResult("solved", "DONE", "kept")
+
+    async def fake_program(task, client):
+        return SolveResult("unparsed", note="no")
+
+    async def fake_reason(task, client):
+        order.append("reason")
+        return SolveResult("solved", "7", "reason")
+
+    async def no_groups(*a, **k):
+        return {}
+    monkeypatch.setattr(scheduler, "_phase1_target", open_then_verify_target)
+    monkeypatch.setattr(scheduler, "verify_fix", fake_verify)
+    monkeypatch.setattr(scheduler, "solve_with_program", fake_program)
+    monkeypatch.setattr(scheduler, "solve_with_reason", fake_reason)
+    monkeypatch.setattr(scheduler, "solve_group", no_groups)
+    monkeypatch.setattr(scheduler, "solve_batch", no_groups)
+    scheduler.run(tasks, 100000, object())
+    assert order == ["reason", "verify"]

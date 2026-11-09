@@ -496,6 +496,26 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         units.sort(key=lambda u: -u["prio"])
         await _drive(units, t0, deadline_s, ledger, state)
 
+    # final pass: the cheap routes failed these. One MODEL_REASON program each for the best-paid few, while less
+    # than half of the budget is spent. The call cap does not depend on the ledger (a proxy may report no usage)
+    if not state["stop"] and not ledger.exhausted and ledger.spent < REASON_PASS_SPEND_LIMIT * ledger.budget:
+        rewards = rewards if rewards is not None else [t.reward for t in left]
+        median = statistics.median(rewards) if rewards else 0
+        cands = [t for t in left if status.get(t.task_id) == "unparsed" and t.task_type in JSON_TYPES
+                 and t.task_id not in tentative and t.reward >= median]
+        cands.sort(key=lambda t: -t.reward)
+
+        def unit_reason(task):
+            async def go():
+                if ledger.spent >= REASON_PASS_SPEND_LIMIT * ledger.budget:
+                    return
+                start = time.monotonic()
+                res = await solve_with_reason(task, client)
+                settle(2, task, res, time.monotonic() - start)
+            return {"prio": task.reward, "estimate": 3000, "run": go, "name": f"reason:{task.task_id}"}
+
+        await _drive([unit_reason(t) for t in cands[:REASON_PASS_MAX_CALLS]], t0, deadline_s, ledger, state)
+
     # 2d: an independent model check of green single coding fixes. Last of all, after every pass over open tasks:
     # an open task is worth more than a second opinion on an answered one, and the written fix stays whatever
     # happens here (a budget or deadline stop in 2d cancels nothing that ran before it)
@@ -524,23 +544,3 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         units = [make() for make in unchecked]
         units.sort(key=lambda u: -u["prio"])
         await _drive(units, t0, deadline_s, ledger, state)
-
-    # final pass: the cheap routes failed these. One MODEL_REASON program each for the best-paid few, while less
-    # than half of the budget is spent. The call cap does not depend on the ledger (a proxy may report no usage)
-    if not state["stop"] and not ledger.exhausted and ledger.spent < REASON_PASS_SPEND_LIMIT * ledger.budget:
-        rewards = rewards if rewards is not None else [t.reward for t in left]
-        median = statistics.median(rewards) if rewards else 0
-        cands = [t for t in left if status.get(t.task_id) == "unparsed" and t.task_type in JSON_TYPES
-                 and t.task_id not in tentative and t.reward >= median]
-        cands.sort(key=lambda t: -t.reward)
-
-        def unit_reason(task):
-            async def go():
-                if ledger.spent >= REASON_PASS_SPEND_LIMIT * ledger.budget:
-                    return
-                start = time.monotonic()
-                res = await solve_with_reason(task, client)
-                settle(2, task, res, time.monotonic() - start)
-            return {"prio": task.reward, "estimate": 3000, "run": go, "name": f"reason:{task.task_id}"}
-
-        await _drive([unit_reason(t) for t in cands[:REASON_PASS_MAX_CALLS]], t0, deadline_s, ledger, state)
