@@ -279,3 +279,51 @@ def test_failure_while_building_the_model_client_loses_no_task(tmp_path, make_pr
     client._model = flaky
     summary = scheduler.run(tasks, 100000, client)
     assert summary["solved"] == 12, summary
+
+
+class Heavy:
+    """`action` on the real calls of the chosen models for `seconds` after the first request; pings pass if `pings`."""
+    def __init__(self, seconds, models=None, pings=True, action="503"):
+        self.seconds, self.models, self.pings, self.action, self.t0 = seconds, models, pings, action, None
+
+    def __call__(self, n, body):
+        self.t0 = self.t0 or time.monotonic()
+        if self.pings and (body.get("max_tokens") or body.get("max_completion_tokens")) == 1:
+            return "normal"
+        hit = self.models is None or body.get("model") in self.models
+        return self.action if hit and time.monotonic() - self.t0 < self.seconds else "normal"
+
+
+LONG_PAUSES = {"BUDGET": 100000, "HARNESS_PROXY_DEAD_S": 60, "HARNESS_RETRY_DELAYS": "1,2,4,8", "HARNESS_LLM_TIMEOUT": 5,
+               "HARNESS_PHASE1_TIMEOUT_CODING": 4}
+
+
+def test_both_candidate_models_down_tasks_wait_instead_of_burning_out(tmp_path, make_proxy):
+    """N4: FAST and ALT fail longer than their first pauses, REASON answers pings: no task may give up."""
+    tasks = _math_tasks(tmp_path / "tasks", 12)
+    run = run_harness(tasks, tmp_path / "run", make_proxy(Heavy(12, (MODEL_FAST, MODEL_ALT), pings=False)),
+                      LONG_PAUSES, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert len(answers_on_disk(tasks)) == 12, (run.stdout, _trajectory(tmp_path))
+
+
+def test_overload_that_passes_pings_loses_no_task(tmp_path, make_proxy):
+    """N4: a 1-token request gets through while real ones do not: a ping says nothing of real work."""
+    tasks = _math_tasks(tmp_path / "tasks", 12)
+    run = run_harness(tasks, tmp_path / "run", make_proxy(Heavy(12)), LONG_PAUSES, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert len(answers_on_disk(tasks)) == 12, (run.stdout, _trajectory(tmp_path))
+
+
+def test_overload_that_passes_pings_loses_no_coding_task(tmp_path, make_proxy, monkeypatch):
+    monkeypatch.setattr(fakeproxy, "canned", _patch_for)
+    tasks = _fixable_tasks(tmp_path / "tasks", 6)
+    run = run_harness(tasks, tmp_path / "run", make_proxy(Heavy(12)), LONG_PAUSES, timeout=120)
+    assert run.rc == 0 and not run.timed_out, run.stderr[-800:]
+    assert "solved=6" in run.stdout, (run.stdout, _trajectory(tmp_path))
+
+
+def test_proxy_that_answers_only_pings_is_dead(tasks, tmp_path, make_proxy, baseline):
+    run = run_harness(tasks, tmp_path / "run", make_proxy(Heavy(10 ** 6)),
+                      {"BUDGET": 100000, "HARNESS_PROXY_DEAD_S": 8, "HARNESS_RETRY_DELAYS": "1,2,4,8"}, timeout=150)
+    check_common(run, tasks, baseline, bound=120)

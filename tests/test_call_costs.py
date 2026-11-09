@@ -194,5 +194,5 @@ def test_client_records_timeout_charge():
         return calls
 
     calls = asyncio.run(go())
-    assert len(calls) == 1 and calls[0]["cost"] == TIMEOUT_CHARGE == c.ledger.spent
-    assert calls[0]["model"] == "m" and calls[0]["completion_tokens"] == TIMEOUT_CHARGE and calls[0]["error"]
+    assert len(calls) == 1 and 0 < calls[0]["cost"] <= TIMEOUT_CHARGE and calls[0]["cost"] == c.ledger.spent
+    assert calls[0]["model"] == "m" and calls[0]["completion_tokens"] == calls[0]["cost"] and calls[0]["error"]

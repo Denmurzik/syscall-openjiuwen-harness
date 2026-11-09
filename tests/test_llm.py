@@ -10,6 +10,8 @@ from harness import llm as llm_mod
 from harness import config
 from harness.budget import TokenLedger
 from harness.config import TIMEOUT_CHARGE
+
+CHARGE_16 = 17  # a timed-out call of "hi" with a limit of 16: what it can cost at most, far below TIMEOUT_CHARGE
 from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable, ModelFailing, ProxyDown, chat_or_alt
 
 
@@ -106,7 +108,7 @@ def test_timeout_charged_not_retried():
     c, fake, ledger = make(hang, timeout=0.1)
     with pytest.raises(LLMUnavailable):
         run(c)
-    assert fake.calls == 1 and ledger.spent == TIMEOUT_CHARGE
+    assert fake.calls == 1 and ledger.spent == CHARGE_16
 
 
 def test_429_retried_then_succeeds(monkeypatch):
@@ -218,14 +220,14 @@ def test_real_remote_protocol_error_not_retried_but_charged():
     c, fake, ledger = make(bad)
     with pytest.raises(LLMUnavailable):
         run(c)
-    assert fake.calls == 1 and ledger.spent == TIMEOUT_CHARGE
+    assert fake.calls == 1 and ledger.spent == CHARGE_16
 
 
 def test_real_openai_api_timeout_charged_not_retried():
     c, fake, ledger = make(_raiser(lambda: openai.APITimeoutError(request=_req())))
     with pytest.raises(LLMUnavailable):
         run(c)
-    assert fake.calls == 1 and ledger.spent == TIMEOUT_CHARGE
+    assert fake.calls == 1 and ledger.spent == CHARGE_16
 
 
 def test_real_openai_status_errors():
@@ -502,14 +504,14 @@ def test_timeouts_are_charged_raise_at_once_and_reach_dead(monkeypatch):
     t0 = clock.t
     with pytest.raises(LLMUnavailable):
         run(c)
-    assert ledger.spent == TIMEOUT_CHARGE and not ledger.exhausted and fake.calls == 1
+    assert ledger.spent == CHARGE_16 and not ledger.exhausted and fake.calls == 1
     clock.t = t0 + 299
     with pytest.raises(LLMUnavailable):
         run(c)
-    assert not ledger.exhausted and ledger.spent == 2 * TIMEOUT_CHARGE
+    assert not ledger.exhausted and ledger.spent == 2 * CHARGE_16
     with pytest.raises(BudgetExhausted):  # the pause set by the last failure brings it past the limit
         run(c)
-    assert ledger.exhausted and ledger.spent == 3 * TIMEOUT_CHARGE
+    assert ledger.exhausted and ledger.spent == 3 * CHARGE_16
 
 
 def test_next_call_after_a_timeout_waits_the_pause(monkeypatch):
@@ -873,7 +875,7 @@ def test_timeout_moves_the_call_on_when_the_proxy_answers(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, timeout=0.01, fast=_hang, alt=_up())
     with pytest.raises(ModelFailing):
         _say(c, "fast")
-    assert fakes["fast"].calls == 1 and ledger.spent == TIMEOUT_CHARGE + 2  # the flat charge, the ping
+    assert fakes["fast"].calls == 1 and ledger.spent == CHARGE_16 + 2  # the timeout, the ping
     assert not ledger.exhausted
     with pytest.raises(ModelFailing):  # skipped during its pause
         _say(c, "fast")
@@ -887,7 +889,7 @@ def test_timeout_while_no_model_answers_is_a_proxy_outage(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, timeout=0.01, fast=_hang, alt=_hang)
     with pytest.raises(ProxyDown):
         _say(c, "fast")
-    assert ledger.spent == TIMEOUT_CHARGE  # the ping that hung is not charged: one token at most
+    assert ledger.spent == CHARGE_16  # the ping that hung is not charged: one token at most
 
 
 def test_one_failure_of_alt_does_not_write_it_off(monkeypatch):
@@ -934,11 +936,86 @@ def test_chat_or_alt_prefers_the_asked_model(monkeypatch):
     assert fakes[config.MODEL_FAST].calls == 1 and fakes[config.MODEL_ALT].calls == 1
 
 
-def test_chat_or_alt_does_not_ask_alt_twice_when_alt_is_the_one_failing(monkeypatch):
-    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _up(), config.MODEL_ALT: _down()})
+def test_chat_or_alt_on_alt_alone_waits_for_it(monkeypatch):
+    n = {"i": 0}
+
+    async def alt():
+        n["i"] += 1
+        if n["i"] <= 4:
+            raise _wrapped(HTTPErr(503))
+        return _ok()
+    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _up(), config.MODEL_ALT: alt})
+    r = asyncio.run(chat_or_alt(c, config.MODEL_ALT, [{"role": "user", "content": "hi"}], 16))
+    assert r.text == "ok" and fakes[config.MODEL_ALT].calls == 5
+
+
+def test_chat_or_alt_waits_for_the_earliest_pause_when_both_are_out_then_asks_for_real(monkeypatch):
+    """N4: only pings pass for a while. The call neither gives up nor takes a ping for an answer."""
+    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: None, config.MODEL_ALT: None, "reason": _up()})
+    t0 = clock.t
+
+    async def real():
+        if clock.t - t0 < 100:
+            raise _wrapped(HTTPErr(503))
+        return _ok()
+    fakes[config.MODEL_FAST].behavior = fakes[config.MODEL_ALT].behavior = real
+    r = asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
+    assert r.text == "ok" and clock.t - t0 >= 100 and not ledger.exhausted
+
+
+def test_chat_or_alt_ends_when_the_proxy_is_declared_dead(monkeypatch):
+    """Even if a ping passes all along: only real answers keep the proxy alive."""
+    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _down(), config.MODEL_ALT: _down(), "reason": _up()})
+    t0 = clock.t
+    with pytest.raises(BudgetExhausted):
+        asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
+    assert clock.t - t0 >= config.PROXY_DEAD_S and ledger.exhausted
+
+
+def test_chat_or_alt_follows_a_cancelled_unit():
+    ledger = TokenLedger(100000, 1000)
+    c = LLMClient("http://x/v1", "k", ledger)
+    c.probe_models = ("reason",)
+    c._model = lambda name: FakeModel(_up() if name == "reason" else _down())
+
+    async def go():
+        await asyncio.wait_for(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16), 0.3)
+    t = c._now()
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(go())
+    assert c._now() - t < 1.5 and ledger.held == 0
+
+
+def test_chat_or_alt_gives_up_on_what_waiting_cannot_change(monkeypatch):
+    c, fakes, ledger, clock = _models(monkeypatch, **{config.MODEL_FAST: _raiser(lambda: HTTPErr(404))})
+    with pytest.raises(LLMUnavailable):
+        asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
+    assert fakes[config.MODEL_FAST].calls == 1
+
+
+def test_ping_leaves_the_health_of_the_pinged_model_and_the_dead_clock_alone(monkeypatch):
+    c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_up())
+    c._proxy_failed("alt", clock.t - 1)
+    alt_before = (c._health["alt"].step, c._health["alt"].pause_until)
+    clock.t = c._health["alt"].pause_until  # the pause of alt is over, the ping may go
+    since = c._down_since
     with pytest.raises(ModelFailing):
-        asyncio.run(chat_or_alt(c, config.MODEL_ALT, [{"role": "user", "content": "hi"}], 16))
-    assert fakes[config.MODEL_FAST].calls == 1  # the ping
+        _say(c, "fast")
+    assert c._health["alt"].step == alt_before[0] and c._down_since == since and c._served == 0
+
+
+def test_timeout_charge_is_at_most_what_the_call_can_cost():
+    async def hang():
+        await asyncio.Event().wait()
+    c, fake, ledger, seen = _budgeted(1000000, 100, hang)
+    c.timeout = 0.01
+    c.probe_models = ()
+    with pytest.raises(LLMUnavailable):
+        asyncio.run(_ask(c, 400, 400))  # ~100 prompt tokens: 10 by the /10 rule
+    assert 400 < ledger.spent < 420
+    with pytest.raises(LLMUnavailable):
+        asyncio.run(_ask(c, 3000))
+    assert ledger.spent - 420 < TIMEOUT_CHARGE <= ledger.spent - 400  # capped by the flat amount
 
 
 def test_failure_while_building_the_model_client_is_no_answer_not_a_crash():

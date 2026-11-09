@@ -9,7 +9,8 @@ import textwrap
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
-from harness.llm import LLMUnavailable, ProxyDown, chat_or_alt  # BudgetExhausted is deliberately not caught here
+from harness.llm import (LLMUnavailable, ModelFailing, ProxyDown,  # BudgetExhausted is deliberately not caught here
+                         chat_or_alt)
 from harness.result import SolveResult
 from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
@@ -353,29 +354,39 @@ async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveRes
     note = "no attempt made"
     unavailable = None  # a rung that could not run: the task stays open for the scheduler's retry pass
     answered = list(resume.get("answered", ()))
-    for model, max_tokens, extra in [a for a in attempts if a[0] not in answered]:
-        try:
-            r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
-        except ProxyDown as e:  # says nothing of this rung: the next one would only cost more. The retry pass asks it again
-            unavailable = e
+    while True:
+        failing = False
+        for model, max_tokens, extra in [a for a in attempts if a[0] not in answered]:
+            try:
+                r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
+            except ProxyDown as e:  # says nothing of this rung: the next one would only cost more. The retry pass asks it again
+                unavailable = e
+                break
+            except ModelFailing as e:
+                unavailable, failing = e, True
+                continue
+            except LLMUnavailable as e:
+                unavailable = e
+                continue
+            answered.append(model)
+            fixed = apply_patch(base, r.text)
+            if fixed is None:
+                note = f"{model}: patch did not apply"
+                continue
+            report = await asyncio.to_thread(_run_candidate, ws, fixed)
+            if report.ok:
+                write_mylib(mylib_path, fixed)
+                shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+                return SolveResult("solved", answer="DONE", note=f"patched by {model}")
+            note = f"{model}: tests still failing"
+            output = report.output
+            if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
+                base, base_report = fixed, report  # keep partial progress for the next attempt
+        if answered or not failing:
             break
-        except LLMUnavailable as e:
-            unavailable = e
-            continue
-        answered.append(model)
-        fixed = apply_patch(base, r.text)
-        if fixed is None:
-            note = f"{model}: patch did not apply"
-            continue
-        report = await asyncio.to_thread(_run_candidate, ws, fixed)
-        if report.ok:
-            write_mylib(mylib_path, fixed)
-            shutil.rmtree(ws / "__pycache__", ignore_errors=True)
-            return SolveResult("solved", answer="DONE", note=f"patched by {model}")
-        note = f"{model}: tests still failing"
-        output = report.output
-        if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
-            base, base_report = fixed, report  # keep partial progress for the next attempt
+        # no model of this ladder has answered yet: the task is not given up for a passing failure
+        await client.wait_for_model([a[0] for a in attempts])
+        unavailable = None
     if unavailable is None:
         return SolveResult("unparsed", note=note)
     return SolveResult("unparsed", note=f"llm unavailable: {unavailable}",

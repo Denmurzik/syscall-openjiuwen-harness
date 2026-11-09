@@ -480,3 +480,36 @@ def test_proxy_outage_does_not_advance_the_ladder(tmp_path):
     c = FakeClient([GOOD_PATCH])
     assert run(fix_coding(t, c, r.extra["ladder"])).status == "solved"
     assert [x["model"] for x in c.calls] == [config.MODEL_FAST]
+
+
+class WaitingClient(FakeClient):
+    def __init__(self, replies):
+        super().__init__(replies)
+        self.waits = []
+
+    async def wait_for_model(self, models):
+        self.waits.append(list(models))
+
+
+def test_ladder_waits_when_no_rung_got_an_answer_and_starts_over(tmp_path):
+    """N4: every rung out for now is a passing failure: the task is not given up, and the cheap rung goes first."""
+    t = _fixture("coding_0003", tmp_path)
+    c = WaitingClient([ModelFailing("503"), ModelFailing("503"), GOOD_PATCH])
+    r = run(fix_coding(t, c))
+    assert r.status == "solved" and r.note == f"patched by {config.MODEL_FAST}"
+    assert c.waits == [[config.MODEL_FAST, config.MODEL_ALT]]
+    assert [x["model"] for x in c.calls] == [config.MODEL_FAST, config.MODEL_ALT, config.MODEL_FAST]
+
+
+def test_ladder_does_not_wait_for_the_last_rung_once_a_rung_answered(tmp_path):
+    """REASON alone down: the proxy works, waiting for this rung would only hold the slot."""
+    t = _fixture("coding_0003", tmp_path, reward=3.0)
+    c = WaitingClient(["nonsense", "more nonsense", ModelFailing("503")])
+    r = run(fix_coding(t, c))
+    assert r.status == "unparsed" and r.note.startswith("llm unavailable") and c.waits == []
+
+
+def test_ladder_gives_up_when_it_is_only_about_the_budget(tmp_path):
+    t = _fixture("coding_0003", tmp_path)
+    c = WaitingClient([LLMUnavailable("call does not fit"), LLMUnavailable("call does not fit")])
+    assert run(fix_coding(t, c)).status == "unparsed" and c.waits == []

@@ -1,6 +1,7 @@
 """LLM client on top of openjiuwen: budget accounting, retries, concurrency."""
 import asyncio
 import logging
+import math
 import os
 import re
 import tempfile
@@ -148,13 +149,17 @@ def _billed_tokens(u) -> tuple[int, int]:
 
 
 async def chat_or_alt(client, model: str, messages: list[dict], max_tokens: int, **extra) -> ChatResult:
-    """For a route with no rung of its own on MODEL_ALT: the call moves there while `model` keeps failing."""
-    try:
-        return await client.chat(model, messages, max_tokens, **extra)
-    except ModelFailing:
-        if model == config.MODEL_ALT:
-            raise
-        return await client.chat(config.MODEL_ALT, messages, max_tokens, **extra)
+    """For a route with no rung of its own on MODEL_ALT: the call moves there while `model` keeps failing, and when
+    both fail it waits for the first pause to end and asks again. Only a proxy declared dead or the unit's deadline
+    ends the wait: these routes have nowhere else to go, and giving up would lose the task for a passing failure."""
+    models = [model] if model == config.MODEL_ALT else [model, config.MODEL_ALT]
+    while True:
+        for m in models:
+            try:
+                return await client.chat(m, messages, max_tokens, **extra)
+            except (ModelFailing, ProxyDown) as e:
+                logger.warning("no answer from %s: %s", m, str(e)[:100])
+        await client.wait_for_model(models)
 
 
 class LLMClient:
@@ -191,6 +196,7 @@ class LLMClient:
         return m
 
     def _proxy_ok(self, model: str) -> None:
+        """A real answer. A ping never gets here: passing one says nothing of real work."""
         self._last_ok = self._now()
         self._served += 1
         self._down_since = None
@@ -221,7 +227,8 @@ class LLMClient:
 
     async def _ping(self, model: str) -> bool:
         """Does another model answer? The way to tell a failing model from a proxy outage when nothing else is
-        running: a real call would buy a dearer rung just to find out. Other models in their pause are left alone."""
+        running: a real call would buy a dearer rung just to find out. Other models in their pause are left alone.
+        It only moves this call on: the health of the pinged model and the dead clock stay as they are."""
         for other in self.probe_models:
             if other == model or self._now() < self._health[other].pause_until:
                 continue
@@ -236,7 +243,6 @@ class LLMClient:
                 if status is None or status >= 500:
                     self._proxy_failed(other, sent)
                 continue
-            self._proxy_ok(other)
             self._account(other, _PING, 1, r, False)
             return True
         return False
@@ -251,6 +257,17 @@ class LLMClient:
                 raise BudgetExhausted("ledger exhausted")
             left = min(until, self._health[model].pause_until) - self._now()
             if left <= 0 or self._served > served:
+                return
+            await asyncio.sleep(min(left, 1.0))
+
+    async def wait_for_model(self, models: list[str]) -> None:
+        """Until the first of `models` can be asked again. Every pause ends and every failure checks the dead limit,
+        so this cannot outlive the proxy; the unit's deadline cancels it like any wait."""
+        while True:
+            if self.ledger.exhausted:
+                raise BudgetExhausted("ledger exhausted")
+            left = min(self._health[m].pause_until for m in models) - self._now()
+            if left <= 0:
                 return
             await asyncio.sleep(min(left, 1.0))
 
@@ -290,7 +307,8 @@ class LLMClient:
         attempt = 0
         tries = 0  # failed tries of this call that a pause and a retry can help
         served_before = self._served
-        retry_now = False  # a ping found the proxy alive: no reason to wait before asking this model again
+        pinged = False  # another model answered a ping during this call: the failures are not the whole proxy's
+        retry_now = False  # no reason to wait before asking this model again
         extra = dict(extra)
         stripped = False  # structured params dropped for this call as a trial
         prompt_cost = self.ledger.cost(len(str(messages)) // 4, 0)
@@ -334,13 +352,14 @@ class LLMClient:
                     self._proxy_failed(model, sent)
                     tries += 1
                     if tries >= MODEL_FAILING_AFTER or self._health[model].out:
-                        if served_at_send > served_before:  # the proxy was answering when this one was sent
+                        if pinged or served_at_send > served_before:  # the proxy was answering when this one was sent
                             raise self._model_out(model, msg) from exc
-                        retry_now = self._served > served_at_send or await self._ping(model)
+                        pinged = await self._ping(model)
+                        retry_now = pinged or self._served > served_at_send
                 elif status is None and _is_transport_failure(exc):
-                    # may have been served and billed: charge a flat amount, never repeat in place
-                    record_call(model, 0, TIMEOUT_CHARGE, self.ledger.charge(0, TIMEOUT_CHARGE),
-                                error=msg[:100])
+                    # may have been served and billed: a flat amount, never more than the call can cost; never repeat in place
+                    charge = min(TIMEOUT_CHARGE, math.ceil(prompt_cost + limit))
+                    record_call(model, 0, charge, self.ledger.charge(0, charge), error=msg[:100])
                     self._proxy_failed(model, sent)
                     if self._served > served_at_send or await self._ping(model):
                         raise self._model_out(model, msg) from exc
