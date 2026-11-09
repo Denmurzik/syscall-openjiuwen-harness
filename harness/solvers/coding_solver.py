@@ -4,6 +4,7 @@
 is evaluated in a temporary copy of the workspace, never in the real one.
 """
 import ast
+import copy
 import os
 import shutil
 import tempfile
@@ -113,7 +114,6 @@ class _Run:
         self.cand_timeout = CAND_TIMEOUT_MAX
         self.verify_timeout = BASE_TIMEOUT
         self.count = 0
-        self.used_pair = False
 
     def _remaining(self) -> float:
         left = self.deadline - time.monotonic()
@@ -244,7 +244,6 @@ def _repair_round(ctx: _Run, cur: str, report: TestReport, refs: dict[str, set[s
     found = _search(ctx, _pairs(cur, [u for u in units if u.owner in scope] or units),
                     failing, failing, capped=True)
     if found:
-        ctx.used_pair = True
         return found
 
     # Phase D: the best partial fix (fewest remaining failures) among single mutants.
@@ -428,6 +427,70 @@ _REFLECT = {"setattr", "delattr", "reload", "import_module", "__import__", "__di
 _SETUPS = {"setUp", "setUpClass", "setUpModule", "tearDown", "tearDownClass", "tearDownModule"}
 
 
+def _plain_test_file(tree: ast.Module, bound: set[str]) -> bool:
+    """The only file shape the file-wide proof trusts: imports, classes and a bare
+    `unittest.main()` guard at module level; no local imports and no rebinding of `bound`
+    (mylib aliases and names) or of `unittest` anywhere."""
+    guarded = bound | {"unittest"}
+    seen_names: dict[str, int] = {}
+    for st in tree.body:
+        if isinstance(st, (ast.Import, ast.ImportFrom)):
+            for a in st.names:
+                if a.name == "*":
+                    return False
+                nm = (a.asname or a.name).split(".")[0]
+                seen_names[nm] = seen_names.get(nm, 0) + 1
+        elif isinstance(st, ast.If):
+            if ast.dump(st.test) != ast.dump(ast.parse("__name__ == '__main__'", mode="eval").body) or st.orelse:
+                return False
+            if not (len(st.body) == 1 and isinstance(st.body[0], ast.Expr)
+                    and ast.dump(st.body[0].value) == ast.dump(ast.parse("unittest.main()", mode="eval").body)):
+                return False
+        elif not isinstance(st, ast.ClassDef) and not (
+                isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant)):
+            return False
+    if seen_names.get("unittest") != 1 or any(seen_names.get(n, 0) != 1 for n in bound):
+        return False
+    if not any(isinstance(st, ast.Import) and any(a.name == "unittest" and a.asname is None for a in st.names)
+               for st in tree.body):
+        return False
+    top_imports = {id(st) for st in tree.body if isinstance(st, (ast.Import, ast.ImportFrom))}
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Import, ast.ImportFrom)) and id(n) not in top_imports:
+            return False
+        if isinstance(n, (ast.Delete, ast.Global, ast.Nonlocal, ast.NamedExpr)):
+            return False
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id in guarded:
+            return False
+        if isinstance(n, ast.arg) and n.arg in guarded:
+            return False
+        if isinstance(n, ast.ExceptHandler) and n.name in guarded:
+            return False
+        if isinstance(n, ast.Name) and n.id in {"exec", "eval", "compile", "globals", "locals", "vars",
+                                                "getattr", "open"}:
+            return False
+    return True
+
+
+def _plain_case(cls: ast.ClassDef) -> bool:
+    """`class X(unittest.TestCase)` with nothing but a docstring and plain test methods."""
+    if cls.decorator_list or cls.keywords or len(cls.bases) != 1:
+        return False
+    b = cls.bases[0]
+    if not (isinstance(b, ast.Attribute) and b.attr == "TestCase"
+            and isinstance(b.value, ast.Name) and b.value.id == "unittest"):
+        return False
+    for st in cls.body:
+        if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
+            continue
+        if not (isinstance(st, ast.FunctionDef) and st.name.startswith("test") and not st.decorator_list):
+            return False
+        a = st.args
+        if [x.arg for x in a.args] != ["self"] or a.posonlyargs or a.kwonlyargs or a.vararg or a.kwarg:
+            return False
+    return True
+
+
 def provable_contradiction(test_src: str, mylib_src: str) -> bool:
     """Strict proof for an early `infeasible`; any doubt -> False. Needs two plain top-level
     `self.assertEqual(<mylib call with literal args>, <literal>)` statements of one test method,
@@ -439,6 +502,8 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
         return False
     aliases, names = _mylib_names(tree)
     if not aliases and not names:
+        return False
+    if not _plain_test_file(tree, aliases | names):
         return False
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in _PATCHY:
@@ -484,12 +549,8 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                 if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     meth_count[x.name] = meth_count.get(x.name, 0) + 1
 
-    def is_case(c: ast.ClassDef) -> bool:
-        return any((b.id if isinstance(b, ast.Name) else b.attr if isinstance(b, ast.Attribute) else "")
-                   .endswith("TestCase") for b in c.bases)
-
-    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and not n.decorator_list
-                and is_case(n) and cls_count[n.name] == 1]:
+    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and _plain_case(n)
+                and cls_count[n.name] == 1]:
         counts: dict[str, int] = {}
         for x in cls.body:
             bound = [x.name] if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else [
@@ -522,7 +583,8 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                     expected = ast.literal_eval(node.args[1])
                 except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
                     continue
-                if any(k is None for k, _ in kws) or not _simple_literal(expected)                         or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
+                if any(k is None for k, _ in kws) or not _simple_literal(expected) \
+                        or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
                     continue
                 key = (name, repr(args), repr(kws))
                 if key not in seen:
@@ -609,8 +671,31 @@ def _pair_rank(a, b) -> float:
     return 2.0
 
 
+def _strip_zero(node):
+    """`node` without its `+ 0` / `- 0` / `0 +` offsets, as a comparable dump."""
+    class _T(ast.NodeTransformer):
+        def visit_BinOp(self, b):
+            self.generic_visit(b)
+            if isinstance(b.op, (ast.Add, ast.Sub)) and _int_const(b.right) == 0:
+                return b.left
+            if isinstance(b.op, ast.Add) and _int_const(b.left) == 0:
+                return b.right
+            return b
+    return ast.dump(_T().visit(copy.deepcopy(node)))
+
+
+def _zero_offset_tautology(cmp: ast.Compare) -> bool:
+    """`xs[i] >= xs[i + 0]`: a zero offset makes both sides the same expression. A zero offset
+    alone is not degenerate: `n - 0` is how a mutation says "drop the spurious - 1"."""
+    sides = [cmp.left] + cmp.comparators
+    for a, b in zip(sides, sides[1:]):
+        if ast.dump(a) != ast.dump(b) and _strip_zero(a) == _strip_zero(b):
+            return True
+    return False
+
+
 def _degenerate(tree: ast.AST) -> float:
-    """Weight of no-op code: x * 1, x * 0, x // 1, x % 1, x / 1, x ** 1, x + 0, x - 0, += 0, sum(0 for ...),
+    """Weight of no-op code: x * 1, x * 0, x // 1, x % 1, x / 1, x ** 1, += 0, a tautology by a zero offset, sum(0 for ...),
     --x (3 each) and -0 (1)."""
     n = 0.0
     for x in ast.walk(tree):
@@ -628,9 +713,8 @@ def _degenerate(tree: ast.AST) -> float:
                 n += 3
             elif isinstance(x, ast.AugAssign) and isinstance(x.op, (ast.Add, ast.Sub)) and right == 0:
                 n += 3
-            elif isinstance(x, ast.BinOp) and ((isinstance(x.op, (ast.Add, ast.Sub)) and right == 0)
-                                               or (isinstance(x.op, ast.Add) and left == 0)):
-                n += 3
+        elif isinstance(x, ast.Compare) and _zero_offset_tautology(x):
+            n += 3
         elif (isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == "sum"
               and len(x.args) == 1 and isinstance(x.args[0], ast.GeneratorExp)
               and _int_const(x.args[0].elt) == 0):
@@ -714,8 +798,10 @@ def _ambiguity(ctx: _Run, original: str, cur: str, test_src: str,
                 clusters[chosen_key] = [chosen_rank, chosen_order, chosen_seg]
             if len(clusters) < 2:
                 continue
-            crash = [k for k in clusters if any(v.startswith("<exc:") for v in k)]
-            if crash and len(crash) < len(clusters):   # others run clean on every probe
+            # one crash may be a domain limit ([0] for "second largest", b = 0 for a division);
+            # crashing on half of the probes is not
+            crash = [k for k in clusters if 2 * sum(v.startswith("<exc:") for v in k) >= len(k)]
+            if crash and len(crash) < len(clusters):
                 for k in crash:
                     clusters[k][0] += CRASH_PENALTY
             ranked = sorted(clusters, key=lambda k: (clusters[k][0], clusters[k][1]))
@@ -806,9 +892,6 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         if preferred != cur:
             _write_mylib(mylib, preferred)
             shutil.rmtree(ws / "__pycache__", ignore_errors=True)
-        if ctx.used_pair:   # a pair of mutations fits the visible tests; the model gets a look
-            return SolveResult("solved", answer="DONE", note="repaired by mutation pair"
-                               + (", ambiguous" if extra else ""), tentative=True, extra=extra)
         if extra:
             return SolveResult("solved", answer="DONE", note="repaired by mutation, ambiguous",
                                tentative=True, extra=extra)

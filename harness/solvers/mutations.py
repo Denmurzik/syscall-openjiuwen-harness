@@ -82,7 +82,11 @@ def _flip_reverse(n: ast.Call, p) -> None:
 def _alts(node: ast.AST, parent: "ast.AST | None") -> list[_Alt]:
     alts: list[_Alt] = []
     if isinstance(node, ast.BinOp) and type(node.op) in _ARITH:
-        alts += _op_swaps(type(node.op), _ARITH,
+        # `**` towers inside loops (each such mutant burns a whole candidate timeout): only x * 2, x * 3
+        pow_ok = isinstance(node.op, ast.Mult) and isinstance(node.right, ast.Constant) \
+            and type(node.right.value) is int and node.right.value in (2, 3)
+        group = _ARITH if pow_ok or isinstance(node.op, ast.Pow) else tuple(o for o in _ARITH if o is not ast.Pow)
+        alts += _op_swaps(type(node.op), group,
                           lambda n, new: setattr(n, "op", new()), "binop")
     elif isinstance(node, ast.AugAssign) and type(node.op) in _AUG:
         alts += _op_swaps(type(node.op), _AUG,

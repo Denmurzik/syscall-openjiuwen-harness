@@ -148,23 +148,15 @@ def test_regression_total_initial_value(tmp_path):
 
 
 def test_regression_first_n_slice_bound(tmp_path):
-    # `n + 1` and `n - 0` both fit the visible test; since `x - 0` counts as a no-op the
-    # choice is left to arbitration: the right fix must be among the offered candidates
-    bug = "def first_n(xs, n):
-    return xs[:n - 1]
-"
-    t = _custom(tmp_path, bug, "import unittest
-import mylib as m
+    bug = "def first_n(xs, n):\n    return xs[:n - 1]\n"
+    _hidden_check(tmp_path, bug, "first_n", ("[4, 3, 2, 1], 4", [4, 3, 2, 1]),
+                  [("[1, 2, 3], 2", [1, 2]), ("[], 3", []), ("[7, 8], 1", [7])])
 
 
-class T(unittest.TestCase):
-"
-                "    def test_first_n(self):
-        self.assertEqual(m.first_n([4, 3, 2, 1], 4), [4, 3, 2, 1])
-")
-    r = solve(t)
-    assert r.status == "solved" and r.tentative
-    assert any("xs[:n - 0]" in c for c in r.extra["ambiguous"][0]["candidates"])
+def test_regression_second_largest_domain_limit_is_not_a_crash(tmp_path):
+    bug = "def second_largest(xs):\n    vals = sorted(set(xs))\n    return vals[-1]\n"
+    _hidden_check(tmp_path, bug, "second_largest", ("[10, 20]", 10),
+                  [("[4, 7, 5]", 5), ("[1, 2, 3, 4]", 3)])
 
 
 def test_contradictory_visible_tests_are_infeasible(tmp_path):
@@ -531,7 +523,7 @@ def _solve_case(tmp_path, buggy, vis_call, vis_exp):
 def test_rank_is_sorted_not_plus_zero(tmp_path):
     buggy = "def is_sorted(xs):\n    return all(xs[i] >= xs[i + 1] for i in range(len(xs) - 1))\n"
     t, r = _solve_case(tmp_path, buggy, "is_sorted([1, 2, 3])", "True")
-    assert _hidden_ok(t.workspace, ["is_sorted([1,1,2])==True", "is_sorted([3,1])==False"]) or r.tentative
+    assert _hidden_ok(t.workspace, ["is_sorted([1,1,2])==True", "is_sorted([3,1])==False"])
 
 
 def test_rank_gcd_prefers_non_hanging_fix(tmp_path):
@@ -543,20 +535,14 @@ def test_rank_gcd_prefers_non_hanging_fix(tmp_path):
 def test_rank_even_sq_pow_mutation(tmp_path):
     buggy = "def even_sq(xs):\n    return [x * 2 for x in xs if x % 2 == 0]\n"
     t, r = _solve_case(tmp_path, buggy, "even_sq([1, 3, 4])", "[16]")
-    assert _hidden_ok(t.workspace, ["even_sq([3,6])==[36]"]) or r.tentative
+    assert _hidden_ok(t.workspace, ["even_sq([3,6])==[36]"])
 
 
-def test_pair_fix_is_tentative(tmp_path):
-    buggy = "def power(b, e):\n    r = 1\n    for _ in range(e):\n        r += b\n    return r\n"
-    t, r = _solve_case(tmp_path, buggy, "power(2, 3)", "8")
-    assert r.status == "solved" and (_hidden_ok(t.workspace, ["power(3,3)==27"]) or r.tentative)
-
-
-def test_pair_only_fix_is_tentative(tmp_path):
+def test_pair_only_fix_is_solved_not_tentative(tmp_path):
     buggy = "def f(a, b):\n    return a - b * 3\n"
     t, r = _solve_case(tmp_path, buggy, "f(1, 2)", "5")
-    assert r.status == "solved" and r.tentative
-    assert "pair" in r.note
+    assert r.status == "solved" and not r.tentative
+    assert r.note == "repaired by mutation"
 
 
 def test_pow_mutants():
@@ -565,8 +551,16 @@ def test_pow_mutants():
     assert "def f(x):\n    return x * 2" in list(mutants("def f(x):\n    return x ** 2"))
 
 
-def test_degenerate_plus_minus_zero():
+def test_degenerate_zero_offset_only_when_tautology():
     from harness.solvers.coding_solver import _degenerate
-    for e in ("x + 0", "x - 0", "0 + x"):
-        assert _degenerate(ast.parse(e)) > 0, e
-    assert _degenerate(ast.parse("x + 1")) == 0
+    assert _degenerate(ast.parse("xs[i] >= xs[i + 0]")) > 0
+    for e in ("x + 0", "x - 0", "0 + x", "xs[:n - 0]", "x + 1"):
+        assert _degenerate(ast.parse(e)) == 0, e
+
+
+def test_pow_mutants_only_for_small_constant_multipliers():
+    from harness.solvers.mutations import mutants
+    assert not any("**" in m for m in mutants("def f(x, y):\n    return x * y"))
+    assert not any("**" in m for m in mutants("def f(x):\n    return x * 4"))
+    assert not any("**" in m for m in mutants("def f(x):\n    return x + 2"))
+    assert any("x ** 3" in m for m in mutants("def f(x):\n    return x * 3"))
