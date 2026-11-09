@@ -103,22 +103,42 @@ def _with_decimals(ans: str, instruction: str | None) -> str:
         return ans
 
 
-def normalize_answer(stdout: str, check: str | None, instruction: str | None = None) -> str | None:
-    if check == "exact_int":
-        nums = _NUM.findall(re.sub(r"(?<=\d),(?=\d{3})", "", stdout))
+_MARKER = re.compile(r"\b(?:answer|result)\b[ \t]*(?:is\b|=|:)?[ \t]*", re.I)
+_PREFIX = re.compile(r"^(?:answer|result)\s*:\s*", re.I)
+
+
+def _exact_int(stdout: str) -> str | None:
+    """The number of the last line that has one. A line with several numbers needs an answer marker
+    ("Answer: 158 units in 2024"): without one the answer is not guessed."""
+    for line in reversed(stdout.splitlines()):
+        line = re.sub(r"(?<=\d),(?=\d{3})", "", line)
+        nums = _NUM.findall(line)
         if not nums:
-            return None
+            continue
+        if len(nums) > 1:
+            m = _MARKER.search(line)
+            nums = _NUM.findall(line[m.end():])[:1] if m else []
+            if not nums:
+                return None
         try:
-            n = Decimal(nums[-1]).to_integral_value(rounding=ROUND_HALF_UP)
+            n = Decimal(nums[0]).to_integral_value(rounding=ROUND_HALF_UP)
             out = format(n, "f")
         except (InvalidOperation, OverflowError, ValueError):
             return None
         return "0" if n == 0 else out
+    return None
+
+
+def normalize_answer(stdout: str, check: str | None, instruction: str | None = None) -> str | None:
+    if check == "exact_int":
+        return _exact_int(stdout)
     lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
     if not lines:
         return None
-    ans = re.sub(r"^answer\s*:\s*", "", lines[-1], flags=re.I).strip()
+    ans = _PREFIX.sub("", lines[-1]).strip()
     ans = ans.strip("\"'").strip()
+    if ans.endswith(".") and not ans.endswith(".."):
+        ans = ans[:-1].rstrip()
     return _with_decimals(ans, instruction) if ans else None
 
 
@@ -217,9 +237,30 @@ async def solve_with_program(task: Task, client) -> SolveResult:
     return SolveResult("unparsed", note=note, extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})
 
 
+async def solve_with_reason(task: Task, client) -> SolveResult:
+    """One MODEL_REASON program, for the scheduler's last pass over what the cheap routes left open.
+    Only an answer of the right shape settles it; no verdict of its own is final."""
+    try:
+        r = await client.chat(MODEL_REASON, _program_messages(task), 3000, reasoning_effort="low")
+    except LLMUnavailable as e:
+        return SolveResult("unparsed", note=f"llm unavailable: {e}")
+    if getattr(r, "truncated", False):
+        return SolveResult("unparsed", note="reason program cut by the budget limit")
+    res = await asyncio.to_thread(run_program, extract_code(r.text, join_all=False), task.workspace)
+    answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
+    if answer is None:
+        return SolveResult("unparsed", note="reason program gave no usable answer")
+    bad = mismatch(task, answer)
+    if bad is not None:
+        return SolveResult("unparsed", note=f"answer shape: {bad}",
+                           extra={"best_guess": answer, "shape_mismatch": True})
+    return SolveResult("solved", answer=answer, note="model reason program")
+
+
 # ---------------------------------------------------------------- coding
 
-_FUNC_HEAD = re.compile(r"^FUNC[ \t]+([A-Za-z_][\w.]*)[ \t\r]*$", re.M)
+_FUNC_HEAD = re.compile(r"^[ \t>#*`]*FUNC[ \t]+([A-Za-z_][\w.]*)[ \t*`:\r]*$", re.M)
+_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
@@ -255,24 +296,46 @@ def _indent(body: str, tree: ast.Module, col: int) -> str:
                      for i, ln in enumerate(body.split("\n"), 1))
 
 
+def _first_def(block: str) -> tuple[str, ast.Module] | None:
+    """The first function definition in a block of model text: it may be wrapped in a fence and followed by
+    explanations. Lines are cut from the end until what is left parses."""
+    lines = block.split("\n")
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.lstrip().startswith(("def ", "async def ", "@"))), None)
+    if start is None:
+        return None
+    lines = lines[start:][:400]
+    for end in range(len(lines), 0, -1):
+        text = textwrap.dedent("\n".join(lines[:end]).strip("\n"))
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            continue
+        if not tree.body or not isinstance(tree.body[0], _DEFS):
+            return None
+        text = "\n".join(text.split("\n")[:tree.body[0].end_lineno])
+        return text, ast.parse(text)
+    return None
+
+
 def apply_patch(src: str, patch: str) -> str | None:
-    """Replace whole functions named in `FUNC <name>` blocks; None when anything is off."""
+    """Replace whole functions named in `FUNC <name>` blocks; None when anything is off.
+    The model may add a preamble, <think>, fences, **bold** headers and explanations after a function."""
     try:
-        patch = patch.replace("\r\n", "\n")
-        if "```" in patch:
-            patch = extract_code(patch)
+        patch = _THINK.sub("", patch.replace("\r\n", "\n"))
         heads = list(_FUNC_HEAD.finditer(patch))
-        if not heads or patch[:heads[0].start()].strip():
+        if not heads:
             return None
         where = _locate(src)
         edits = []
         for i, h in enumerate(heads):
             end = heads[i + 1].start() if i + 1 < len(heads) else len(patch)
-            body = textwrap.dedent(patch[h.end():end].strip("\n"))
+            found = _first_def(patch[h.end():end])
+            if found is None:
+                return None
+            body, tree = found
             name = h.group(1)
-            tree = ast.parse(body)
-            if len(tree.body) != 1 or not isinstance(tree.body[0], _DEFS) \
-                    or tree.body[0].name != name.rsplit(".", 1)[-1] or name not in where:
+            if tree.body[0].name != name.rsplit(".", 1)[-1] or name not in where:
                 return None
             start, stop, col = where[name]
             edits.append((start, stop, _indent(body.rstrip(), tree, col) + "\n"))

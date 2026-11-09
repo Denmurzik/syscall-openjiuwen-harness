@@ -679,3 +679,146 @@ def test_retry_pass_continues_the_ladder_of_a_coding_task(tmp_path, monkeypatch)
     monkeypatch.setattr(scheduler, "fix_coding", ladder)
     summary = scheduler.run(tasks, 100000, object())
     assert summary["solved"] == 1 and seen == [None, {"answered": ["fast"]}]
+
+
+# ---------------------------------------------------------------- task 36: guesses on disk, final reason pass
+
+def test_reserve_fraction_is_five_percent():
+    assert config.RESERVE_FRACTION == 0.05
+
+
+def test_guess_is_on_disk_before_phase_2_and_a_better_answer_replaces_it(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "g1", "search", "q one?")
+    seen = {}
+
+    async def grp(ttype, template, members, client):
+        seen["at_2a"] = (d / "answer.txt").read_text()
+        return {t.task_id: SolveResult("unparsed", extra={"best_guess": "43"}) for t, _ in members}
+
+    async def prog(task, client):
+        seen["at_2b"] = (d / "answer.txt").read_text()   # the newer guess replaced the first one
+        return SolveResult("solved", "REAL")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    counts = scheduler.run(tasks, 100000, object())
+    assert seen == {"at_2a": "42\n", "at_2b": "43\n"}
+    assert (d / "answer.txt").read_text() == "REAL\n" and counts["solved"] == 1
+
+
+def test_guess_without_llm_is_counted_once_and_not_rewritten(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "g1", "search", "q one?")
+    writes = []
+    real = scheduler.write_answer
+    monkeypatch.setattr(scheduler, "write_answer", lambda t, a: (writes.append(a), real(t, a))[1])
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    counts = scheduler.run(tasks, 100000, None)
+    assert (d / "answer.txt").read_text() == "42\n" and counts["solved"] == 1 and writes == ["42"]
+
+
+def test_guess_never_overwrites_a_final_answer(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "g1", "search", "q one?")
+
+    async def grp(ttype, template, members, client):
+        return {t.task_id: SolveResult("solved", "FINAL") for t, _ in members}
+
+    async def prog(task, client):
+        return SolveResult("unparsed", note="shape", extra={"best_guess": "99", "shape_mismatch": True})
+
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    scheduler.run(tasks, 100000, object())
+    assert (d / "answer.txt").read_text() == "FINAL\n"
+
+
+def test_written_guess_is_removed_by_phase_2_infeasible_and_stays_until_then(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "s1", "search", "q one?")
+    seen = {}
+
+    async def grp(ttype, template, members, client):
+        seen["before"] = (d / "answer.txt").exists()
+        return {t.task_id: SolveResult("unparsed") for t, _ in members}
+
+    async def prog(task, client):
+        return SolveResult("infeasible", note="program printed IMPOSSIBLE")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    counts = scheduler.run(tasks, 100000, object())
+    assert seen["before"] is True
+    assert not (d / "answer.txt").exists() and counts["infeasible"] == 1
+
+
+def test_preexisting_answer_file_is_not_replaced_by_a_guess(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "g1", "search", "q one?")
+    (d / "answer.txt").write_text("OLD\n")
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    scheduler.run(tasks, 100000, None)
+    assert (d / "answer.txt").read_text() == "OLD\n"
+
+
+def _reason_setup(tmp_path, monkeypatch, rewards, *, spent=0.0, budget=100000):
+    tasks = tmp_path / "tasks"
+    dirs = [_make(tasks, f"s{i:02d}", "search", f"q {i}?", reward=r) for i, r in enumerate(rewards)]
+
+    async def grp(ttype, template, members, client):
+        return {t.task_id: SolveResult("unparsed") for t, _ in members}
+
+    async def prog(task, client):
+        return SolveResult("unparsed", note="program failed")
+
+    asked = []
+
+    async def reason(task, client):
+        asked.append(task.task_id)
+        return SolveResult("solved", "R")
+
+    from harness.budget import TokenLedger
+
+    class Client:
+        ledger = TokenLedger(budget, 0)
+
+    Client.ledger.spent = spent
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(scheduler, "solve_with_reason", reason, raising=False)
+    return tasks, dirs, asked, Client()
+
+
+def test_final_reason_pass_takes_unparsed_above_the_median_reward(tmp_path, monkeypatch):
+    tasks, dirs, asked, client = _reason_setup(tmp_path, monkeypatch, [1, 1, 1, 5, 6])
+    counts = scheduler.run(tasks, 100000, client)
+    assert sorted(asked) == ["s03", "s04"] and counts["solved"] == 2
+    assert (dirs[3] / "answer.txt").read_text() == "R\n" and not (dirs[0] / "answer.txt").exists()
+
+
+def test_final_reason_pass_has_a_hard_cap_of_ten_calls(tmp_path, monkeypatch):
+    tasks, dirs, asked, client = _reason_setup(tmp_path, monkeypatch, [1] * 20 + [9] * 15)
+    scheduler.run(tasks, 100000, client)
+    assert len(asked) == 10
+
+
+def test_final_reason_pass_skipped_when_half_the_budget_is_spent(tmp_path, monkeypatch):
+    tasks, dirs, asked, client = _reason_setup(tmp_path, monkeypatch, [1, 1, 5, 6], spent=60000)
+    scheduler.run(tasks, 100000, client)
+    assert asked == []
+
+
+def test_final_reason_pass_leaves_infeasible_alone(tmp_path, monkeypatch):
+    tasks, dirs, asked, client = _reason_setup(tmp_path, monkeypatch, [1, 1, 5])
+
+    async def prog(task, client):
+        return SolveResult("infeasible", note="program printed IMPOSSIBLE")
+
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    scheduler.run(tasks, 100000, client)
+    assert asked == []

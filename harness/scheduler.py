@@ -4,6 +4,7 @@ import logging
 import multiprocessing
 import os
 import queue as queue_mod
+import statistics
 import tempfile
 import time
 from contextvars import ContextVar
@@ -27,9 +28,13 @@ solve_batch = None
 json_route_batchable = None
 json_route_batch_max = None
 solve_with_program = None
+solve_with_reason = None
 fix_coding = None
 arbitrate = None
 BudgetExhausted = None
+
+REASON_PASS_MAX_CALLS = 10      # hard cap of the final reasoning pass, whatever the ledger shows
+REASON_PASS_SPEND_LIMIT = 0.5   # no final reasoning pass once this share of the budget is spent
 
 
 # infeasible notes that do not depend on the model's reading of the question
@@ -177,7 +182,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
 
 
 def _load_phase2() -> None:
-    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, fix_coding, arbitrate, BudgetExhausted
+    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, BudgetExhausted
     from harness import arbitrate as arbitrate_mod, json_route, llm, llm_routes
     if solve_group is None:
         solve_group = json_route.solve_group
@@ -189,6 +194,8 @@ def _load_phase2() -> None:
         json_route_batch_max = lambda: json_route.BATCH_MAX  # noqa: E731
     if solve_with_program is None:
         solve_with_program = llm_routes.solve_with_program
+    if solve_with_reason is None:
+        solve_with_reason = llm_routes.solve_with_reason
     if fix_coding is None:
         fix_coding = llm_routes.fix_coding
     if arbitrate is None:
@@ -261,6 +268,19 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
         by_id = {t.task_id: t for t in tasks}
         tentative: dict[str, SolveResult] = {}   # written but not final: phase 2 may improve it
         guesses: dict[str, SolveResult] = {}     # unanswered tasks with a stored best guess
+        written: set[str] = set()                # tasks whose answer.txt holds a guess of ours, not a final answer
+
+        def put_guess(task: Task, res: SolveResult) -> None:
+            """The guess goes to disk at once: the run may be stopped silently at the end of the budget.
+            Only an empty slot or an earlier guess of ours is written, never a final answer."""
+            tid = task.task_id
+            try:
+                if (task.dir / "answer.txt").exists() and tid not in written:
+                    return
+                write_answer(task, str(res.extra["best_guess"]))
+                written.add(tid)
+            except Exception:
+                log.exception("cannot write best guess for %s", tid)
 
         def settle(phase: int, task: Task, res: SolveResult, elapsed: float) -> None:
             st = res.status
@@ -275,6 +295,7 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
                     st, res = "unparsed", SolveResult("unparsed", note=f"write failed: {e!r}")
             if st == "solved":
                 guesses.pop(task.task_id, None)
+                written.discard(task.task_id)   # the final answer replaced our guess
                 if res.tentative:
                     tentative[task.task_id] = res
                 else:
@@ -283,10 +304,17 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
                 st = "solved"   # a failed later attempt never takes back a written answer
             elif res.status == "infeasible" and phase >= 2:
                 guesses.pop(task.task_id, None)   # a phase-2 verdict withdraws the stored guess
+                if task.task_id in written:       # ... and the one on disk
+                    written.discard(task.task_id)
+                    try:
+                        (task.dir / "answer.txt").unlink()
+                    except OSError:
+                        log.exception("cannot remove withdrawn guess of %s", task.task_id)
             elif (res.extra or {}).get("best_guess") is not None:
                 # a value that failed the shape check only fills an empty slot: it never replaces a stored guess
                 if task.task_id not in guesses or not (res.extra or {}).get("shape_mismatch"):
                     guesses[task.task_id] = res
+                    put_guess(task, res)
             status[task.task_id] = st
             # the unit's own model calls (a group's go to its first settled member), not a ledger delta
             traj.record({"phase": phase, "task_id": task.task_id, "status": st, **_take_calls(),
@@ -296,8 +324,9 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
 
         left = [by_id[i] for i, s in status.items() if s == "unparsed" or i in tentative]
         if client is not None and left:
-            _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative)
-        _write_guesses(by_id, guesses, tentative, status)
+            _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative,
+                    [t.reward for t in tasks])
+        _write_guesses(by_id, guesses, tentative, status, written)
     except Exception:
         log.exception("scheduler failed")
     finally:
@@ -316,12 +345,15 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
     return counts
 
 
-def _write_guesses(by_id: dict, guesses: dict, tentative: dict, status: dict) -> None:
-    """Last pass: a stored best guess becomes the answer of a task that has none yet.
-    Never touches a task that already has an answer file (final or tentative)."""
+def _write_guesses(by_id: dict, guesses: dict, tentative: dict, status: dict, written=()) -> None:
+    """Last pass: a stored best guess becomes the answer of a task that has none yet (most are on disk
+    already: they only count as solved). Never touches a task that already has an answer file."""
     for tid, res in guesses.items():
         task = by_id.get(tid)
         try:
+            if tid in written:
+                status[tid] = "solved"
+                continue
             if task is None or (task.dir / "answer.txt").exists():
                 continue
             write_answer(task, str(res.extra["best_guess"]))
@@ -339,7 +371,7 @@ def _phase2(*args) -> None:
 
 
 async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, traj,
-                        tentative=None) -> None:
+                        tentative=None, rewards=None) -> None:
     tentative = tentative if tentative is not None else {}
     try:
         os.chdir(_log_dir())  # openjiuwen writes ./logs relative to cwd
@@ -460,3 +492,23 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         units = [make() for make in unavailable]
         units.sort(key=lambda u: -u["prio"])
         await _drive(units, t0, deadline_s, ledger, state)
+
+    # final pass: the cheap routes failed these. One MODEL_REASON program each for the best-paid few, while less
+    # than half of the budget is spent. The call cap does not depend on the ledger (a proxy may report no usage)
+    if not state["stop"] and not ledger.exhausted and ledger.spent < REASON_PASS_SPEND_LIMIT * ledger.budget:
+        rewards = rewards if rewards is not None else [t.reward for t in left]
+        median = statistics.median(rewards) if rewards else 0
+        cands = [t for t in left if status.get(t.task_id) == "unparsed" and t.task_type in JSON_TYPES
+                 and t.task_id not in tentative and t.reward > median]
+        cands.sort(key=lambda t: -t.reward)
+
+        def unit_reason(task):
+            async def go():
+                if ledger.spent >= REASON_PASS_SPEND_LIMIT * ledger.budget:
+                    return
+                start = time.monotonic()
+                res = await solve_with_reason(task, client)
+                settle(2, task, res, time.monotonic() - start)
+            return {"prio": task.reward, "estimate": 3000, "run": go, "name": f"reason:{task.task_id}"}
+
+        await _drive([unit_reason(t) for t in cands[:REASON_PASS_MAX_CALLS]], t0, deadline_s, ledger, state)

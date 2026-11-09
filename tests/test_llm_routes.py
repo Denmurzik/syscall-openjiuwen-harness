@@ -7,7 +7,7 @@ import pytest
 from harness.budget import TokenLedger
 from harness.llm import BudgetExhausted, ChatResult, LLMUnavailable, ModelFailing, ProxyDown
 from harness.llm_routes import (apply_patch, extract_code, fix_coding, normalize_answer,
-                                solve_with_program)
+                                solve_with_program, solve_with_reason)
 from harness.tasks import Task, copy_task
 
 FIX = Path(__file__).parent / "fixtures" / "examples"
@@ -218,7 +218,7 @@ def test_blocking_work_does_not_block_event_loop(tmp_path, monkeypatch):
 
 
 def test_normalize_answer_edge_cases():
-    assert normalize_answer("2024-03-15", "exact_int") == "15"
+    assert normalize_answer("2024-03-15", "exact_int") is None  # several numbers, no answer marker
     assert normalize_answer("total -5", "exact_int") == "-5"
     assert normalize_answer("2.5", "exact_int") == "3"
     assert normalize_answer("-0.4", "exact_int") == "0"
@@ -513,3 +513,60 @@ def test_ladder_gives_up_when_it_is_only_about_the_budget(tmp_path):
     t = _fixture("coding_0003", tmp_path)
     c = WaitingClient([LLMUnavailable("call does not fit"), LLMUnavailable("call does not fit")])
     assert run(fix_coding(t, c)).status == "unparsed" and c.waits == []
+
+
+# ---------------------------------------------------------------- task 36: tolerant patch and answer parsing
+
+_PSRC = "def a(x):\n    return x\n\n\ndef total(xs):\n    s = 0\n    return s\n"
+_PWANT = _PSRC.replace("    s = 0\n    return s\n", "    return sum(xs)\n")
+_BODY = "def total(xs):\n    return sum(xs)\n"
+
+
+@pytest.mark.parametrize("patch", [
+    "FUNC total\n```python\n" + _BODY + "```",
+    "Here is the fix.\n\nFUNC total\n" + _BODY,
+    "<think>hmm FUNC nothing\nlet me think</think>\nFUNC total\n" + _BODY,
+    "FUNC total\n" + _BODY + "\nThis sums the list instead of resetting it.\n",
+    "**FUNC total**\n" + _BODY,
+    "Sure!\n**FUNC total**\n```python\n" + _BODY + "```\nHope it helps.",
+])
+def test_apply_patch_tolerates_wrapping(patch):
+    assert apply_patch(_PSRC, patch) == _PWANT
+
+
+def test_apply_patch_still_rejects_nonsense():
+    assert apply_patch(_PSRC, "FUNC total\nI could not fix it.") is None
+    assert apply_patch(_PSRC, "FUNC nope\n" + _BODY) is None
+    assert apply_patch(_PSRC, "just prose") is None
+
+
+def test_normalize_answer_strips_period_and_result_prefix():
+    assert normalize_answer("Osaka.", "exact_str") == "Osaka"
+    assert normalize_answer("Result: Osaka", "exact_str") == "Osaka"
+    assert normalize_answer("Result: Osaka.", "exact_str") == "Osaka"
+    assert normalize_answer("Dr. Smith", "exact_str") == "Dr. Smith"
+    assert normalize_answer("3.5", "exact_str") == "3.5"
+
+
+def test_normalize_answer_exact_int_without_marker_is_not_guessed():
+    assert normalize_answer("158 units in 2024", "exact_int") is None
+    assert normalize_answer("Answer: 158 units in 2024", "exact_int") == "158"
+    assert normalize_answer("Result: 158 in 2024", "exact_int") == "158"
+    assert normalize_answer("debug 3\n42", "exact_int") == "42"
+    assert normalize_answer("total -5", "exact_int") == "-5"
+
+
+def test_solve_with_reason_one_call_on_reason_model(tmp_path):
+    c = FakeClient(["print(42)"])
+    r = run(solve_with_reason(_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "42"
+    assert len(c.calls) == 1 and c.calls[0]["model"] == config.MODEL_REASON
+    assert c.calls[0]["max_tokens"] == 3000 and c.calls[0]["extra"] == {"reasoning_effort": "low"}
+
+
+def test_solve_with_reason_failure_is_unparsed_and_unavailable_noted(tmp_path):
+    assert run(solve_with_reason(_task(tmp_path / "a"), FakeClient(["raise SystemExit(3)"]))).status == "unparsed"
+    r = run(solve_with_reason(_task(tmp_path / "b"), FakeClient([LLMUnavailable("down")])))
+    assert r.status == "unparsed" and r.note.startswith("llm unavailable")
+    # an IMPOSSIBLE verdict of the reasoning model is not trusted as final here: the task stays open
+    assert run(solve_with_reason(_task(tmp_path / "c"), FakeClient(["print('IMPOSSIBLE')"]))).status != "infeasible"

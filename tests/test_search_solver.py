@@ -383,3 +383,12 @@ def test_disagreeing_readings_carry_first_reading_as_best_guess(tmp_path):
     })
     r = solve(_task(_q("Who is the mentor of Ann's employer?"), ws))
     assert r.status == "unparsed" and r.extra["best_guess"] in {"Eve", "Dan"}
+
+
+def test_inexact_entity_name_matching_one_page_is_unparsed_not_infeasible(tmp_path):
+    ws = _kb(tmp_path, {"co.md": "# Arktika Labs\n\nHeadquarters: Medan\nFounded: 1999\n",
+                        "p.md": "# Jonas T. Dubois\n\nBorn: 1970\nEmployer: Arktika Labs\n",
+                        "q.md": "# Alice Novak\n\nBorn: 1980\nEmployer: Arktika Labs\n"})
+    for entity, field in (("Arktika", "Founded"), ("Jonas Dubois", "Born"), ("Dr Alice Novak", "Born")):
+        assert execute({"entity": entity, "path": [], "field": field}, ws).status == "unparsed", entity
+    assert execute({"entity": "Zed Nobody", "path": [], "field": "Born"}, ws).status == "infeasible"

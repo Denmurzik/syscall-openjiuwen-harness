@@ -319,6 +319,8 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
         if _norm(entity) not in index:
             if not _clean_name(entity):
                 return _unparsed(f"start entity not a clean name: {entity!r}")
+            if _near_page(entity, index):
+                return _unparsed(f"start entity {entity!r} matches one page only inexactly")
             return SolveResult("infeasible", note=f"start entity not found: {entity!r}")
         current = entity
         for key in path:
@@ -338,6 +340,18 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
         return SolveResult("solved", value)
     except Exception as e:
         return _unparsed(f"bad spec: {e!r}")
+
+
+def _words(name: str) -> set[str]:
+    return {w.strip(",;:") for w in _norm(name).split()} - {""}
+
+
+def _near_page(entity: str, index: dict) -> bool:
+    """The words of the name are among the words of exactly one page's name, or the other way round
+    ("Jonas Dubois" and "Jonas T. Dubois"): more likely our misreading than an absent entity."""
+    want = _words(entity)
+    near = [p for p in index if want and _words(p) and (want <= _words(p) or _words(p) <= want)]
+    return len(near) == 1
 
 
 _PERSON_KEYS = {"mentor", "employer", "born"}
