@@ -1,6 +1,8 @@
 """One cheap model call per template group returns a JSON spec; deterministic executors do the rest."""
 import asyncio
+import hashlib
 import json
+import logging
 import re
 
 from harness.config import MODEL_ALT, MODEL_FAST
@@ -11,6 +13,7 @@ from harness.solvers import data_solver, math_solver, search_solver
 from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.tasks import Task
 
+log = logging.getLogger("harness")
 MODEL = MODEL_FAST
 MAX_TOKENS = 250
 
@@ -354,6 +357,7 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
     reverse = _reverse_relation(template) if task_type == "search" else None
     if reverse is not None:
         return all_members(SolveResult("unparsed", note=f"reverse relation: {reverse!r}"))
+    batched = spec is not None
     if spec is None:
         try:
             spec = await request_spec(task_type, template, client)
@@ -363,6 +367,9 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
             return all_members(SolveResult("unparsed", note=f"llm unavailable: {e}"))
     if spec is None:
         return all_members(SolveResult("unparsed", note="model returned no valid JSON spec"))
+    log.info("2a spec %s template=%s tasks=%s: %s", "batch" if batched else "single",
+             hashlib.sha1(template.encode("utf-8")).hexdigest()[:8], [t.task_id for t, _ in members],
+             json.dumps(spec, ensure_ascii=False)[:300])
     if spec.get("impossible") is True:
         return all_members(SolveResult("unparsed", note="model: spec impossible"))
     out = _execute_all(members, spec)
@@ -413,6 +420,15 @@ async def solve_group(task_type: str, template: str, members: list[tuple[Task, d
         exhausted.results = out
         raise exhausted
     return out
+
+
+_DECIDED = ("reverse relation", "model: spec impossible", "no JSON route")
+
+
+def _worth_reask(res: SolveResult) -> bool:
+    """A batch member that ended unparsed and whose verdict a fresh single call could still change."""
+    return (res.status == "unparsed" and not (res.extra or {}).get("shape_mismatch")
+            and not (res.note or "").startswith(_DECIDED))
 
 
 def _shape_error(task: Task, res: SolveResult) -> str | None:
@@ -528,6 +544,13 @@ async def solve_batch(task_type: str, items: list[tuple[str, list[tuple[Task, di
     async def one(template, members, spec):
         try:
             res = await solve_group(task_type, template, members, client, spec=spec)
+            again = [(t, s) for t, s in members if spec is not None and t.task_id in res and _worth_reask(res[t.task_id])]
+            if again:  # the batched spec was wrong in a way the checks cannot call broken: its own call, once
+                try:
+                    res = {**res, **await solve_group(task_type, template, again, client)}
+                except BudgetExhausted as e:
+                    res = {**res, **(getattr(e, "results", None) or {})}
+                    exhausted.append(e)
         except BudgetExhausted as e:  # keep what this group's retry produced; the others finish first
             res = getattr(e, "results", None) or {}
             exhausted.append(e)

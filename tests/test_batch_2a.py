@@ -251,3 +251,65 @@ def test_batch_gather_error_does_not_leave_siblings_running(monkeypatch):
         await asyncio.sleep(0.2)
         assert done == at_raise  # nothing keeps running after solve_batch has raised
     asyncio.run(run())
+
+
+BAD = {"start": "{N1}", "steps": ["x**{N2}"]}  # valid placeholders, but the evaluator rejects it: unparsed
+
+
+def test_unparsed_batch_element_gets_one_own_call_others_none():
+    items = [_item("a", 100, 7, "flood"), _item("b", 50, 5, "fire"), _item("c", 9, 2, "storm")]
+    client = FakeClient(batch_reply(SPEC, BAD, SPEC), json.dumps(SPEC))
+    out = asyncio.run(solve_batch("math", items, client))
+    assert [out[k].answer for k in "abc"] == ["93", "45", "7"] and len(client.calls) == 2
+
+
+def test_reask_happens_once_per_group():
+    items = [_item("a", 100, 7, "flood"), _item("b", 50, 5, "fire")]
+    client = FakeClient(batch_reply(SPEC, BAD), json.dumps(BAD))
+    out = asyncio.run(solve_batch("math", items, client))
+    assert out["a"].answer == "93" and out["b"].status == "unparsed" and len(client.calls) == 2
+
+
+def test_budget_exhausted_during_reask_keeps_settled():
+    items = [_item("a", 100, 7, "flood"), _item("b", 50, 5, "fire")]
+    client = FakeClient(batch_reply(SPEC, BAD), BudgetExhausted("x"))
+    got = {}
+    with pytest.raises(BudgetExhausted) as e:
+        asyncio.run(solve_batch("math", items, client, on_group=lambda m, r: got.update(r)))
+    assert e.value.results["a"].answer == "93" and got["a"].answer == "93"
+    assert e.value.results["b"].status == "unparsed"
+
+
+def test_shape_mismatch_and_impossible_not_reasked():
+    items = [_item("a", 100, 7, "flood"), _item("b", 50, 5, "fire")]
+    wrong = {"start": "{N1}", "steps": ["x-{N2}"]}
+    client = FakeClient(batch_reply(wrong, {"impossible": True}))
+    import harness.json_route as jr
+    orig = jr._shape_error
+    try:
+        jr._shape_error = lambda t, r: "bad shape" if t.task_id == "a" else None
+        # shape retry on MODEL_ALT consumes one call (still wrong); no further re-ask
+        client.replies.append(json.dumps(wrong))
+        out = asyncio.run(solve_batch("math", items, client))
+    finally:
+        jr._shape_error = orig
+    assert out["a"].extra.get("shape_mismatch") and len(client.calls) == 2
+
+
+def test_reask_predicate_skips_decided_results():
+    from harness.json_route import _worth_reask
+    assert _worth_reask(SolveResult("unparsed", note="json route failed: KeyError('N9')"))
+    assert not _worth_reask(SolveResult("unparsed", note="reverse relation: 'x'"))
+    assert not _worth_reask(SolveResult("unparsed", note="model: spec impossible"))
+    assert not _worth_reask(SolveResult("unparsed", note="n", extra={"shape_mismatch": True}))
+    assert not _worth_reask(SolveResult("solved", answer="1"))
+
+
+def test_raw_spec_is_logged(caplog):
+    import logging
+    items = [_item("a", 100, 7, "flood"), _item("b", 50, 5, "fire")]
+    client = FakeClient(batch_reply(SPEC, SPEC))
+    with caplog.at_level(logging.INFO, logger="harness"):
+        asyncio.run(solve_batch("math", items, client))
+    msgs = [r.getMessage() for r in caplog.records if "2a spec" in r.getMessage()]
+    assert len(msgs) == 2 and "a" in msgs[0] and "N1" in msgs[0]
