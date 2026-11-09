@@ -96,6 +96,10 @@ def verify_coding() -> bool:
 # default of HARNESS_CONFIRM_2A. Round 8, task 40: a 2a answer is checked by an independent MODEL_FAST program; on a
 # difference a MODEL_ALT program is the third vote and two votes against 2a replace it. See the task report
 CONFIRM_2A = True
+# search is left out: live, a search vote cost ~1240 a task (programs that read the KB) against ~150 for math and
+# data, and it changed no answer on either gate set
+CONFIRM_TYPES = ("math", "data_analysis")
+CONFIRM_SPEND_LIMIT = 0.5  # no new vote once this share of the budget is spent (as the final REASON pass)
 CONFIRM_GROUP_SAMPLE = 2   # a 2a group larger than this is accepted when its best-paid members' FAST votes all agree
 VERIFY_UNIT_S = 60         # time set aside per 2d unit (per worker) when the confirmation stage runs before 2d
 

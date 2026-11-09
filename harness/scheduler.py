@@ -555,7 +555,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     # confirmation of 2a answers by independent programs, in reward order. After 2b, the retry pass and the final
     # REASON pass: an open task is worth more than a second opinion, and the REASON pass's spend gate must not see
     # the votes. Before 2d: per unit it is worth about ten times more (a wrong 2a answer is 4 in 41 on the expert's
-    # sets, at ~200 a task; a wrong green fix about 1 in 20, at ~450 a check), which decides the order if the real
+    # sets, at ~150 a math or data task; a wrong green fix about 1 in 20, at ~450 a check), which decides the order if the real
     # budget ends silently. Within the ledger and the deadline 2d keeps what it needs: the votes leave its estimate
     # and its time untouched
     if config.confirm_2a() and answered_2a and not state["stop"] and not ledger.exhausted:
@@ -589,7 +589,12 @@ def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_
     from harness.confirm import confirm
     by_group: dict = {}
     for tid, (task, answer) in answered.items():
+        if task.task_type not in config.CONFIRM_TYPES:
+            continue
         by_group.setdefault(group_of.get(tid, tid), []).append((task, answer))
+
+    def affordable(est: float) -> bool:
+        return ledger.can_afford(est + reserve) and ledger.spent < config.CONFIRM_SPEND_LIMIT * ledger.budget
 
     def unit(members):
         members = sorted(members, key=lambda m: (-m[0].reward, m[0].task_id))
@@ -602,12 +607,11 @@ def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_
                 if i >= sample and all_agree:
                     return   # the spec held on the sampled members
                 vote_est = estimate_tokens(task)
-                if not _confirm_time_left(t0, deadline_s, n_2d) or not ledger.can_afford(vote_est + reserve):
+                if not _confirm_time_left(t0, deadline_s, n_2d) or not affordable(vote_est):
                     return
                 start = time.monotonic()
                 verdict = await confirm(task, answer, client, confirm_program,
-                                        lambda: ledger.can_afford(vote_est + reserve)
-                                        and _confirm_time_left(t0, deadline_s, n_2d))
+                                        lambda: affordable(vote_est) and _confirm_time_left(t0, deadline_s, n_2d))
                 all_agree = all_agree and verdict.fast_agrees
                 if verdict.replacement is not None:
                     settle(2, task, SolveResult("solved", answer=verdict.replacement, note=verdict.note),

@@ -428,3 +428,22 @@ def test_2d_runs_after_the_stage_and_its_estimate_is_held_back(tmp_path, monkeyp
     scheduler.run(tasks, 100000, client)
     assert order == ["confirm", "2d"]
     assert reserves == [pytest.approx(len(str({"verify": [{"func": "f"}]})) // 30 + config.VERIFY_MAX_TOKENS)]
+
+
+def test_search_answers_are_not_confirmed(tmp_path, monkeypatch):
+    """Live: a search vote costs ~1240 a task against ~150 for math and data, and changed nothing on either set."""
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42", "search_b": "Bob"})
+    tj = tasks / "search_b" / "task.json"
+    tj.write_text(tj.read_text(encoding="utf-8").replace('"math"', '"search"'), encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
+    scheduler.run(tasks, 100000, client)
+    assert {tid for tid, _, _ in seen} == {"math_a"} and config.CONFIRM_TYPES == ("math", "data_analysis")
+
+
+def test_no_vote_once_half_the_budget_is_spent(tmp_path, monkeypatch):
+    tasks, client = _setup(tmp_path, monkeypatch, {"math_a": "42"}, spent=50000)
+    seen = []
+    monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
+    scheduler.run(tasks, 100000, client)
+    assert seen == [] and _answers(tasks) == {"math_a": "42"}
