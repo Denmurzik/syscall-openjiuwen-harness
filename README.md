@@ -14,7 +14,7 @@
 ## Формат задач
 
 Каталог задач содержит каталоги вида `<task_id>/` (примеры организаторов лежат в `tests/fixtures/examples/`):
-- `task.json`: `task_id`, `task_type`, `instruction`, `reward` (баллы за задачу), `check` (`exact_int`, `exact_str` или `unittest`). В примерах есть ещё `expected`; в финальном наборе его не будет, харнесс его не читает.
+- `task.json`: `task_id`, `task_type`, `instruction`, `reward` (баллы за задачу), `check` (`exact_int`, `exact_str` или `unittest`). В примерах есть ещё `expected`; по FAQ от 7 ноября в финальном наборе его уберут; харнесс его не читает.
 - `workspace/` (если есть): для data_analysis `sales.csv`; для search папка `kb/` с markdown-файлами о людях и компаниях (поля Born, Employer, Mentor, Founded, Headquarters); для coding `mylib.py` и `test_mylib.py`. У math рабочего каталога нет.
 - Ответ — файл `answer.txt` рядом с `task.json`; для coding это слово `DONE`, а исправление записывается в `workspace/mylib.py`.
 
@@ -40,7 +40,7 @@ timeout -k 1000s 1h docker run --rm --name "run-${TEAM}" \
   /app/run_agent.py --tasks-dir /data/tasks
 ```
 
-`TEAM` — имя команды, `TASKS` — каталог с задачами на хосте, `OUT` — каталог на хосте (по ответам организаторов 2026-11-09, `OUT` устарел: считается `answer.txt`), `hack-net` — сеть, которую создаёт жюри. `docker build` выполняется из корня репозитория. В контейнер попадают только `LLM_BASE_URL`, `LLM_API_KEY` и `TASKS` как каталог `/data/tasks`; `BUDGET` и `OUT` не передаются, поэтому в прогоне жюри действует бюджет по умолчанию 100000 (ориентир из ответов организаторов: 100K), а результат — только `answer.txt` в каталоге каждой задачи. Код выхода всегда 0.
+`TEAM` — имя команды, `TASKS` — каталог с задачами на хосте, `OUT` — каталог на хосте (по ответам организаторов 2026-11-09 `OUT` устарел: считается `answer.txt`), `hack-net` — сеть, которую создаёт жюри. `docker build` выполняется из корня репозитория. В контейнер попадают только `LLM_BASE_URL`, `LLM_API_KEY` и `TASKS` как каталог `/data/tasks`; `BUDGET` и `OUT` не передаются, поэтому в прогоне жюри действует бюджет по умолчанию 100000 (по FAQ организаторов от 7 ноября: «ориентируйтесь на бюджет 100K», «BUDGET=100000»; в регламенте числа нет; если настоящий бюджет меньше, харнесс этого не узнает, и прокси перестанет отвечать раньше, чем его счётчик исчерпается — см. «Бюджет и защита от обрыва»), а результат — только `answer.txt` в каталоге каждой задачи, у которой есть ответ (требование регламента «создать answer.txt в каталоге каждой задачи» относится к ним; для невыполнимой задачи FAQ от 7 ноября говорит: «не создавайте файл»). Код выхода всегда 0, в том числе при пустом каталоге задач: тогда харнесс молча находит ноль задач.
 
 **Локальный запуск без Docker и без ключа** (Python 3.11+; работает только фаза 1):
 
@@ -51,19 +51,19 @@ HARNESS_LOG_DIR=/tmp/set/log python run_agent.py --tasks-dir /tmp/set/tasks
 python -m tools.evaluate --run /tmp/set --log /tmp/set/log/trajectory.jsonl
 ```
 
-**Локальный запуск в Docker с настоящим прокси** (те же флаги, что у жюри, плюс сеть, бюджет и каталог траекторий в примонтированном каталоге):
+**Локальный запуск в Docker с настоящим прокси** (сверху вниз; нужны Python 3.11+ и Docker). Адрес и ключ прокси выдают организаторы; их кладут в окружение хоста и никогда не коммитят:
 
 ```bash
+pip install -r requirements.txt                       # нужен для gen_tasks
+python -m tools.gen_tasks --out set --n 100 --seed 1  # сначала набор: создаёт set/tasks и set/hidden
+export LLM_BASE_URL=<адрес прокси>  LLM_API_KEY=<ключ>
 docker network create hack-net
 docker build -t hack:latest .
-docker run --rm --network hack-net -e LLM_BASE_URL -e LLM_API_KEY -e BUDGET=100000 \
-  -e HARNESS_LOG_DIR=/data/tasks/_harness_log \
-  -v "$PWD/set/tasks:/data/tasks:rw" --read-only --tmpfs /tmp:rw,size=2g -e HOME=/tmp \
-  --cap-drop ALL --security-opt no-new-privileges --cpus 8 --memory 16g --pids-limit 512 \
-  --workdir /app --entrypoint python hack:latest /app/run_agent.py --tasks-dir /data/tasks
+docker run --rm --network hack-net -e LLM_BASE_URL -e LLM_API_KEY -e BUDGET=100000   -e HARNESS_LOG_DIR=/data/tasks/_harness_log   -v "$PWD/set/tasks:/data/tasks:rw" --read-only --tmpfs /tmp:rw,size=2g -e HOME=/tmp   --cap-drop ALL --security-opt no-new-privileges --cpus 8 --memory 16g --pids-limit 512   --workdir /app --entrypoint python hack:latest /app/run_agent.py --tasks-dir /data/tasks
+python -m tools.evaluate --run set --log set/tasks/_harness_log/trajectory.jsonl
 ```
 
-(`python -m tools.gen_tasks --out set ...` создаёт `set/tasks`; затем `python -m tools.evaluate --run set --log set/tasks/_harness_log/trajectory.jsonl`. Предупреждение «skipping task dir _harness_log» в stderr безвредно.) `tests/chaos/fakeproxy.py` — подставной прокси для проверки без ключа (`python -m pytest -m chaos`).
+Если смонтированный каталог пуст, харнесс молча выходит с кодом 0. Предупреждение «skipping task dir _harness_log» в stderr безвредно. `tests/chaos/fakeproxy.py` — подставной прокси для проверки без ключа (`python -m pytest -m chaos`).
 
 Образ и сборка: `python:3.11.11-slim-bookworm`, зависимости закреплены в `requirements.txt` (`openjiuwen==0.1.19` и транзитивные версии, собрано под linux x86_64), при запуске ничего не скачивается. Локально собранный образ `hack:latest` весит 1,42 ГБ по `docker images` (лимит 4 ГБ), файлы репозитория занимают около 1 МБ (лимит 100 МБ).
 
@@ -128,7 +128,7 @@ docker run --rm --network hack-net -e LLM_BASE_URL -e LLM_API_KEY -e BUDGET=1000
 
 ## Невыполнимые задачи
 
-Задача невыполнима, если ответа нет при имеющихся данных (человека или компании нет в базе, деление на 0, нет колонки или файла, запрошена величина вне данных). Такой задаче `answer.txt` не создаётся: по ответам организаторов файл не создаётся, баллов за пропуск нет.
+Задача невыполнима, если ответа нет при имеющихся данных (человека или компании нет в базе, деление на 0, нет колонки или файла, запрошена величина вне данных). Такой задаче `answer.txt` не создаётся: так сказано в FAQ организаторов от 7 ноября («не создавайте файл»; за пропуск баллов нет).
 
 Кто и когда признаёт задачу невыполнимой:
 - Фаза 1 (0 токенов): по результату исполнения спецификации. Примеры: data-запрос про скидку, налог, прибыль и подобное при отсутствии такой колонки; неизвестная начальная сущность в search; деление на ноль в math.
@@ -136,7 +136,7 @@ docker run --rm --network hack-net -e LLM_BASE_URL -e LLM_API_KEY -e BUDGET=1000
 - 2a: окончательно принимается только `solved` и вердикты, не зависящие от разбора моделью (деление на ноль, отсутствие начальной сущности, дословно стоящей в инструкции). Остальные `infeasible` считаются `unparsed`, и задачу пробует 2b. Начальная сущность, совпадающая по словам ровно с одной страницей базы («Jonas Dubois» и «Jonas T. Dubois»), тоже считается нашей ошибкой разбора, а не отсутствием.
 - 2b и финальный REASON-проход: программа модели, напечатавшая последней строкой `IMPOSSIBLE`. Токены на вызов уже потрачены.
 
-Известное ограничение: часть невыполнимых задач получает ответ (в прогонах ниже 1 из 20 и 3 из 18), если разбор приводит их к осмысленному значению, например пустое среднее даёт `0`. Это осознанное приведение: такой ответ по регламенту просто не засчитывается.
+Известное ограничение: часть невыполнимых задач получает ответ (в прогонах ниже 1 из 20 и 3 из 18), если разбор приводит их к осмысленному значению, например пустое среднее даёт `0`. Это осознанное приведение: по регламенту неверно решённая задача не засчитывается; влияет ли ответ на невыполнимую задачу сверх этого, организаторы не сообщали (допущение команды).
 
 ## Траектории
 

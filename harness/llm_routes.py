@@ -222,7 +222,7 @@ async def solve_with_program(task: Task, client) -> SolveResult:
 
 async def solve_with_reason(task: Task, client) -> SolveResult:
     """One MODEL_REASON program, for the scheduler's last pass over what the cheap routes left open.
-    Only an answer of the right shape settles it; no verdict of its own is final."""
+    An answer of the right shape settles it as solved; a last line IMPOSSIBLE gives the verdict infeasible."""
     try:
         r = await client.chat(MODEL_REASON, _program_messages(task), 3000, reasoning_effort="low")
     except LLMUnavailable as e:
