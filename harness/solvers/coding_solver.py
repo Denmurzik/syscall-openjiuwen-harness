@@ -438,6 +438,9 @@ def _plain_test_file(tree: ast.Module, bound: set[str]) -> bool:
             for a in st.names:
                 if a.name == "*":
                     return False
+                if not (isinstance(st, ast.ImportFrom) and st.module == "mylib"
+                        or isinstance(st, ast.Import) and a.name in ("unittest", "mylib")):
+                    return False
                 nm = (a.asname or a.name).split(".")[0]
                 seen_names[nm] = seen_names.get(nm, 0) + 1
         elif isinstance(st, ast.If):
@@ -446,14 +449,38 @@ def _plain_test_file(tree: ast.Module, bound: set[str]) -> bool:
             if not (len(st.body) == 1 and isinstance(st.body[0], ast.Expr)
                     and ast.dump(st.body[0].value) == ast.dump(ast.parse("unittest.main()", mode="eval").body)):
                 return False
-        elif not isinstance(st, ast.ClassDef) and not (
-                isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant)):
+        elif isinstance(st, ast.ClassDef):
+            if not _plain_case(st) or st.name in guarded:
+                return False
+        elif not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant)):
             return False
     if seen_names.get("unittest") != 1 or any(seen_names.get(n, 0) != 1 for n in bound):
         return False
     if not any(isinstance(st, ast.Import) and any(a.name == "unittest" and a.asname is None for a in st.names)
                for st in tree.body):
         return False
+    for cls in [st for st in tree.body if isinstance(st, ast.ClassDef)]:
+        for fn in [x for x in cls.body if isinstance(x, ast.FunctionDef)]:
+            for st in fn.body:
+                if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
+                    continue
+                if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Call)
+                        and isinstance(st.value.func, ast.Attribute)
+                        and isinstance(st.value.func.value, ast.Name) and st.value.func.value.id == "self"
+                        and st.value.func.attr.startswith("assert")):
+                    return False
+            # the generator's class tests: (lambda s: (s.push(1), s.pop()))(m.Stack())
+            params = {a.arg for n in ast.walk(fn) if isinstance(n, ast.Lambda) for a in n.args.args}
+            for n in ast.walk(fn):
+                if isinstance(n, (ast.Yield, ast.YieldFrom, ast.Await)):
+                    return False
+                if isinstance(n, ast.Attribute):
+                    v = n.value
+                    if isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute)                             and isinstance(v.func.value, ast.Name) and v.func.value.id in bound:
+                        v = v.func.value   # m.Interval(1, 2).length(): a fresh mylib object
+                    base = v.id if isinstance(v, ast.Name) else None
+                    if n.attr.startswith("_") or (base != "self" and base not in bound | params)                             or (base == "self" and not n.attr.startswith("assert")):
+                        return False
     top_imports = {id(st) for st in tree.body if isinstance(st, (ast.Import, ast.ImportFrom))}
     for n in ast.walk(tree):
         if isinstance(n, (ast.Import, ast.ImportFrom)) and id(n) not in top_imports:
@@ -505,6 +532,16 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
         return False
     if not _plain_test_file(tree, aliases | names):
         return False
+    for node in ast.walk(lib):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            return False
+        if isinstance(node, ast.Name) and node.id in {"globals", "locals", "vars", "exec", "eval", "setattr",
+                                                      "delattr", "__import__", "sys", "importlib", "builtins"}:
+            return False
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            mods = [getattr(node, "module", None) or ""] + [a.name for a in node.names]
+            if any(x.split(".")[0] in ("mylib", "sys", "importlib", "builtins") for x in mods):
+                return False
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in _PATCHY:
             return False

@@ -564,3 +564,9 @@ def test_pow_mutants_only_for_small_constant_multipliers():
     assert not any("**" in m for m in mutants("def f(x):\n    return x * 4"))
     assert not any("**" in m for m in mutants("def f(x):\n    return x + 2"))
     assert any("x ** 3" in m for m in mutants("def f(x):\n    return x * 3"))
+
+
+def test_rank_power_right_fix_is_offered(tmp_path):
+    buggy = "def power(b, e):\n    r = 1\n    for _ in range(e):\n        r += b\n    return r\n"
+    t, r = _solve_case(tmp_path, buggy, "power(2, 3)", "8")
+    assert r.tentative and any("r *= b" in c for c in r.extra["ambiguous"][0]["candidates"])
