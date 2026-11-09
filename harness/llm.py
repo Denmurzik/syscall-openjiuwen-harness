@@ -282,10 +282,16 @@ class LLMClient:
             logger.warning("model ids taken from the proxy's listing: %s", self._model_ids)
         return changed
 
-    def _proxy_ok(self, model: str) -> None:
-        """A real answer. A ping never gets here: passing one says nothing of real work."""
+    def _proxy_ok(self, model: str, base: str | None = None) -> None:
+        """A real answer from `base`. A ping never gets here: passing one says nothing of real work."""
         self._served += 1
-        self._base_orig = None  # an address that answers is the right one
+        if self._base_orig is not None and base is not None:  # the other spelling is on trial
+            if base == self._base_orig:  # the original answers: the trial was a misfire
+                self.base_url, self._base_orig = base, None
+                self._models.clear()
+                self._fix_gen += 1
+            elif base == self.base_url:
+                self._base_orig = None  # the trial address answers: it is the right one
         self._down_since = None
         self._health[model] = _ModelHealth()
 
@@ -384,6 +390,7 @@ class LLMClient:
     async def _chat(self, model, messages, max_tokens, extra) -> ChatResult:
         try:
             m = self._model(model)
+            m_base = self.base_url
         except Exception as exc:  # not the unit's fault: the task must stay open for the routes and the retry pass
             msg = f"{type(exc).__name__}: {exc}"[:300]
             record_call(model, 0, 0, 0.0, error=msg[:100])
@@ -455,11 +462,12 @@ class LLMClient:
                     if status in (400, 404) and recovered < 2 and await self._fix_endpoint(model, status, msg, gen):
                         recovered += 1
                         m = self._model(model)
+                        m_base = self.base_url
                         gen = self._fix_gen
                         continue
                     raise LLMUnavailable(msg) from exc
             else:
-                self._proxy_ok(model)
+                self._proxy_ok(model, m_base)
                 if stripped:
                     self.structured_ok = False
                 return self._account(model, messages, limit, r, limit < max_tokens)

@@ -143,3 +143,28 @@ def test_ids_match_without_regard_to_case(make):
     c, _ = make(p)
     ask(c, MODEL_FAST, 1)
     assert p.bodies[0]["model"] == ids[0]
+
+
+def test_success_on_the_original_url_during_a_trial_restores_it(make):
+    """Review N1: a request already in flight to the original URL must not confirm the trial URL."""
+    p = Proxy()
+    c, _ = make(p)
+    orig = c.base_url
+
+    async def go():
+        assert await c._fix_endpoint(MODEL_FAST, 404, "404 Not Found", c._fix_gen) is True
+        assert c.base_url != orig
+        c._proxy_ok(MODEL_ALT, orig)
+        return [await c.chat(MODEL_FAST, MSG, 50) for _ in range(2)]
+    assert len(asyncio.run(go())) == 2
+    assert c.base_url == orig and c._base_orig is None
+
+
+def test_success_on_the_trial_url_confirms_it(make):
+    p = Proxy()
+    c, _ = make(p, base=p.root_url)
+
+    async def go():
+        return [await c.chat(MODEL_FAST, MSG, 50) for _ in range(3)]
+    asyncio.run(go())
+    assert c.base_url == p.base_url and c._base_orig is None and len(p.misses) == 1
