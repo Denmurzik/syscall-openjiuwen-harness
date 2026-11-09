@@ -514,7 +514,7 @@ def test_arbitration_llm_unavailable_keeps_tentative_answer(tmp_path, monkeypatc
     assert (d / "answer.txt").read_text() == "DONE\n" and counts["solved"] == 1
 
 
-def test_phase2_infeasible_withdraws_best_guess(tmp_path, monkeypatch):
+def test_phase2_model_infeasible_keeps_best_guess(tmp_path, monkeypatch):
     tasks = tmp_path / "tasks"
     d = _make(tasks, "s1", "search", "q one?")
 
@@ -523,6 +523,23 @@ def test_phase2_infeasible_withdraws_best_guess(tmp_path, monkeypatch):
 
     async def prog(task, client):
         return SolveResult("infeasible", note="program printed IMPOSSIBLE")
+
+    monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    counts = scheduler.run(tasks, 100000, object())
+    assert (d / "answer.txt").exists() and counts["solved"] == 1
+
+
+def test_phase2_model_independent_infeasible_withdraws_best_guess(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _make(tasks, "s1", "search", "q one?")
+
+    async def grp(ttype, template, members, client):
+        return {t.task_id: SolveResult("unparsed") for t, _ in members}
+
+    async def prog(task, client):
+        return SolveResult("infeasible", note="start entity not found: X")
 
     monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
     monkeypatch.setattr(scheduler, "solve_group", grp)
@@ -736,7 +753,7 @@ def test_guess_never_overwrites_a_final_answer(tmp_path, monkeypatch):
     assert (d / "answer.txt").read_text() == "FINAL\n"
 
 
-def test_written_guess_is_removed_by_phase_2_infeasible_and_stays_until_then(tmp_path, monkeypatch):
+def test_written_guess_stays_after_phase_2_model_infeasible(tmp_path, monkeypatch):
     tasks = tmp_path / "tasks"
     d = _make(tasks, "s1", "search", "q one?")
     seen = {}
@@ -753,7 +770,7 @@ def test_written_guess_is_removed_by_phase_2_infeasible_and_stays_until_then(tmp
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     counts = scheduler.run(tasks, 100000, object())
     assert seen["before"] is True
-    assert not (d / "answer.txt").exists() and counts["infeasible"] == 1
+    assert (d / "answer.txt").exists() and counts["solved"] == 1
 
 
 def test_preexisting_answer_file_is_not_replaced_by_a_guess(tmp_path, monkeypatch):

@@ -305,8 +305,10 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
                     tentative.pop(task.task_id, None)
             elif prior_tentative and phase >= 2:
                 st = "solved"   # a failed later attempt never takes back a written answer
+            elif res.status == "infeasible" and phase >= 2 and not any(m in (res.note or "") for m in _MODEL_INDEPENDENT):
+                pass   # the model's IMPOSSIBLE is often wrong and a wrong answer costs nothing: the guess stays
             elif res.status == "infeasible" and phase >= 2:
-                guesses.pop(task.task_id, None)   # a phase-2 verdict withdraws the stored guess
+                guesses.pop(task.task_id, None)   # a model-independent verdict withdraws the stored guess
                 if task.task_id in written:       # ... and the one on disk
                     written.discard(task.task_id)
                     try:
