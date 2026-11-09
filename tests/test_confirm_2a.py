@@ -450,3 +450,137 @@ def test_no_vote_once_half_the_budget_is_spent(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "confirm_program", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}, seen))
     scheduler.run(tasks, 100000, client)
     assert seen == [] and _answers(tasks) == {"math_a": "42"}
+
+
+# ---------------------------------------------------------------- fix round 1: real program votes on a fake client
+
+class _CodeClient:
+    """Every call answers with `codes[model]` (one program per model); `answered` maps a requested model to the
+    model that really answers (a fallback), `failing` models raise ModelFailing."""
+
+    def __init__(self, codes, failing=()):
+        self.codes, self.failing, self.models = codes, set(failing), []
+
+    async def chat(self, model, messages, max_tokens, **extra):
+        from harness.llm import ChatResult, ModelFailing
+        if model in self.failing:
+            record_call(model, 0, 0, 0.0, error="failing")
+            raise ModelFailing("down")
+        self.models.append(model)
+        record_call(model, 10, 10, 11)
+        return ChatResult(text=self.codes[model], prompt_tokens=10, completion_tokens=10, cost=11)
+
+
+def _vote_real(task, answer_2a, client):
+    from harness import llm_routes
+
+    async def go():
+        CALLS.set([])
+        return await confirm.confirm(task, answer_2a, client, llm_routes.solve_with_program, lambda: True)
+    return asyncio.run(go())
+
+
+SALES = "tests/fixtures/confirm_v1live_sales.csv"
+_HEAD = "The file sales.csv has columns order_id,region,product,month,units,price (300 rows). "
+
+
+def _sales_task(tmp_path, tid, question, check):
+    from pathlib import Path
+    t = _task(tmp_path, tid=tid, ttype="data_analysis", check=check, instruction=_HEAD + question)
+    (t.workspace / "sales.csv").write_bytes((Path(__file__).parent.parent / SALES).read_bytes())
+    return t
+
+
+def test_p2_a_fractional_print_is_no_vote_for_exact_int(tmp_path):
+    t = _task(tmp_path, instruction="63 apples are shared equally among 5 baskets. "
+                                    "How many whole apples go into each basket?")
+    code = "apples = 63\nbaskets = 5\nprint(apples / baskets)"
+    v = _vote_real(t, "12", _CodeClient({config.MODEL_FAST: code, config.MODEL_ALT: code}))
+    assert v.replacement is None and "did not count" in v.note
+
+
+def test_an_integral_float_print_is_a_vote(tmp_path):
+    t = _task(tmp_path, instruction="63 apples are shared equally among 5 baskets. How many go into each basket?")
+    code = "print(float(63 // 5) + 1)"   # 13.0
+    v = _vote_real(t, "12", _CodeClient({config.MODEL_FAST: code, config.MODEL_ALT: code}))
+    assert v.replacement == "13"
+
+
+def test_p1_float_noise_is_no_disagreement(tmp_path):
+    csv = "order_id,region,product,month,units,price\n1,east,gizmo,1,1,0.1\n2,east,gizmo,1,1,0.2\n"
+    t = _task(tmp_path, tid="data_1", ttype="data_analysis", check="exact_str",
+              instruction="The file sales.csv has columns order_id,region,product,month,units,price (2 rows). "
+                          "What is the total revenue?")
+    (t.workspace / "sales.csv").write_text(csv, encoding="utf-8")
+    code = ("import csv\nrows=list(csv.DictReader(open('sales.csv')))\n"
+            "print(sum(int(r['units'])*float(r['price']) for r in rows))")
+    c = _CodeClient({config.MODEL_FAST: code, config.MODEL_ALT: code})
+    v = _vote_real(t, "0.3", c)
+    assert v.replacement is None and v.fast_agrees and c.models == [config.MODEL_FAST]
+
+
+def test_a_real_difference_at_2a_precision_still_shows(tmp_path):
+    t = _task(tmp_path, tid="data_1", ttype="data_analysis", check="exact_str",
+              instruction="What is the total revenue?")
+    code = "print(142.5649999)"   # 142.56 at 2a's two places
+    v = _vote_real(t, "142.55", _CodeClient({config.MODEL_FAST: code, config.MODEL_ALT: code}))
+    assert v.replacement == "142.56"
+
+
+def test_replacement_is_written_at_2a_precision(tmp_path):
+    t = _task(tmp_path, tid="data_1", ttype="data_analysis", check="exact_str",
+              instruction="What is the total revenue?")
+    code = "print(1.1 + 2.2)"   # 3.3000000000000003
+    v = _vote_real(t, "2.5", _CodeClient({config.MODEL_FAST: code, config.MODEL_ALT: code}))
+    assert v.replacement == "3.3"
+
+
+def test_p4_a_vote_that_fell_back_to_the_fast_weights_does_not_count(tmp_path):
+    """ALT and FAST failing during the ALT vote: chat_or_alt reaches MODEL_REASON, the FAST weights with reasoning."""
+    from harness import llm_routes
+    t = _task(tmp_path)
+
+    class Client(_CodeClient):
+        async def chat(self, model, messages, max_tokens, **extra):
+            if self.models:   # from the second call on, the ALT vote: ALT and FAST are failing
+                self.failing = {config.MODEL_ALT, config.MODEL_FAST}
+            return await super().chat(model, messages, max_tokens, **extra)
+    code = "print(3 + 4)"
+    c = Client({config.MODEL_FAST: code, config.MODEL_ALT: code, config.MODEL_REASON: code})
+
+    async def go():
+        CALLS.set([])
+        return await confirm.confirm(t, "42", c, llm_routes.solve_with_program, lambda: True)
+    v = asyncio.run(go())
+    assert c.models == [config.MODEL_FAST, config.MODEL_REASON]
+    assert v.replacement is None and "independent" in v.note
+
+
+def test_model_families():
+    assert confirm.family(config.MODEL_FAST) == confirm.family(config.MODEL_REASON)
+    assert confirm.family(config.MODEL_ALT) != confirm.family(config.MODEL_FAST)
+
+
+def test_gate_fix_9020_round_down_still_replaced(tmp_path):
+    """v1live data_analysis_9020: 2a rounded 24.99 half-up to 25; both votes floored to 24 (the expected answer)."""
+    t = _sales_task(tmp_path, "data_analysis_9020",
+                    "What is the average number of units per order for product 'gadget'? Round down to an integer.",
+                    "exact_int")
+    fast = ("import csv\nrows = [r for r in csv.DictReader(open('sales.csv')) if r['product'] == 'gadget']\n"
+            "units = [int(r['units']) for r in rows]\nprint(sum(units) // len(units))")
+    alt = ("import csv, math\nwith open('sales.csv') as f:\n    u = [int(r['units']) for r in csv.DictReader(f) "
+           "if r['product'] == 'gadget']\nprint(math.floor(sum(u) / len(u)))")
+    v = _vote_real(t, "25", _CodeClient({config.MODEL_FAST: fast, config.MODEL_ALT: alt}))
+    assert v.replacement == "24"
+
+
+def test_gate_fix_9007_lowest_region_still_replaced(tmp_path):
+    """v1live data_analysis_9007: 2a answered the highest-revenue region; both votes found the lowest (west)."""
+    t = _sales_task(tmp_path, "data_analysis_9007", "Which region had the lowest total revenue?", "exact_str")
+    fast = ("import csv\nfrom collections import defaultdict\nrev = defaultdict(float)\n"
+            "for r in csv.DictReader(open('sales.csv')):\n    rev[r['region']] += int(r['units']) * float(r['price'])\n"
+            "print(min(rev, key=rev.get))")
+    alt = ("import pandas as pd\ndf = pd.read_csv('sales.csv')\ndf['rev'] = df['units'] * df['price']\n"
+           "print(df.groupby('region')['rev'].sum().idxmin())")
+    v = _vote_real(t, "east", _CodeClient({config.MODEL_FAST: fast, config.MODEL_ALT: alt}))
+    assert v.replacement == "west"
