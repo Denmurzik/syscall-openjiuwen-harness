@@ -325,13 +325,20 @@ def _is_container_repr(answer: str) -> bool:
         return False
 
 
-def _kb_placeholder(res) -> bool:
-    """The program ran and its last line is None / unknown / n/a: it looked a page or field up with .get and found
-    nothing (normalize_answer drops such a line for a number question, so the raw output is read)."""
+def _is_placeholder(text: str) -> bool:
+    return text.strip().strip("'\"").strip().casefold().rstrip(".") in _PLACEHOLDERS
+
+
+def _kb_placeholder(res, answer: str | None) -> str | None:
+    """The program ran and printed None / unknown / n/a (raw last line or normalized answer: normalize_answer drops
+    such a line for a number question, and strips "Answer:"). "clean": it is the only output line, the lookup found
+    nothing. "mixed": other lines precede it (print(main()) after a real answer): the normal retry decides."""
     if res.returncode != 0 or res.timed_out:
-        return False
+        return None
     lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
-    return bool(lines) and lines[-1].casefold().rstrip(".") in _PLACEHOLDERS
+    if not lines or not (_is_placeholder(lines[-1]) or (answer is not None and _is_placeholder(answer))):
+        return None
+    return "clean" if len(lines) == 1 else "mixed"
 
 
 async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_model: str = MODEL_ALT) -> SolveResult:
@@ -372,11 +379,12 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
         if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
             return SolveResult("infeasible", note="program printed IMPOSSIBLE")
         answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
-        if use_kb and _kb_placeholder(res):  # same as KbMissing, also when the shape check would only guess
+        ph = _kb_placeholder(res, answer) if use_kb else None
+        if ph == "clean":  # same as KbMissing, also when the shape check would only guess
             return SolveResult("unparsed", note="kb page or field not found")
-        container = use_kb and answer is not None and _is_container_repr(answer)
+        container = use_kb and (ph == "mixed" or (answer is not None and _is_container_repr(answer)))
         if container:
-            answer = None  # a whole page is never the answer and never a best guess
+            answer = None  # a whole page or a trailing None is never the answer and never a best guess
         if answer is not None:
             bad = mismatch(task, answer)
             if bad is None:
@@ -393,7 +401,7 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             why = "timed out" if res.timed_out else (
                 f"exit code {res.returncode}" if res.returncode != 0 else "no usable answer printed")
             if container:
-                why = "it printed a whole page or list"
+                why = "it printed a placeholder after other output" if ph == "mixed" else "it printed a whole page or list"
             note = f"program {why}"
             feedback = (f"Your program failed ({why}).\nstderr:\n{res.stderr[-FEEDBACK_LIMIT // 2:]}\n"
                         f"stdout:\n{res.stdout[-FEEDBACK_LIMIT // 2:]}")
@@ -476,8 +484,11 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
     if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
         return SolveResult("infeasible", note="reason program printed IMPOSSIBLE")
     answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
-    if use_kb and _kb_placeholder(res):
+    ph = _kb_placeholder(res, answer) if use_kb else None
+    if ph == "clean":
         return SolveResult("unparsed", note="kb page or field not found")
+    if ph == "mixed":
+        return SolveResult("unparsed", note="reason program printed a placeholder after other output")
     if answer is not None and use_kb and _is_container_repr(answer):
         return SolveResult("unparsed", note="reason program printed a whole page or list")
     if answer is None:

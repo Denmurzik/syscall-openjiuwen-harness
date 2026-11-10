@@ -821,3 +821,27 @@ def test_search_traceback_line_is_the_models_second_check(tmp_path):
     t = _kb_task(tmp_path)
     res = run_program(kb_program("x = 1\nprint(1/0)"), t.workspace)
     assert res.returncode != 0 and 'line 2, in <module>' in res.stderr
+
+
+def test_search_placeholder_with_prefix_or_quotes_is_not_found(tmp_path):
+    for i, prog in enumerate(["print('Answer:', kb.get('Nobody', {}).get('Employer'))",
+                              "print(repr(str(kb.get('Nobody', {}).get('Employer'))))"]):
+        t = _kb_task(tmp_path / str(i))
+        c = FakeClient([prog, prog])
+        r = run(solve_with_program(t, c))
+        assert r.status == "unparsed" and "not found" in r.note and not r.extra and len(c.calls) == 1
+        r = run(solve_with_reason(t, FakeClient([prog])))
+        assert r.status == "unparsed" and "not found" in r.note and not r.extra
+
+
+def test_search_placeholder_after_other_output_retries(tmp_path):
+    first = "def main():\n    print(kb['C D']['Born'])\nprint(main())"
+    c = FakeClient([first, "print(kb['C D']['Born'])"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1951" and len(c.calls) == 2
+    assert "only the one requested value" in c.calls[1]["messages"][-1]["content"]
+    c = FakeClient([first, first])
+    r = run(solve_with_program(_kb_task(tmp_path / "b"), c))
+    assert r.status == "unparsed" and not r.extra and len(c.calls) == 2
+    r = run(solve_with_reason(_kb_task(tmp_path / "c"), FakeClient([first])))
+    assert r.status == "unparsed" and not r.extra and len(c.calls) == 2
