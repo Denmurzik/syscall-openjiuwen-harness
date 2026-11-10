@@ -103,8 +103,10 @@ CONFIRM_2A = True
 CONFIRM_TYPES = ("data_analysis",)
 # math (round 10, task 56): one MODEL_REASON answer is the vote (expert pass 3: 20 of 20 right, among them the 14
 # hardest rounding chains of llm8 and the 3 new-meaning questions the FAST program got wrong, and 82920 on math_0008
-# where the two programs said 82908). 2a's answer changes only when a FAST program sides with REASON against it. The
-# same model answers in 2b a math task that 2a declined. A type in CONFIRM_TYPES keeps the two-program vote
+# where the two programs said 82908). 2a's answer changes only when a FAST program and then a MODEL_ALT program
+# side with REASON against it: REASON and FAST are one set of weights and share readings (llm8 math_0076: both said
+# 7978 against a right 9846). The same model answers in 2b a math task that 2a declined. A type in CONFIRM_TYPES
+# keeps the two-program vote
 CONFIRM_REASON_TYPES = ("math",)
 REASON_MATH = True  # default of HARNESS_REASON_MATH; 0 is round 9 (no REASON in 2b math, no math votes)
 CONFIRM_SPEND_LIMIT = 0.5  # no new vote once this share of the budget is spent (as the final REASON pass)

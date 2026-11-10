@@ -9,7 +9,7 @@ compare at 2a's precision. Without a majority
 2a stays.
 
 math (round 10, task 56, `confirm_reason`): the second vote is MODEL_REASON's own answer and the third a MODEL_FAST
-program; 2a's answer is replaced only when those two agree.
+program; 2a's answer is replaced only when those two agree and a MODEL_ALT program (other weights) sides with them.
 """
 import logging
 import re
@@ -162,7 +162,12 @@ async def confirm(task, answer: str, client, program, can_afford) -> Verdict:
 async def confirm_reason(task, answer: str, client, reason, program, can_afford) -> Verdict:
     """math (round 10, task 56): `reason(task, client)` is the MODEL_REASON route; it never sees 2a's answer. It
     agrees: 2a kept. It differs: a MODEL_FAST program (`program`, as in `confirm`) is the third vote, and 2a's answer
-    is replaced only when that program gives REASON's answer. One REASON answer alone never changes 2a."""
+    is replaced only when that program gives REASON's answer and then a MODEL_ALT program gives it too. One REASON
+    answer alone never changes 2a.
+
+    MODEL_REASON and MODEL_FAST are one set of weights (`family`), so their agreement can be one reading of the text:
+    on llm8 math_0076 both read "2 deliveries of 467 boxes each" as outgoing, every time, and said 7978 against 2a's
+    right 9846; MODEL_ALT never did (9846, 8879, 9845). The fourth vote is that other reading."""
     from harness.llm import BudgetExhausted
     try:
         res = await reason(task, client)
@@ -181,13 +186,26 @@ async def confirm_reason(task, answer: str, client, reason, program, can_afford)
         return Verdict(None, f"confirm: reason {vote!r} differs, no budget for the third vote, 2a kept", False)
     calls = CALLS.get()
     start = len(calls) if calls is not None else 0
-    third, _ = await _vote(program, task, client, config.MODEL_FAST, answer)
+    third, third_models = await _vote(program, task, client, config.MODEL_FAST, answer)
     if third is not None and any(c.get("model") == config.MODEL_REASON and not c.get("error")
                                  for c in (calls[start:] if calls is not None else [])):
         # the FAST program fell through to MODEL_REASON (FAST failing): the same model twice is one vote
         return Verdict(None, f"confirm: reason {vote!r} differs, third vote answered by {config.MODEL_REASON}, "
                        "2a kept", False)
-    if third is not None and same_answer(third, vote):
-        return Verdict(vote, f"confirm: reason and fast program agree on {vote!r} against 2a {answer!r}", False)
-    return Verdict(None, f"confirm: reason {vote!r} differs, fast program {third!r} does not side with it, 2a kept",
-                   False)
+    if third is None or not same_answer(third, vote):
+        return Verdict(None, f"confirm: reason {vote!r} differs, fast program {third!r} does not side with it, "
+                       "2a kept", False)
+    if not can_afford():
+        return Verdict(None, f"confirm: reason and fast program say {vote!r}, no budget for the alt vote, 2a kept",
+                       False)
+    alt, alt_models = await _vote(program, task, client, config.MODEL_ALT, answer)
+    if alt is None:
+        return Verdict(None, f"confirm: reason and fast program say {vote!r}, alt vote did not count, 2a kept", False)
+    if alt_models & (third_models | {family(config.MODEL_REASON)}):
+        # ALT failing fell through to the weights that already voted: no other reading
+        return Verdict(None, f"confirm: reason and fast program say {vote!r}, alt vote not independent "
+                       f"({sorted(alt_models)}), 2a kept", False)
+    if not same_answer(alt, vote):
+        return Verdict(None, f"confirm: reason and fast program say {vote!r}, alt {alt!r} does not side with them, "
+                       "2a kept", False)
+    return Verdict(vote, f"confirm: reason, fast and alt programs agree on {vote!r} against 2a {answer!r}", False)

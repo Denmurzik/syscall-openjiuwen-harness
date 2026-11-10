@@ -130,7 +130,7 @@ def test_flag_off_is_round_9_call_for_call(tmp_path, monkeypatch):
 def test_flag_on_reason_answers_math_in_2b_and_votes_on_2a_math(tmp_path, monkeypatch):
     reason_answers = {"math_u": SolveResult("solved", "6"),
                       "math_v": SolveResult("infeasible", note="reason program printed IMPOSSIBLE"),
-                      "math_a": SolveResult("solved", "7"),      # the FAST program sides with it: replaced
+                      "math_a": SolveResult("solved", "7"),      # the FAST and ALT programs side with it: replaced
                       "math_b": SolveResult("solved", "11"),     # the FAST program says 2a's 10: kept
                       "math_g0": SolveResult("solved", "9"), "math_g1": SolveResult("solved", "9")}
     tasks, client, seq = _scenario(tmp_path, monkeypatch, reason_answers=reason_answers)
@@ -142,7 +142,7 @@ def test_flag_on_reason_answers_math_in_2b_and_votes_on_2a_math(tmp_path, monkey
         ("reason", "search_s"),                             # the final pass skips the math tasks REASON answered
         ("vote", "data_d", config.MODEL_FAST), ("vote", "data_d", config.MODEL_ALT),   # data first, as in round 9
         ("reason", "math_g0"), ("reason", "math_g1"),       # the group's two best-paid agree: math_g2 is not asked
-        ("reason", "math_a"), ("vote", "math_a", config.MODEL_FAST),
+        ("reason", "math_a"), ("vote", "math_a", config.MODEL_FAST), ("vote", "math_a", config.MODEL_ALT),
         ("reason", "math_b"), ("vote", "math_b", config.MODEL_FAST),
     ]
     assert _answers(tasks) == {**_ROUND9_ANSWERS, "math_u": "6", "math_a": "7"}
@@ -223,9 +223,11 @@ def _confirm_reason(tmp_path, answer_2a, reason_answer, program_answer, afford=T
     async def program(task, client, model=None, shape_model=None):
         calls.append(("program", model, shape_model))
         log = CALLS.get()
+        served = program_model.get(model, model) if isinstance(program_model, dict) else (program_model or model)
         if log is not None:
-            log.append({"model": program_model or model, "cost": 1})
-        return SolveResult("solved", program_answer, extra={"stdout": program_answer + "\n"})
+            log.append({"model": served, "cost": 1})
+        a = program_answer.get(model, "5") if isinstance(program_answer, dict) else program_answer
+        return SolveResult("solved", a, extra={"stdout": a + "\n"})
 
     async def go():
         CALLS.set([])
@@ -238,10 +240,23 @@ def test_reason_agrees_and_no_third_vote_is_bought(tmp_path):
     assert v.replacement is None and v.fast_agrees and calls == ["reason"]
 
 
-def test_reason_and_program_together_replace_2a(tmp_path):
+def test_reason_fast_and_alt_together_replace_2a(tmp_path):
     v, calls = _confirm_reason(tmp_path, "1184", "1204", "1204")
     assert v.replacement == "1204" and not v.fast_agrees
-    assert calls == ["reason", ("program", config.MODEL_FAST, config.MODEL_FAST)]
+    assert calls == ["reason", ("program", config.MODEL_FAST, config.MODEL_FAST),
+                     ("program", config.MODEL_ALT, config.MODEL_ALT)]
+
+
+def test_reason_and_fast_alone_never_replace_2a(tmp_path):
+    # llm8 math_0076 live: REASON and the FAST program (one set of weights) both read "2 deliveries of 467" as
+    # outgoing, 7978 against 2a's right 9846; the ALT program did not side with them
+    v, calls = _confirm_reason(tmp_path, "9846", "7978", {config.MODEL_FAST: "7978", config.MODEL_ALT: "9846"})
+    assert v.replacement is None and "alt '9846' does not side" in v.note and len(calls) == 3
+    v, _ = _confirm_reason(tmp_path, "9846", "7978", {config.MODEL_FAST: "7978", config.MODEL_ALT: "8879"})
+    assert v.replacement is None
+    # ALT failing fell through to FAST's weights: no other reading
+    v, _ = _confirm_reason(tmp_path, "9846", "7978", "7978", program_model={config.MODEL_ALT: config.MODEL_FAST})
+    assert v.replacement is None and "not independent" in v.note
 
 
 def test_reason_alone_never_replaces_2a(tmp_path):
@@ -273,4 +288,4 @@ def test_a_third_vote_answered_by_reason_itself_does_not_count(tmp_path):
     v, _ = _confirm_reason(tmp_path, "1184", "1204", "1204", program_model=config.MODEL_REASON)
     assert v.replacement is None and "third vote answered by" in v.note
     v, _ = _confirm_reason(tmp_path, "1184", "1204", "1204", program_model=config.MODEL_ALT)
-    assert v.replacement == "1204"
+    assert v.replacement is None and "not independent" in v.note   # FAST fell through to ALT: ALT voted twice
