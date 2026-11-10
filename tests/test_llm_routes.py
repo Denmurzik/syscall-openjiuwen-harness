@@ -675,3 +675,57 @@ def test_bare_name(tmp_path, reply, ok):
     from harness.llm_routes import bare_answer
     got = bare_answer(reply, _name_task(tmp_path))
     assert (got == reply) if ok else got is None
+
+
+def _kb_task(tmp_path, with_kb=True):
+    t = _task(tmp_path, check="exact_str", ttype="search")
+    if with_kb:
+        kb = t.workspace / "kb"
+        kb.mkdir()
+        (kb / "person_a_b.md").write_text("# A B\n\nBorn: 1980\nEmployer: Iris Optics\nMentor: C D\n", encoding="utf-8")
+        (kb / "person_c_d.md").write_text("# C D\n\nBorn: 1951\nEmployer: Zenith\n", encoding="utf-8")
+        (kb / "company_iris_optics.md").write_text("# Iris Optics\n\nHeadquarters: Brno\nFounded: 1992\n", encoding="utf-8")
+    return t
+
+
+def test_search_program_uses_kb_dict_and_own_prompt(tmp_path):
+    c = FakeClient(["print(kb[kb['A B']['Mentor']]['Born'])"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1951"
+    sysmsg, user = c.calls[0]["messages"][0]["content"], c.calls[0]["messages"][1]["content"]
+    assert "dict `kb`" in sysmsg
+    assert "kb has 3 pages" in user and "kb['A B'] ==" in user and "kb['Iris Optics'] ==" in user
+    assert "person_a_b.md" not in user
+    assert c.calls[0]["max_tokens"] == config.PROGRAM_MAX_TOKENS
+
+
+def test_search_kb_keyerror_is_unparsed_without_retry(tmp_path):
+    c = FakeClient(["print(kb['Nobody']['Born'])", "print(1)"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "unparsed" and "not found" in r.note
+    assert len(c.calls) == 1
+
+
+def test_search_other_exception_still_retries(tmp_path):
+    c = FakeClient(["print(1/0)", "print(kb['C D']['Born'])"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1951" and len(c.calls) == 2
+
+
+def test_search_preamble_survives_empty_kb(tmp_path):
+    t = _kb_task(tmp_path, with_kb=False)
+    (t.workspace / "kb").mkdir()
+    r = run(solve_with_program(t, FakeClient(["print(len(kb))\nprint('IMPOSSIBLE' if not kb else 'x')"])))
+    assert r.status == "infeasible"
+
+
+def test_search_without_kb_dir_keeps_generic_prompt(tmp_path):
+    c = FakeClient(["print('IMPOSSIBLE')"])
+    run(solve_with_program(_kb_task(tmp_path, with_kb=False), c))
+    assert "dict `kb`" not in c.calls[0]["messages"][0]["content"]
+
+
+def test_non_search_program_has_no_preamble(tmp_path):
+    c = FakeClient(["print('kb' in globals())"])
+    r = run(solve_with_program(_task(tmp_path, check=None), c))
+    assert r.answer in ("False",) or r.status != "solved"

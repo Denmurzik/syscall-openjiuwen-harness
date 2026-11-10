@@ -30,6 +30,33 @@ PROGRAM_SYSTEM = ("Write a Python 3 program that prints only the final answer to
                   "The program must compute the answer itself from the values in the task, one statement per "
                   "sentence of the task, in the order of the text: never print a number you worked out in your head. "
                   "Output only code, no explanations, no markdown.")
+SEARCH_SYSTEM = ("Write a short Python 3 program that prints only the final answer to stdout. "
+                 "The knowledge base is ALREADY loaded into the dict `kb` (page title -> {field: value}, all values "
+                 "are strings): do not open files, do not define parsers, use `kb` directly, a few lines. "
+                 "A field that names a person or company is the title of that page: follow it with kb[...]. "
+                 "If a page or field the question needs is missing, print IMPOSSIBLE. "
+                 "Never write answer.txt or any file: the task text mentions answer.txt, ignore that, "
+                 "the answer is read from the program's output. "
+                 "Output only code, no comments, no markdown.")
+# prepended by the harness to the model's search program; never crashes on a missing or empty kb/
+
+KB_PREAMBLE = (
+    "import os\n"
+    "kb = {}\n"
+    "for _f in (sorted(os.listdir('kb')) if os.path.isdir('kb') else []):\n"
+    "    _name, _d = None, {}\n"
+    "    try:\n"
+    "        _text = open(os.path.join('kb', _f), encoding='utf-8', errors='replace').read()\n"
+    "    except OSError:\n"
+    "        continue\n"
+    "    for _ln in _text.splitlines():\n"
+    "        if _ln.startswith('#') and _name is None:\n"
+    "            _name = _ln.lstrip('#').strip()\n"
+    "        elif ':' in _ln:\n"
+    "            _k, _v = _ln.split(':', 1)\n"
+    "            _d[_k.strip()] = _v.strip()\n"
+    "    if _name:\n"
+    "        kb[_name] = _d\n")
 PATCH_SYSTEM = ("You fix bugs in mylib.py so that the tests pass. Return only the corrected "
                 "functions, no explanations, in this format, one block per function:\n"
                 "FUNC <name>\n<complete new text of the function>\n"
@@ -224,15 +251,58 @@ def is_bare_literal(code: str) -> bool:
     return all(bare(c) for c in prints)  # one computed print (or an IMPOSSIBLE verdict) makes it a real program
 
 
+def _kb_examples(ws: Path) -> tuple[list[str], int]:
+    """One example page per kind of file (the part of the name before the first "_") and the page count."""
+    kb_dir = ws / "kb"
+    files = sorted(p for p in kb_dir.iterdir() if p.is_file()) if kb_dir.is_dir() else []
+    out, seen = [], set()
+    for f in files:
+        kind = f.name.split("_")[0]
+        if kind in seen:
+            continue
+        seen.add(kind)
+        name, d = None, {}
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for ln in lines:
+            if ln.startswith("#") and name is None:
+                name = ln.lstrip("#").strip()
+            elif ":" in ln:
+                k, v = ln.split(":", 1)
+                d[k.strip()] = v.strip()
+        if name:
+            out.append(f"kb[{name!r}] == {d!r}")
+        if len(out) >= 4:
+            break
+    return out, len(files)
+
+
+def _is_kb_task(task: Task) -> bool:
+    return task.task_type == "search" and (task.workspace / "kb").is_dir()
+
+
 def _program_messages(task: Task) -> list[dict]:
+    if _is_kb_task(task):
+        ex, n = _kb_examples(task.workspace)
+        user = (f"{strip_boilerplate(task.instruction)}\n\nkb has {n} pages, for example:\n" + "\n".join(ex))
+        return [{"role": "system", "content": SEARCH_SYSTEM}, {"role": "user", "content": user}]
     user = f"{task.instruction}\n\n{describe_workspace(task.workspace)}"
     return [{"role": "system", "content": PROGRAM_SYSTEM}, {"role": "user", "content": user}]
+
+
+def _kb_key_error(stderr: str) -> bool:
+    """The traceback ends in a KeyError raised by a `kb[...]` lookup of the model's program."""
+    lines = [ln for ln in stderr.strip().splitlines() if ln.strip()]
+    return bool(lines) and lines[-1].startswith("KeyError")
 
 
 async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_model: str = MODEL_ALT) -> SolveResult:
     """Up to two `model` programs; an answer of the wrong shape gets one more try on `shape_model`.
     A confirmation vote (scheduler) passes the same model twice: the vote is then one model's program."""
     messages = _program_messages(task)
+    use_kb = _is_kb_task(task)
     note = ""
     attempt, attempts, shape_retried = 0, 2, False
     literal_retried = False
@@ -257,7 +327,9 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             attempt += 1
             continue
         # subprocess + copytree block for up to 20 s: keep them off the event loop
-        res = await asyncio.to_thread(run_program, code, task.workspace)
+        res = await asyncio.to_thread(run_program, KB_PREAMBLE + code if use_kb else code, task.workspace)
+        if use_kb and res.returncode != 0 and not res.timed_out and _kb_key_error(res.stderr):
+            return SolveResult("unparsed", note="kb page or field not found")  # clean "not found": no retry
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
             return SolveResult("infeasible", note="program printed IMPOSSIBLE")
