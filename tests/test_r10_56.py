@@ -18,6 +18,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_CONFIRM_2A", "1")
     monkeypatch.setenv("HARNESS_BATCH_2A", "0")
     monkeypatch.delenv("HARNESS_REASON_MATH", raising=False)
+    monkeypatch.delenv("HARNESS_CONFIRM_MATH", raising=False)
 
 
 def unparsed_target(queue, task, solver_name=None):
@@ -127,20 +128,33 @@ def test_flag_off_is_round_9_call_for_call(tmp_path, monkeypatch):
     assert _answers(tasks) == _ROUND9_ANSWERS
 
 
-def test_flag_on_reason_answers_math_in_2b_and_votes_on_2a_math(tmp_path, monkeypatch):
-    reason_answers = {"math_u": SolveResult("solved", "6"),
-                      "math_v": SolveResult("infeasible", note="reason program printed IMPOSSIBLE"),
-                      "math_a": SolveResult("solved", "7"),      # the FAST and ALT programs side with it: replaced
-                      "math_b": SolveResult("solved", "11"),     # the FAST program says 2a's 10: kept
-                      "math_g0": SolveResult("solved", "9"), "math_g1": SolveResult("solved", "9")}
-    tasks, client, seq = _scenario(tmp_path, monkeypatch, reason_answers=reason_answers)
+_REASON_ANSWERS = {"math_u": SolveResult("solved", "6"),
+                   "math_v": SolveResult("infeasible", note="reason program printed IMPOSSIBLE"),
+                   "math_a": SolveResult("solved", "7"),      # the FAST and ALT programs side with it: replaced
+                   "math_b": SolveResult("solved", "11"),     # the FAST program says 2a's 10: kept
+                   "math_g0": SolveResult("solved", "9"), "math_g1": SolveResult("solved", "9")}
+# 2b and the final pass with HARNESS_REASON_MATH on (the default)
+_REASON_2B_SEQ = _ROUND9_SEQ[:7] + [
+    ("reason", "math_u"),                               # answered: no program
+    ("reason", "math_v"), ("2b", "math_v"),             # IMPOSSIBLE: the program is asked too
+    ("2b", "search_s"),
+    ("reason", "search_s"),                             # the final pass skips the math tasks REASON answered
+    ("vote", "data_d", config.MODEL_FAST), ("vote", "data_d", config.MODEL_ALT),   # data first, as in round 9
+]
+
+
+def test_by_default_reason_answers_math_in_2b_and_no_math_answer_is_voted_on(tmp_path, monkeypatch):
+    tasks, client, seq = _scenario(tmp_path, monkeypatch, reason_answers=_REASON_ANSWERS)
     scheduler.run(tasks, 100000, client)
-    assert seq == _ROUND9_SEQ[:7] + [
-        ("reason", "math_u"),                               # answered: no program
-        ("reason", "math_v"), ("2b", "math_v"),             # IMPOSSIBLE: the program is asked too
-        ("2b", "search_s"),
-        ("reason", "search_s"),                             # the final pass skips the math tasks REASON answered
-        ("vote", "data_d", config.MODEL_FAST), ("vote", "data_d", config.MODEL_ALT),   # data first, as in round 9
+    assert seq == _REASON_2B_SEQ
+    assert _answers(tasks) == {**_ROUND9_ANSWERS, "math_u": "6"}
+
+
+def test_math_votes_on_reason_answers_math_in_2b_and_votes_on_2a_math(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_CONFIRM_MATH", "1")
+    tasks, client, seq = _scenario(tmp_path, monkeypatch, reason_answers=_REASON_ANSWERS)
+    scheduler.run(tasks, 100000, client)
+    assert seq == _REASON_2B_SEQ + [
         ("reason", "math_g0"), ("reason", "math_g1"),       # the group's two best-paid agree: math_g2 is not asked
         ("reason", "math_a"), ("vote", "math_a", config.MODEL_FAST), ("vote", "math_a", config.MODEL_ALT),
         ("reason", "math_b"), ("vote", "math_b", config.MODEL_FAST),
@@ -148,9 +162,18 @@ def test_flag_on_reason_answers_math_in_2b_and_votes_on_2a_math(tmp_path, monkey
     assert _answers(tasks) == {**_ROUND9_ANSWERS, "math_u": "6", "math_a": "7"}
 
 
+def test_math_votes_on_with_reason_math_off_is_still_round_9(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_CONFIRM_MATH", "1")
+    monkeypatch.setenv("HARNESS_REASON_MATH", "0")
+    tasks, client, seq = _scenario(tmp_path, monkeypatch, reason_answers=_REASON_ANSWERS)
+    scheduler.run(tasks, 100000, client)
+    assert seq == _ROUND9_SEQ and _answers(tasks) == _ROUND9_ANSWERS
+
+
 def test_no_reason_call_that_the_ledger_cannot_hold_whole(tmp_path, monkeypatch):
     # 2a and the program votes fit, a whole REASON call (3000 out) next to the task's prompt does not: round 9 for
     # math (the fakes charge nothing, so the final pass's own gate, an estimate of 3000, still lets it run as before)
+    monkeypatch.setenv("HARNESS_CONFIRM_MATH", "1")
     reason_answers = {t: SolveResult("solved", "7") for t in ("math_u", "math_a", "math_b", "math_g0", "math_g1")}
     tasks, client, seq = _scenario(tmp_path, monkeypatch, budget=3000, reason_answers=reason_answers)
     scheduler.run(tasks, 3000, client)
@@ -158,6 +181,7 @@ def test_no_reason_call_that_the_ledger_cannot_hold_whole(tmp_path, monkeypatch)
 
 
 def test_no_math_vote_once_half_the_budget_is_spent(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_CONFIRM_MATH", "1")
     tasks, client, seq = _scenario(tmp_path, monkeypatch, spent=50000,
                                    reason_answers={"math_a": SolveResult("solved", "7")})
     scheduler.run(tasks, 100000, client)
@@ -199,6 +223,10 @@ def test_knob(monkeypatch):
     assert config.reason_math() is True
     monkeypatch.setenv("HARNESS_REASON_MATH", "0")
     assert config.reason_math() is False
+    monkeypatch.delenv("HARNESS_CONFIRM_MATH", raising=False)
+    assert config.confirm_math() is False
+    monkeypatch.setenv("HARNESS_CONFIRM_MATH", "1")
+    assert config.confirm_math() is True
     assert config.CONFIRM_TYPES == ("data_analysis",) and config.CONFIRM_REASON_TYPES == ("math",)
 
 

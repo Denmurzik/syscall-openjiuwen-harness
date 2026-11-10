@@ -109,14 +109,24 @@ CONFIRM_TYPES = ("data_analysis",)
 # keeps the two-program vote
 CONFIRM_REASON_TYPES = ("math",)
 REASON_MATH = True  # default of HARNESS_REASON_MATH; 0 is round 9 (no REASON in 2b math, no math votes)
+# the math votes cost ~12K units on llm8 (28 2a math tasks) and changed no answer except one wrongly (math_0076,
+# before the ALT vote); all the measured gain is in 2b. Off: math 2a answers are not confirmed (round 9)
+CONFIRM_MATH = False  # default of HARNESS_CONFIRM_MATH
 CONFIRM_SPEND_LIMIT = 0.5  # no new vote once this share of the budget is spent (as the final REASON pass)
 CONFIRM_GROUP_SAMPLE = 2   # a 2a group larger than this is accepted when its best-paid members' FAST votes all agree
 VERIFY_UNIT_S = 60         # time set aside per 2d unit (per worker) when the confirmation stage runs before 2d
 
 
 def reason_math() -> bool:
-    """MODEL_REASON answers math in 2b and votes on 2a math answers. Read at call time: HARNESS_REASON_MATH=1/0."""
+    """MODEL_REASON answers math in 2b (and votes on 2a math answers when `confirm_math`). Read at call time:
+    HARNESS_REASON_MATH=1/0."""
     return _env_bool("HARNESS_REASON_MATH", REASON_MATH)
+
+
+def confirm_math() -> bool:
+    """MODEL_REASON, FAST and ALT votes on 2a math answers (`confirm_reason`); needs `reason_math` too. Read at call
+    time: HARNESS_CONFIRM_MATH=1/0."""
+    return _env_bool("HARNESS_CONFIRM_MATH", CONFIRM_MATH)
 
 
 def confirm_2a() -> bool:

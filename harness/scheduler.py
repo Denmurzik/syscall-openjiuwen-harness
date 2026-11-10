@@ -47,9 +47,10 @@ def _reason_fits(ledger: TokenLedger, task: Task) -> bool:
 
 
 def _reason_votes(task: Task) -> bool:
-    """The 2a answer of `task` is confirmed by MODEL_REASON (`confirm_reason`), not by two programs."""
+    """The 2a answer of `task` is confirmed by MODEL_REASON (`confirm_reason`), not by two programs. Off by default
+    (HARNESS_CONFIRM_MATH); HARNESS_REASON_MATH=0 turns it off too (round 9)."""
     return (task.task_type not in config.CONFIRM_TYPES and task.task_type in config.CONFIRM_REASON_TYPES
-            and config.reason_math())
+            and config.reason_math() and config.confirm_math())
 
 
 # infeasible notes that do not depend on the model's reading of the question
@@ -615,7 +616,7 @@ def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_
                    reserve: float, n_2d: int) -> list:
     """One unit per 2a group, best-paid groups first. A group of more than CONFIRM_GROUP_SAMPLE answered members is
     accepted when the FAST votes on its best-paid members all agree; otherwise every member is checked. Each member's
-    calls are recorded on its own trajectory line. A math group (HARNESS_REASON_MATH) takes MODEL_REASON's vote in
+    calls are recorded on its own trajectory line. A math group (HARNESS_CONFIRM_MATH) takes MODEL_REASON's vote in
     place of the first FAST vote (`confirm_reason`) and runs after every group of CONFIRM_TYPES."""
     from harness.confirm import confirm, confirm_reason
     by_group: dict = {}
