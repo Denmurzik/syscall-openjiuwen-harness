@@ -313,14 +313,25 @@ def _kb_key_error(stderr: str) -> bool:
 
 
 def _is_container_repr(answer: str) -> bool:
-    """A printed dict or list (a whole page): never the one value a question asks for."""
+    """A printed dict, list, tuple, set or dict view (a whole page): never the one value a question asks for."""
     t = answer.strip()
-    if not t.startswith(("{", "[")):
+    if t.startswith(("dict_items(", "dict_keys(", "dict_values(")):
+        return True
+    if not t.startswith(("{", "[", "(")):
         return False
     try:
-        return isinstance(ast.literal_eval(t), (dict, list))
+        return isinstance(ast.literal_eval(t), (dict, list, tuple, set))
     except (ValueError, SyntaxError, MemoryError, RecursionError):
         return False
+
+
+def _kb_placeholder(res) -> bool:
+    """The program ran and its last line is None / unknown / n/a: it looked a page or field up with .get and found
+    nothing (normalize_answer drops such a line for a number question, so the raw output is read)."""
+    if res.returncode != 0 or res.timed_out:
+        return False
+    lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+    return bool(lines) and lines[-1].casefold().rstrip(".") in _PLACEHOLDERS
 
 
 async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_model: str = MODEL_ALT) -> SolveResult:
@@ -354,11 +365,15 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
         # subprocess + copytree block for up to 20 s: keep them off the event loop
         res = await asyncio.to_thread(run_program, kb_program(code) if use_kb else code, task.workspace)
         if use_kb and res.returncode != 0 and not res.timed_out and _kb_key_error(res.stderr):
-            return SolveResult("unparsed", note="kb page or field not found")  # clean "not found": no retry
+            # clean "not found": no retry. A best_guess of a wrong-shape first attempt is dropped on purpose:
+            # for an infeasible task a wrong-shape file on disk is worse than no file
+            return SolveResult("unparsed", note="kb page or field not found")
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
             return SolveResult("infeasible", note="program printed IMPOSSIBLE")
         answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
+        if use_kb and _kb_placeholder(res):  # same as KbMissing, also when the shape check would only guess
+            return SolveResult("unparsed", note="kb page or field not found")
         container = use_kb and answer is not None and _is_container_repr(answer)
         if container:
             answer = None  # a whole page is never the answer and never a best guess
@@ -461,6 +476,8 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
     if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
         return SolveResult("infeasible", note="reason program printed IMPOSSIBLE")
     answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
+    if use_kb and _kb_placeholder(res):
+        return SolveResult("unparsed", note="kb page or field not found")
     if answer is not None and use_kb and _is_container_repr(answer):
         return SolveResult("unparsed", note="reason program printed a whole page or list")
     if answer is None:

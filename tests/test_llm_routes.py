@@ -791,3 +791,33 @@ def test_reason_pass_kb_not_found_and_dict(tmp_path):
     assert r.status == "unparsed" and "not found" in r.note
     r = run(solve_with_reason(_kb_task(tmp_path / "b"), FakeClient(["print(kb['C D'])"])))
     assert r.status == "unparsed" and not r.extra
+
+
+def test_search_placeholder_is_not_found_name_and_year(tmp_path):
+    for i, (check, prog) in enumerate([
+            ("exact_str", "print(kb.get('Nobody', {}).get('Employer'))"),
+            ("exact_int", "print(kb['C D'].get('Nickname'))"),
+            ("exact_int", "print(kb.get('Nobody Here', {}).get('Born'))")]):
+        t = _kb_task(tmp_path / str(i))
+        t = Task(t.task_id, t.task_type, "In what year was Nobody Here born?" if check == "exact_int" else t.instruction,
+                 t.reward, check, t.dir, t.workspace)
+        c = FakeClient([prog, prog])
+        r = run(solve_with_program(t, c))
+        assert r.status == "unparsed" and "not found" in r.note and not r.extra and len(c.calls) == 1
+        r = run(solve_with_reason(t, FakeClient([prog])))
+        assert r.status == "unparsed" and "not found" in r.note and not r.extra
+
+
+def test_search_tuple_and_view_output_rejected(tmp_path):
+    for i, bad in enumerate(["print(tuple(kb['A B']))", "print(kb['A B'].items())", "print(kb['A B'].keys())"]):
+        c = FakeClient([bad, "print(kb['C D']['Born'])"])
+        r = run(solve_with_program(_kb_task(tmp_path / str(i)), c))
+        assert r.status == "solved" and r.answer == "1951" and len(c.calls) == 2
+
+
+def test_search_traceback_line_is_the_models_second_check(tmp_path):
+    from harness.llm_routes import kb_program
+    from harness.sandbox import run_program
+    t = _kb_task(tmp_path)
+    res = run_program(kb_program("x = 1\nprint(1/0)"), t.workspace)
+    assert res.returncode != 0 and 'line 2, in <module>' in res.stderr
