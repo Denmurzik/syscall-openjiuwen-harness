@@ -399,6 +399,17 @@ def test_fix_coding_contradiction_is_infeasible_without_calls(tmp_path):
     assert r.status == "infeasible" and r.answer is None and c.calls == []
 
 
+def test_fix_coding_false_assertion_is_infeasible_without_calls(tmp_path):
+    # round 10 final review M3: the second pass (a red assertion false at its pinned values) runs in phase 2 too
+    lib = "def total(xs):\n    s = 0\n    for x in xs:\n        s += x\n    return s\n"
+    tests = ("import unittest\nimport mylib as m\n\nclass T(unittest.TestCase):\n"
+             "    def test_total(self):\n        self.assertEqual(m.total([1, 2, 3]), 6)\n\n"
+             "    def test_big(self):\n        self.assertGreater(m.total([1, 2, 3]), 10)\n")
+    c = FakeClient([])
+    r = run(fix_coding(_custom_task(tmp_path, lib, tests), c))
+    assert r.status == "infeasible" and r.answer is None and c.calls == []
+
+
 def test_fix_coding_stateful_callee_is_not_declared_infeasible(tmp_path):
     lib = "def f(x, acc=[]):\n    acc.append(x)\n    return len(acc)\n"
     c = FakeClient(["nonsense", "nonsense"])

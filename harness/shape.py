@@ -36,12 +36,14 @@ _IS_NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 
 # a count or a difference is a number whatever field words the question holds ("How many employees of X were
 # born after 1975?", "How many people have X as their mentor?"): no shape is known for it. Only when the count
-# phrase is the question's ask: the question opens with it (or with a yes/no verb), or it appears and no explicit
+# phrase is the question's ask: the question opens with it (or with a yes/no verb not followed by "you": "Can you
+# tell me the year ..." asks for the year, "Can you tell me whether ..." is a yes/no), or it appears and no explicit
 # who/which/where/when/what-city ask does ("Which company has the largest number of employees?" keeps its shape)
 _COUNT_PHRASE = re.compile(r"\bhow (?:many|much|old)\b|\bnumber of\b|\byes or no\b", re.I)
 _COUNT_OPENS = re.compile(
     r"^\W*(?:answer\s+(?:with\s+)?yes or no\W+)?(?:how (?:many|much|old)\b|what (?:is|was|are|were) the (?:total )?"
-    r"number of\b|(?:is|are|does|did|was|were|do|has|have|can|will)\b)", re.I)
+    r"number of\b|(?:is|are|does|did|was|were|do|has|have|can|will)\b(?!\s+you\b)"
+    r"|(?:can|could|will|would|do) you (?:please )?(?:tell me |say |know )?(?:whether|if)\b)", re.I)
 _SUPERLATIVE_NUMBER = re.compile(r"\b(?:largest|highest|most|fewest|smallest|lowest|greatest|same|biggest|least) number of\b", re.I)
 _EXPLICIT_ASK = {"who", "whom", "whose", "which", "where", "when"}
 _ASKED_NOUN = {"city", "company", "firm", "person", "year", "organisation", "organization", "individual"}

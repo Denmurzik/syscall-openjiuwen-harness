@@ -697,7 +697,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveRes
     base_report = await asyncio.to_thread(_run_candidate, ws, base)
     if base_report.ok:
         return SolveResult("solved", answer="DONE", note="tests already pass")
-    if provable_contradiction(tests, base):  # visible tests cannot all pass: spend nothing
+    if provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
         return SolveResult("infeasible", note="tests contradict each other")
     output = base_report.output
     attempts = [(MODEL_FAST, 400, {}), (MODEL_ALT, 600, {})]

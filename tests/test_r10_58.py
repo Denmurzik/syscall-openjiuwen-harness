@@ -62,3 +62,18 @@ def test_superlative_number_of_keeps_name_shape(q):
 def test_kb_prompt_says_reverse_relation_is_not_a_missing_field():
     from harness.llm_routes import SEARCH_SYSTEM
     assert "kb.items()" in SEARCH_SYSTEM and "not a missing field" in SEARCH_SYSTEM
+
+
+@pytest.mark.parametrize("q,shape", [   # final review M1: a polite opening is not a yes/no verb
+    ("Can you tell me the year Irina Smith was born?", "year"),
+    ("Can you tell me the year in which Bluefin Systems was founded?", "year"),
+    ("Do you know who the mentor of Irina Smith is?", "name"),
+    ("Will you tell me where Bluefin Systems is headquartered?", "name"),
+    ("Can you tell me how many people have Dmitri Smith as their mentor?", None),
+    ("Can you tell me whether Irina Smith was born before 1980?", None),
+    ("Could you tell me if Irina Smith was born in 1980?", None),
+    ("Can Irina Smith be older than Sergei Garcia?", None),
+    ("Will Bluefin Systems be founded before 1990?", None),
+])
+def test_polite_question_keeps_its_shape(q, shape):
+    assert _search_shape(INTRO + q + OUTRO) == shape
