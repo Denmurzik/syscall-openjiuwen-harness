@@ -176,6 +176,8 @@ async def confirm_reason(task, answer: str, client, reason, program, can_afford)
     except Exception as e:  # the vote is lost, 2a's answer is not
         log.warning("confirm reason vote on %s failed: %r", task.task_id, e)
         res = None
+    # unlike `_vote`, no one-bare-canonical-line check here: the answer is what normalize_answer picked from REASON's
+    # output. It never changes 2a alone (the FAST and ALT votes must match canonically); recheck before relying on it
     vote = str(res.answer).strip() if res is not None and res.status == "solved" and res.answer is not None else ""
     if vote in ("", "IMPOSSIBLE") or mismatch(task, vote) is not None:
         return Verdict(None, "confirm: reason vote did not count, 2a kept", False)

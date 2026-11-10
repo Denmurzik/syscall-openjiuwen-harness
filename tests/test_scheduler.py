@@ -859,11 +859,11 @@ def _math_reason_setup(tmp_path, monkeypatch, reason_result, prog_result):
 
     async def reason(task, client):
         asked["reason"].append(task.task_id)
-        return reason_result
+        return reason_result(asked["reason"].count(task.task_id)) if callable(reason_result) else reason_result
 
-    async def prog(task, client):
+    async def prog(task, client):   # a callable result gets the number of this task's program calls so far
         asked["prog"].append(task.task_id)
-        return prog_result
+        return prog_result(asked["prog"].count(task.task_id)) if callable(prog_result) else prog_result
     monkeypatch.delenv("HARNESS_REASON_MATH", raising=False)
     monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
     monkeypatch.setattr(scheduler, "solve_group", no_spec)
@@ -880,12 +880,48 @@ def test_math_2b_asks_reason_first_and_not_again_in_the_final_pass(tmp_path, mon
     assert (tasks / "math_0000" / "answer.txt").read_text(encoding="utf-8").strip() == "66"
 
 
-def test_math_2b_falls_back_to_the_program_when_reason_has_no_answer(tmp_path, monkeypatch):
+def test_math_2b_trusts_a_reason_impossible(tmp_path, monkeypatch):
+    # no FAST program after it (v3 math_9319: the fallback wrote an answer for an infeasible task), no final-pass retry
     tasks, asked = _math_reason_setup(tmp_path, monkeypatch, SolveResult("infeasible", note="reason program printed IMPOSSIBLE"),
                                       SolveResult("solved", "7"))
     summary = scheduler.run(tasks, 100000, object())
-    assert summary["solved"] == 2 and len(asked["reason"]) == 2 and len(asked["prog"]) == 2
-    assert (tasks / "math_0001" / "answer.txt").read_text(encoding="utf-8").strip() == "7"
+    assert summary["infeasible"] == 2 and asked["prog"] == [] and sorted(asked["reason"]) == ["math_0000", "math_0001"]
+    assert not list(tasks.glob("*/answer.txt"))
+
+
+def test_math_2b_falls_back_to_the_program_and_the_final_pass_does_not_ask_reason_again(tmp_path, monkeypatch):
+    tasks, asked = _math_reason_setup(tmp_path, monkeypatch, SolveResult("unparsed", note="reason program gave no usable answer"),
+                                      SolveResult("unparsed", note="program gave no usable answer"))
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["unparsed"] == 2
+    assert sorted(asked["reason"]) == ["math_0000", "math_0001"] and sorted(asked["prog"]) == ["math_0000", "math_0001"]
+
+
+@pytest.mark.parametrize("note", ["llm unavailable: qwen3.8-27b keeps failing", "reason program cut by the budget limit"])
+def test_math_2b_reason_infrastructure_failure_leaves_the_task_to_the_final_pass(tmp_path, monkeypatch, note):
+    tasks, asked = _math_reason_setup(tmp_path, monkeypatch, SolveResult("unparsed", note=note),
+                                      SolveResult("unparsed", note="program gave no usable answer"))
+    scheduler.run(tasks, 100000, object())
+    assert sorted(asked["reason"]) == ["math_0000", "math_0000", "math_0001", "math_0001"]   # 2b, then the final pass
+    assert len(asked["prog"]) == 2
+
+
+def test_math_2b_reason_shape_guess_then_program_and_the_retry_goes_straight_to_the_program(tmp_path, monkeypatch):
+    guess = SolveResult("unparsed", note="answer shape: not an integer", extra={"best_guess": "12"})
+    tasks, asked = _math_reason_setup(
+        tmp_path, monkeypatch, guess,
+        lambda n: SolveResult("unparsed", note="llm unavailable: HTTP 500") if n == 1 else SolveResult("solved", "7"))
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["solved"] == 2 and len(asked["reason"]) == 2 and len(asked["prog"]) == 4
+    assert (tasks / "math_0000" / "answer.txt").read_text(encoding="utf-8").strip() == "7"
+
+
+def test_math_2b_no_reason_call_without_time_for_it_and_the_program(tmp_path, monkeypatch):
+    tasks, asked = _math_reason_setup(tmp_path, monkeypatch, SolveResult("solved", "66"), SolveResult("solved", "7"))
+    monkeypatch.setenv("HARNESS_LLM_TIMEOUT", "4000")   # longer than the whole run: no REASON call can end in time
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["solved"] == 2 and asked["reason"] == [] and len(asked["prog"]) == 2
+    assert (tasks / "math_0000" / "answer.txt").read_text(encoding="utf-8").strip() == "7"
 
 
 def test_math_2b_reason_is_off_with_the_flag(tmp_path, monkeypatch):

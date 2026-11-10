@@ -46,6 +46,27 @@ def _reason_fits(ledger: TokenLedger, task: Task) -> bool:
     return ledger.can_afford(estimate_tokens(task) + REASON_CALL_TOKENS)
 
 
+REASON_FAST_MARGIN_S = 60       # a FAST program call and its run after a REASON call (usually 10-30 s; sandbox 20 s)
+
+
+def _reason_2b(ledger: TokenLedger, task: Task, t0: float, deadline_s: float) -> bool:
+    """A 2b math task asks MODEL_REASON first: HARNESS_REASON_MATH on, a whole call fits the ledger, less than
+    REASON_PASS_SPEND_LIMIT of the budget is spent (the final pass's gate), and the time left before new units stop
+    holds a REASON call to its timeout plus the FAST fallback (else the unit would be cancelled before FAST runs).
+    Otherwise the FAST program alone, as in round 9."""
+    if not config.reason_math() or ledger.spent >= REASON_PASS_SPEND_LIMIT * ledger.budget:
+        return False
+    left_s = deadline_s - config.stop_new_before_deadline_s() - (time.monotonic() - t0)
+    return left_s >= config.llm_timeout() + REASON_FAST_MARGIN_S and _reason_fits(ledger, task)
+
+
+def _reason_verdict(res: SolveResult) -> bool:
+    """MODEL_REASON's own output decided `res` (an answer, IMPOSSIBLE, or a reply that gave nothing usable), not the
+    infrastructure (model unavailable, paused or timed out; call cut by the budget)."""
+    note = res.note or ""
+    return not note.startswith(_LLM_UNAVAILABLE) and note != "reason program cut by the budget limit"
+
+
 def _reason_votes(task: Task) -> bool:
     """The 2a answer of `task` is confirmed by MODEL_REASON (`confirm_reason`), not by two programs. Off by default
     (HARNESS_CONFIRM_MATH); HARNESS_REASON_MATH=0 turns it off too (round 9)."""
@@ -505,19 +526,24 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
             start = time.monotonic()
             if task.task_type == "coding":
                 res = await (fix_coding(task, client, resume) if resume else fix_coding(task, client))
-            elif task.task_type == "math" and config.reason_math() and _reason_fits(ledger, task):
+            elif (task.task_type == "math" and task.task_id not in reasoned
+                  and _reason_2b(ledger, task, t0, deadline_s)):
                 # 2a declined it (not "how much is left at the end") or failed: such a question takes reasoning,
-                # not a transcription. The FAST program is the fallback, and a guess for a task still open
-                reasoned.add(task.task_id)
+                # not a transcription. The FAST program is the fallback, and a guess for a task still open.
+                # A task in `reasoned` (REASON gave its verdict, then FAST found the model unavailable) retries FAST
                 try:
                     res = await solve_with_reason(task, client)
+                    if _reason_verdict(res):
+                        reasoned.add(task.task_id)
                 except BudgetExhausted:
                     raise
-                except Exception as e:  # the route is lost, the task is not
+                except Exception as e:  # the route is lost, the task is not (and the final pass may still ask)
                     log.warning("reason route on %s failed: %r", task.task_id, e)
                     res = SolveResult("unparsed", note=f"reason route failed: {e!r}"[:200])
-                if res.status != "solved":
-                    if res.status == "infeasible" or (res.extra or {}).get("best_guess") is not None:
+                # IMPOSSIBLE is trusted (REASON 20 of 20 on feasible math; on v3 math_9319 the FAST fallback wrote an
+                # answer for an infeasible task): settled below, no FAST program
+                if res.status not in ("solved", "infeasible"):
+                    if (res.extra or {}).get("best_guess") is not None:
                         settle(2, task, res, time.monotonic() - start)
                     res = await solve_with_program(task, client)
             else:

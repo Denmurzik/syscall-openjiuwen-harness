@@ -136,7 +136,7 @@ _REASON_ANSWERS = {"math_u": SolveResult("solved", "6"),
 # 2b and the final pass with HARNESS_REASON_MATH on (the default)
 _REASON_2B_SEQ = _ROUND9_SEQ[:7] + [
     ("reason", "math_u"),                               # answered: no program
-    ("reason", "math_v"), ("2b", "math_v"),             # IMPOSSIBLE: the program is asked too
+    ("reason", "math_v"),                               # IMPOSSIBLE is trusted: no program
     ("2b", "search_s"),
     ("reason", "search_s"),                             # the final pass skips the math tasks REASON answered
     ("vote", "data_d", config.MODEL_FAST), ("vote", "data_d", config.MODEL_ALT),   # data first, as in round 9
@@ -178,6 +178,14 @@ def test_no_reason_call_that_the_ledger_cannot_hold_whole(tmp_path, monkeypatch)
     tasks, client, seq = _scenario(tmp_path, monkeypatch, budget=3000, reason_answers=reason_answers)
     scheduler.run(tasks, 3000, client)
     assert seq == _ROUND9_SEQ
+
+
+def test_no_2b_reason_call_once_half_the_budget_is_spent(tmp_path, monkeypatch):
+    # the final pass's gate: past it the FAST program alone, as in round 9
+    tasks, client, seq = _scenario(tmp_path, monkeypatch, spent=50000, reason_answers=_REASON_ANSWERS)
+    scheduler.run(tasks, 100000, client)
+    assert not [s for s in seq if s[0] == "reason"]
+    assert ("2b", "math_u") in seq and _answers(tasks)["math_u"] == "5"
 
 
 def test_no_math_vote_once_half_the_budget_is_spent(tmp_path, monkeypatch):
