@@ -110,9 +110,9 @@ def test_knob_off_changes_nothing_in_phase_1(tmp_path, monkeypatch):
 
 def test_ambiguous_fix_goes_to_arbitration_not_to_the_check(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_VERIFY_CODING", "1")
-    lib = "def count_even(xs):\n    return sum(1 for x in xs if x % 3 == 0)\n"
+    lib = "def count_evens(xs):\n    return sum(1 for x in xs if x % 3 == 0)\n"
     tests = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
-             "    def test_count(self):\n        self.assertEqual(mylib.count_even([1, 2, 4, 6, 7]), 3)\n")
+             "    def test_count(self):\n        self.assertEqual(mylib.count_evens([1, 2, 4, 6, 7]), 3)\n")
     res = solve(_task(tmp_path, lib, tests))
     assert res.extra["ambiguous"] and "verify" not in res.extra
 

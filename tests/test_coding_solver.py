@@ -216,9 +216,9 @@ def test_contradiction_never_preempts_a_repair(tmp_path):
 
 # ---------------------------------------------------------------- candidates and tentative answers
 
-AMBIG_LIB = "def count_even(xs):\n    return sum(1 for x in xs if x % 3 == 0)\n"
+AMBIG_LIB = "def count_evens(xs):\n    return sum(1 for x in xs if x % 3 == 0)\n"
 AMBIG_TEST = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
-              "    def test_count(self):\n        self.assertEqual(mylib.count_even([1, 2, 4, 6, 7]), 3)\n")
+              "    def test_count(self):\n        self.assertEqual(mylib.count_evens([1, 2, 4, 6, 7]), 3)\n")
 
 
 def test_ambiguous_fix_returns_clusters(tmp_path):
@@ -226,14 +226,14 @@ def test_ambiguous_fix_returns_clusters(tmp_path):
     res = solve(t)
     assert res.status == "solved" and res.answer == "DONE" and res.tentative
     amb = res.extra["ambiguous"]
-    assert len(amb) == 1 and amb[0]["func"] == "count_even"
+    assert len(amb) == 1 and amb[0]["func"] == "count_evens"
     cands = amb[0]["candidates"]
     assert len(cands) >= 2 and len(set(cands)) == len(cands)
     written = (t.workspace / "mylib.py").read_text(encoding="utf-8")
     import ast
     assert ast.unparse(ast.parse(cands[amb[0]["chosen"]])) == ast.unparse(ast.parse(written))
     assert any("x % 2 == 0" in c for c in cands)
-    assert any("count_even" in a for a in res.extra["visible_asserts"])
+    assert any("count_evens" in a for a in res.extra["visible_asserts"])
     assert run_tests(t.workspace).ok
 
 

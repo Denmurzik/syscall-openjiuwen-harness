@@ -9,9 +9,9 @@ from harness.solvers.coding_solver import solve
 from harness.solvers.testrun import run_tests
 from harness.tasks import Task
 
-LIB = "def count_even(xs):\n    return sum(1 for x in xs if x % 3 == 0)\n"
+LIB = "def count_evens(xs):\n    return sum(1 for x in xs if x % 3 == 0)\n"
 TESTS = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
-         "    def test_count(self):\n        self.assertEqual(mylib.count_even([1, 2, 4, 6, 7]), 3)\n")
+         "    def test_count(self):\n        self.assertEqual(mylib.count_evens([1, 2, 4, 6, 7]), 3)\n")
 
 
 class Fake:
@@ -109,7 +109,7 @@ def test_prompt_shows_changed_lines_and_probe_table(tmp_path):
     c = Fake(["1"])
     run(arbitrate(task, extra, c))
     text = c.calls[0]["messages"][1]["content"]
-    assert "count_even([1, 2, 4, 6, 7]) ->" in text and " | " in text
+    assert "count_evens([1, 2, 4, 6, 7]) ->" in text and " | " in text
     assert "Option 1: line" in text and "`" in text
     assert "Option 1:\n" not in text   # no full sources per option
 
@@ -157,7 +157,7 @@ def test_out_of_range_number_changes_nothing(tmp_path):
 
 def test_option_failing_tests_is_not_written(tmp_path):
     task, extra = _solved(tmp_path)
-    extra["ambiguous"][0]["candidates"].append("def count_even(xs):\n    return 0")
+    extra["ambiguous"][0]["candidates"].append("def count_evens(xs):\n    return 0")
     before = (task.workspace / "mylib.py").read_bytes()
     n = len(extra["ambiguous"][0]["candidates"])
     res = run(arbitrate(task, extra, Fake([str(n)])))
