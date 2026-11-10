@@ -36,7 +36,8 @@ SEARCH_SYSTEM = ("Write a short Python 3 program that prints only the final answ
                  "A field that names a person or company is the title of that page: follow it with kb[...]. "
                  "If a page or field the question needs is missing, print IMPOSSIBLE. "
                  "Answer only with the field the question asks for; if that field does not exist for the entity, "
-                 "print IMPOSSIBLE. "
+                 "print IMPOSSIBLE. A relation in the other direction (\"whose mentor is X\", \"employees of X\") or a count "
+                 "is computed by scanning kb.items(): that is not a missing field. "
                  "Never write answer.txt or any file: the task text mentions answer.txt, ignore that, "
                  "the answer is read from the program's output. "
                  "Output only code, no comments, no markdown.")
@@ -383,7 +384,7 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             r = await chat_or_alt(client, model, messages, PROGRAM_MAX_TOKENS)
         except LLMUnavailable as e:
             return SolveResult("unparsed", note=f"llm unavailable: {e}",
-                               extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})
+                               extra=None if guess is None or field_retried else {"best_guess": guess, "shape_mismatch": True})
         if getattr(r, "truncated", False):  # a program cut at a line end still runs and prints a wrong answer
             note = "program cut by the budget limit"
             break

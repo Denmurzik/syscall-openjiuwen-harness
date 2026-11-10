@@ -42,6 +42,7 @@ _COUNT_PHRASE = re.compile(r"\bhow (?:many|much|old)\b|\bnumber of\b|\byes or no
 _COUNT_OPENS = re.compile(
     r"^\W*(?:answer\s+(?:with\s+)?yes or no\W+)?(?:how (?:many|much|old)\b|what (?:is|was|are|were) the (?:total )?"
     r"number of\b|(?:is|are|does|did|was|were|do|has|have|can|will)\b)", re.I)
+_SUPERLATIVE_NUMBER = re.compile(r"\b(?:largest|highest|most|fewest|smallest|lowest|greatest|same|biggest|least) number of\b", re.I)
 _EXPLICIT_ASK = {"who", "whom", "whose", "which", "where", "when"}
 _ASKED_NOUN = {"city", "company", "firm", "person", "year", "organisation", "organization", "individual"}
 
@@ -49,6 +50,7 @@ _ASKED_NOUN = {"city", "company", "firm", "person", "year", "organisation", "org
 def _count_ask(text: str) -> bool:
     if _COUNT_OPENS.match(text):
         return True
+    text = _SUPERLATIVE_NUMBER.sub(" ", text)  # "the company with the largest number of employees": a selector
     if not _COUNT_PHRASE.search(text):
         return False
     words = _WORD.findall(text.casefold())

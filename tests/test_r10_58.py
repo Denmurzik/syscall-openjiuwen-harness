@@ -47,3 +47,18 @@ def test_kb_prompt_says_answer_only_the_asked_field():
     from harness.llm_routes import SEARCH_SYSTEM
     assert "Answer only with the field the question asks for" in SEARCH_SYSTEM
     assert "print IMPOSSIBLE" in SEARCH_SYSTEM.split("Answer only with the field")[1].split("Never write")[0]
+
+
+@pytest.mark.parametrize("q", [
+    "What is the name of the company with the largest number of employees?",
+    "What is the headquarters city of the company with the largest number of employees?",
+    "Name the company with the largest number of employees.",
+    "Find the person with the highest number of mentees.",
+])
+def test_superlative_number_of_keeps_name_shape(q):
+    assert _search_shape(INTRO + q + OUTRO) == "name"
+
+
+def test_kb_prompt_says_reverse_relation_is_not_a_missing_field():
+    from harness.llm_routes import SEARCH_SYSTEM
+    assert "kb.items()" in SEARCH_SYSTEM and "not a missing field" in SEARCH_SYSTEM
