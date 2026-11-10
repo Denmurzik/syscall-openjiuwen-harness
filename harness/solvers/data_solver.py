@@ -34,7 +34,8 @@ _METRICS = [
     ("sum_units", re.compile(
         r"(?:how many units were (?:sold|ordered)|what (?:is|was) the total (?:number of )?units(?: sold)?)[?.!]?", _FLAGS)),
     ("sum_revenue", re.compile(
-        r"what (?:is|was) (?:the )?(?:total )?revenue(?: \(units multiplied by price\))?[?.!]?", _FLAGS)),
+        r"what (?:is|was) (?:the )?(?:total )?revenue(?: \((?:units (?:multiplied by|times|\*|x) price"
+        r"|price (?:multiplied by|times|\*|x) units)\))?[?.!]?", _FLAGS)),
     ("count_orders", re.compile(r"how many orders were (?:placed|made|recorded)[?.!]?", _FLAGS)),
     ("avg_price", re.compile(r"what (?:is|was) the average price[?.!]?", _FLAGS)),
     ("avg_units", re.compile(
@@ -211,8 +212,8 @@ _ORDINAL_MONTH = re.compile(r"\bin\s+the\s+(\d+)(?:st|nd|rd|th)\s+month\b", _FLA
 _UPTO = {"through", "thru", "until", "till", "up to"}
 # "units multiplied by price" / "price times units": the definition of revenue, not a second measure.
 _REVENUE_DEF = re.compile(
-    r"\(?\b(?:units?\s+(?:multiplied by|times)\s+(?:the\s+)?price"
-    r"|price\s+(?:multiplied by|times)\s+(?:the\s+)?units?)\b\)?", _FLAGS)
+    r"\(?\b(?:units?\s*(?:multiplied by|times|\*|\bx\b)\s*(?:the\s+)?price"
+    r"|price\s*(?:multiplied by|times|\*|\bx\b)\s*(?:the\s+)?units?)\b\)?", _FLAGS)
 _WORD = re.compile(r"[a-z0-9]+")
 _MAX_WORDS = {"largest", "biggest", "maximum", "max", "highest"}
 _MIN_WORDS = {"smallest", "lowest", "minimum", "min"}
