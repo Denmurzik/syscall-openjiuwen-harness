@@ -211,7 +211,10 @@ def _make(dest, tid, ttype="math", instruction=None, reward=1.0, check="exact_in
 
 
 def _setup(tmp_path, monkeypatch, answers_2a, rewards=None, groups=None, budget=100000, spent=0.0):
-    """answers_2a: {tid: 2a answer}; groups: [[tid, ...], ...] (default: one group per task)."""
+    """answers_2a: {tid: 2a answer}; groups: [[tid, ...], ...] (default: one group per task).
+    The mechanism tests run on math tasks, so math is switched on here; the shipped default is data only
+    (see test_default_confirms_data_only)."""
+    monkeypatch.setattr(config, "CONFIRM_TYPES", ("math", "data_analysis"))
     tasks = tmp_path / "tasks"
     rewards = rewards or {}
     for tid in answers_2a:
@@ -656,3 +659,9 @@ def test_three_place_2a_answer_compares_at_three_places(tmp_path):
 def test_exact_int_accepts_a_trailing_zero_fraction(tmp_path):
     v = _probe(tmp_path, "math", "exact_int", "How many?", "12", "print(13.0)")
     assert v.replacement == "13"
+
+
+def test_default_confirms_data_only():
+    """math votes outvoted a correct spec-based answer (runs/r5/llm7 math_0008) and never fixed one; search votes cost
+    ~10x and never changed an answer; data votes made the only measured fixes."""
+    assert config.CONFIRM_TYPES == ("data_analysis",)
