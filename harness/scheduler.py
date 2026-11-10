@@ -332,7 +332,8 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
 
         _phase1(tasks, phase1_workers, t0, deadline_s, lambda t, r, e: settle(1, t, r, e))
 
-        left = [by_id[i] for i, s in status.items() if s == "unparsed" or i in tentative]
+        left = sorted((by_id[i] for i, s in status.items() if s == "unparsed" or i in tentative),
+                      key=lambda t: t.task_id)  # batch composition depends only on the task set
         if client is not None and left:
             _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative,
                     [t.reward for t in tasks], soft_infeasible=soft_infeasible)

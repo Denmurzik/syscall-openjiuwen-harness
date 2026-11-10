@@ -345,3 +345,24 @@ def test_deadline_cancel_during_reask_keeps_the_settled_members(monkeypatch):
     asyncio.run(run())
     assert got["a"].status == "solved" and got["c"].status == "solved"
 
+
+
+def test_phase2_left_is_sorted_by_task_id(tmp_path, monkeypatch):
+    """Batch composition depends only on the task set, not on the order phase 1 finished in."""
+    tasks = tmp_path / "tasks"
+    ids = ["math_3", "math_0", "math_2", "math_1"]
+    for i, tid in enumerate(ids):
+        _math(tasks, tid, f"A warehouse starts with {30 + i} boxes. It loses 4 boxes to a flood.")
+    seen = {}
+
+    def phase1(tasks_, workers, t0, deadline_s, settle):
+        for t in sorted(tasks_, key=lambda t: t.task_id, reverse=True):  # finish in reverse order
+            settle(t, SolveResult("unparsed"), 0.0)
+
+    def phase2(left, *a, **kw):
+        seen["left"] = [t.task_id for t in left]
+
+    monkeypatch.setattr(scheduler, "_phase1", phase1)
+    monkeypatch.setattr(scheduler, "_phase2", phase2)
+    scheduler.run(tasks, 100000, _client())
+    assert seen["left"] == ["math_0", "math_1", "math_2", "math_3"]

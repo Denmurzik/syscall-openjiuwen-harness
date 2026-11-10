@@ -604,3 +604,24 @@ def test_shape_retry_spec_also_gets_the_step_count_check(monkeypatch):
     client = FakeClient(_spec(STEPS8), _spec(STEPS8[:2] + STEPS8[3:]))
     out = asyncio.run(solve_group("math", template, [(t, slots)], client))
     assert out["m1"].status == "unparsed"
+
+
+def test_math_schema_percent_multiplies_before_dividing():
+    from harness.json_route import _system_prompt
+    p = _system_prompt("math")
+    assert "x-x*{N1}//100" in p and "x+x*{N1}//100" in p
+    assert "multiply first, then divide by 100, never x//100*N" in p
+
+
+def test_math_schema_only_quantity_left_at_the_end():
+    from harness.json_route import _system_prompt
+    p = _system_prompt("math")
+    assert "can only give the quantity left at the end" in p
+    assert "a number of days), return {\"impossible\": true}" in p
+
+
+def test_other_schemas_unchanged_by_math_prompt_insertions():
+    from harness.json_route import _system_prompt
+    for ttype in ("data_analysis", "search"):
+        p = _system_prompt(ttype)
+        assert "x//100*N" not in p and "quantity left at the end" not in p

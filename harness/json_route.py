@@ -39,9 +39,14 @@ _SCHEMAS = {
         "unary minus, parentheses; // is integer division rounding down. Examples: 'loses N boxes' is "
         "\"x-{N1}\"; 'receives N boxes' is \"x+{N1}\"; 'doubled' is \"x*2\"; 'split equally into N parts, "
         "keeps one share rounded down' is \"x//{N1}\"; 'loses a quarter (rounded down)' is \"x-x//4\"; "
+        "'loses N percent of the stock (rounded down)' is \"x-x*{N1}//100\" and 'grows by N percent (rounded down)' is "
+        "\"x+x*{N1}//100\": multiply first, then divide by 100, never x//100*N; "
         "'ships N per day for M days' is \"x-{N2}*{N3}\"; 'receives N deliveries of M boxes each' is "
         "\"x+{N2}*{N3}\". Full example on one line: "
         "{\"start\":\"{N1}\",\"steps\":[\"x-{N2}*{N3}\",\"x-x//4\",\"x*2\"]}.\n"
+        "The specification can only give the quantity left at the end. If the question asks for anything else (how "
+        "many were shipped, received or lost in total, a difference between two moments, a number of days), return "
+        "{\"impossible\": true}.\n"
     ),
     "data_analysis": (
         "You turn a question about a CSV file into a JSON specification.\n"
