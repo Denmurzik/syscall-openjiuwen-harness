@@ -96,10 +96,9 @@ def verify_coding() -> bool:
 # default of HARNESS_CONFIRM_2A. Round 8, task 40: a 2a answer is checked by an independent MODEL_FAST program; on a
 # difference a MODEL_ALT program is the third vote and two votes against 2a replace it. See the task report
 CONFIRM_2A = True
-# search included by the lead's ruling: a search vote costs ~1240 a task live (programs that read the KB) against ~150
-# for math and data, but it runs only on tasks phase 1 could not parse, where 2a errs most; the spend limit and the
-# reward order bound it
-CONFIRM_TYPES = ("math", "data_analysis", "search")
+# search left out: in Docker runs a search vote cost ~1380 units a task (programs that read the KB), 36K of 43K of the
+# confirmation spend on a 113-task set, against ~150 for math and data, and no search vote ever changed an answer
+CONFIRM_TYPES = ("math", "data_analysis")
 CONFIRM_SPEND_LIMIT = 0.5  # no new vote once this share of the budget is spent (as the final REASON pass)
 CONFIRM_GROUP_SAMPLE = 2   # a 2a group larger than this is accepted when its best-paid members' FAST votes all agree
 VERIFY_UNIT_S = 60         # time set aside per 2d unit (per worker) when the confirmation stage runs before 2d
