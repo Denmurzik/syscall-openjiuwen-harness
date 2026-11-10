@@ -16,3 +16,15 @@ def test_revenue_definition_variants(phrase):
     plain = data_solver.parse(head + "What is the total revenue of product 'gizmo' in months 3 through 4 inclusive?", ws)
     spec = data_solver.parse(head + f"What is the total revenue {phrase} of product 'gizmo' in months 3 through 4 inclusive?", ws)
     assert isinstance(spec, dict) and spec == plain
+
+
+@pytest.mark.parametrize("phrase", [
+    "(units * price minus discount)",
+    "(units * price * 1.1)",
+    "(average of units * price)",
+])
+def test_revenue_extra_arithmetic_stays_unparsed(phrase):
+    ws = EX / "data_analysis_0006" / "workspace"
+    head = "The file sales.csv has columns order_id,region,product,month,units,price (300 rows). "
+    q = head + f"What is the total revenue {phrase} of product 'gizmo' in months 3 through 4 inclusive?"
+    assert not isinstance(data_solver.parse(q, ws), dict)
