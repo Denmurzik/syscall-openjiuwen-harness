@@ -552,7 +552,9 @@ def _renames_mylib_name(tree: ast.AST) -> bool:
 def provable_contradiction(test_src: str, mylib_src: str) -> bool:
     """Strict proof for an early `infeasible`; any doubt -> False. Needs two plain top-level
     `self.assertEqual(<mylib call with literal args>, <literal>)` statements of one test method,
-    the same call, expected literals unequal under Python ==, and a stateless callee."""
+    the same call, expected literals unequal under Python ==, and a stateless callee; or, in the same
+    file shape, one plain assertion (eight kinds, see `_FALSIFIABLE`) of literals and such pinned calls
+    that is false at those values."""
     try:
         tree = ast.parse(test_src)
         lib = ast.parse(mylib_src)
@@ -667,7 +669,64 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                     differs = False
                 if differs and _callee_is_pure(lib, name):
                     return True
+    # second pass, same strict file shape: an assertion that fails whatever mylib does. Its arguments are
+    # literals or pure mylib calls pinned to a literal by an assertEqual above; at those values it is false
+    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and _plain_case(n)
+                and cls_count[n.name] == 1]:
+        for fn in cls.body:
+            if not isinstance(fn, ast.FunctionDef) or fn.decorator_list or not fn.name.startswith("test") \
+                    or meth_count[fn.name] != 1:
+                continue
+            if any(isinstance(n, (ast.Return, ast.Raise)) for n in ast.walk(fn)):
+                continue
+            for st in fn.body:
+                if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Call)):
+                    continue
+                node = st.value
+                f = node.func
+                if not (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "self"
+                        and f.attr in _FALSIFIABLE and not node.keywords
+                        and len(node.args) == _FALSIFIABLE[f.attr][0]):
+                    continue
+                values = []
+                for arg in node.args:   # a literal, or a pure mylib call that some assertEqual pins to a literal
+                    name = callee(arg)
+                    try:
+                        if name is None:
+                            v = ast.literal_eval(arg)
+                        else:
+                            args = [ast.literal_eval(x) for x in arg.args]
+                            kws = [(k.arg, ast.literal_eval(k.value)) for k in arg.keywords]
+                            key = (name, repr(args), repr(kws))
+                            if key not in seen or any(k is None for k, _ in kws) or not _callee_is_pure(lib, name) \
+                                    or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
+                                break
+                            v = seen[key]
+                    except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
+                        break
+                    if not _simple_literal(v):
+                        break
+                    values.append(v)
+                else:
+                    try:
+                        if not _FALSIFIABLE[f.attr][1](*values):
+                            return True
+                    except Exception:
+                        pass   # e.g. 1 < 'a': no verdict
     return False
+
+
+# assertion -> (number of arguments, what must hold); only comparisons of plain values
+_FALSIFIABLE = {
+    "assertEqual": (2, lambda a, b: a == b),
+    "assertNotEqual": (2, lambda a, b: a != b),
+    "assertTrue": (1, lambda a: bool(a)),
+    "assertFalse": (1, lambda a: not a),
+    "assertGreater": (2, lambda a, b: a > b),
+    "assertGreaterEqual": (2, lambda a, b: a >= b),
+    "assertLess": (2, lambda a, b: a < b),
+    "assertLessEqual": (2, lambda a, b: a <= b),
+}
 
 
 def _norm(seg: str) -> str:
