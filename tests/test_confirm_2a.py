@@ -665,3 +665,16 @@ def test_default_confirms_data_only():
     """math votes outvoted a correct spec-based answer (runs/r5/llm7 math_0008) and never fixed one; search votes cost
     ~10x and never changed an answer; data votes made the only measured fixes."""
     assert config.CONFIRM_TYPES == ("data_analysis",)
+
+
+def test_zero_votes_never_replace_non_zero_2a(tmp_path):
+    for zero in ("0", "0.00"):
+        v = _confirm(_task(tmp_path, check="exact_str"), "64092", _program({config.MODEL_FAST: zero, config.MODEL_ALT: zero}))
+        assert v.replacement is None and "kept 2a" in v.note
+
+
+def test_non_zero_agreement_still_replaces_and_zero_2a_is_unchanged(tmp_path):
+    v = _confirm(_task(tmp_path), "64092", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}))
+    assert v.replacement == "7"
+    v = _confirm(_task(tmp_path), "0", _program({config.MODEL_FAST: "0", config.MODEL_ALT: "0"}))
+    assert v.replacement is None and v.fast_agrees

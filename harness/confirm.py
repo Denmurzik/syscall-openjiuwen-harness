@@ -119,6 +119,17 @@ async def _vote(program, task, client, model: str, answer_2a: str) -> tuple[str 
     return at_precision(task, answer, answer_2a), used
 
 
+def _is_number(text: str) -> bool:
+    try:
+        return Decimal(" ".join(str(text).split())).is_finite()
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def _is_zero(text: str) -> bool:
+    return _is_number(text) and Decimal(" ".join(str(text).split())) == 0
+
+
 async def confirm(task, answer: str, client, program, can_afford) -> Verdict:
     """`program(task, client, model=, shape_model=)` is the 2b program route; `can_afford()` says whether the third
     vote may be bought."""
@@ -139,4 +150,7 @@ async def confirm(task, answer: str, client, program, can_afford) -> Verdict:
     if fast_models & alt_models:   # the same weights answered both votes (after a fallback): the second does not count
         return Verdict(None, f"confirm: alt vote did not count, not independent of fast ({sorted(fast_models & alt_models)}), "
                        "2a kept", False)
+    if _is_zero(fast) and not _is_zero(answer) and _is_number(answer):
+        # two programs sharing one habit (an empty selection, e.g. a case-sensitive filter) is no evidence for zero
+        return Verdict(None, f"confirm: both votes {fast!r} against non-zero 2a {answer!r}: kept 2a", False)
     return Verdict(fast, f"confirm: fast and alt agree on {fast!r} against 2a {answer!r}", False)
