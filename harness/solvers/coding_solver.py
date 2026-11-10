@@ -12,7 +12,7 @@ import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from harness import config
 from harness.result import SolveResult
@@ -549,12 +549,13 @@ def _renames_mylib_name(tree: ast.AST) -> bool:
                and any(a.asname and a.asname != a.name for a in n.names) for n in ast.walk(tree))
 
 
-def provable_contradiction(test_src: str, mylib_src: str) -> bool:
+def provable_contradiction(test_src: str, mylib_src: str, failing: Iterable[str] | None = None) -> bool:
     """Strict proof for an early `infeasible`; any doubt -> False. Needs two plain top-level
     `self.assertEqual(<mylib call with literal args>, <literal>)` statements of one test method,
     the same call, expected literals unequal under Python ==, and a stateless callee; or, in the same
-    file shape, one plain assertion (eight kinds, see `_FALSIFIABLE`) of literals and such pinned calls
-    that is false at those values."""
+    file shape, one plain assertion (eight kinds, see `_FALSIFIABLE`) of literals and such calls pinned
+    to plain values (`_plain_value`) that is false at those values, when it or a test pinning its calls
+    is in `failing` (red on `mylib_src`)."""
     try:
         tree = ast.parse(test_src)
         lib = ast.parse(mylib_src)
@@ -613,6 +614,7 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
         return None
 
     seen: dict[tuple, object] = {}   # file-wide: methods and classes run independently
+    pinned_in: dict[tuple, set[str]] = {}   # call -> the tests whose assertEqual pins it
     cls_count: dict[str, int] = {}
     meth_count: dict[str, int] = {}   # test names are the harness's handle: keep them unique
     for n in tree.body:
@@ -660,6 +662,7 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                         or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
                     continue
                 key = (name, repr(args), repr(kws))
+                pinned_in.setdefault(key, set()).add(fn.name)
                 if key not in seen:
                     seen[key] = expected
                     continue
@@ -670,9 +673,12 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                 if differs and _callee_is_pure(lib, name):
                     return True
     # second pass, same strict file shape: an assertion that fails whatever mylib does. Its arguments are
-    # literals or pure mylib calls pinned to a literal by an assertEqual above; at those values it is false
+    # literals or pure mylib calls that the first pass found pinned to a literal by an assertEqual anywhere in
+    # the file; at those values it is false. Only when the target or a test pinning its calls is red now: all of
+    # them green on this mylib would refute the proof
+    red = set(failing or ())
     for cls in [n for n in tree.body if isinstance(n, ast.ClassDef) and _plain_case(n)
-                and cls_count[n.name] == 1]:
+                and cls_count[n.name] == 1 and red]:
         for fn in cls.body:
             if not isinstance(fn, ast.FunctionDef) or fn.decorator_list or not fn.name.startswith("test") \
                     or meth_count[fn.name] != 1:
@@ -689,6 +695,7 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                         and len(node.args) == _FALSIFIABLE[f.attr][0]):
                     continue
                 values = []
+                involved = {fn.name}
                 for arg in node.args:   # a literal, or a pure mylib call that some assertEqual pins to a literal
                     name = callee(arg)
                     try:
@@ -702,18 +709,30 @@ def provable_contradiction(test_src: str, mylib_src: str) -> bool:
                                     or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
                                 break
                             v = seen[key]
+                            if not _plain_value(v):   # a dict or set pin: Counter, OrderedDict break == chains
+                                break
+                            involved |= pinned_in[key]
                     except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
                         break
                     if not _simple_literal(v):
                         break
                     values.append(v)
                 else:
+                    if not involved & red:
+                        continue
                     try:
                         if not _FALSIFIABLE[f.attr][1](*values):
                             return True
                     except Exception:
                         pass   # e.g. 1 < 'a': no verdict
     return False
+
+
+def _plain_value(v) -> bool:
+    """int, float, str, bool, None, or lists and tuples of those: values whose == agrees with every comparison."""
+    if isinstance(v, (list, tuple)):
+        return all(_plain_value(x) for x in v)
+    return v is None or type(v) in (int, float, str, bool)
 
 
 # assertion -> (number of arguments, what must hold); only comparisons of plain values
@@ -1164,14 +1183,14 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             while not report.ok:
                 step = _repair_round(ctx, cur, report, refs)
                 if step is None:
-                    if provable_contradiction(test_src, original):
+                    if provable_contradiction(test_src, original, initially_failing):
                         return SolveResult("infeasible", note="tests contradict each other")
                     if cur != original:  # best partial repair: a guess beats no answer
                         return _partial(ws, mylib, cur, report)
                     return SolveResult("unparsed", note=f"no repair found for {report.failed}")
                 cur, report = step
         except _OutOfTime:
-            if provable_contradiction(test_src, original):  # search is hopeless: no model calls
+            if provable_contradiction(test_src, original, initially_failing):  # search is hopeless: no model calls
                 return SolveResult("infeasible", note="tests contradict each other")
             if cur != original and not report.ok:
                 return _partial(ws, mylib, cur, report)
