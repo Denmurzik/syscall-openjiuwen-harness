@@ -46,6 +46,7 @@ def test_unknown_function_still_goes_to_the_check(tmp_path, monkeypatch):
         "    def test_has_more(self):\n        self.assertEqual(mylib.has([3], 3), True)\n", encoding="utf-8")
     res = solve(Task("custom", "coding", "fix", 2.0, "unittest", d, d / "workspace"))
     assert res.status == "solved" and res.tentative and "canonical" not in res.note
+    assert (res.extra or {}).get("verify")
 
 
 def test_all_canonical_accepts_restored_known_functions():
@@ -56,6 +57,26 @@ def test_all_canonical_accepts_restored_known_functions():
 def test_known_name_with_another_body_is_not_canonical():
     assert not _all_canonical(TOTAL_BUG, "def total(xs):\n    return sum(xs)\n")
     assert not _all_canonical(TOTAL_BUG, TOTAL_OK.replace("(xs)", "(ys)").replace("in xs", "in ys"))
+
+
+DECO = "import functools\n\n\n@functools.cache\n"
+DOC = "(xs):\n    \"\"\"Sum of xs.\"\"\"\n"
+
+
+@pytest.mark.parametrize("bug,fixed", [
+    (DECO + TOTAL_BUG, DECO + TOTAL_OK),                                          # decorator kept, body restored
+    (TOTAL_BUG.replace("(xs):\n", DOC), TOTAL_OK.replace("(xs):\n", DOC)),        # docstring
+    (TOTAL_BUG.replace("(xs)", "(xs=())"), TOTAL_OK.replace("(xs)", "(xs=())")),  # default argument
+    (TOTAL_BUG.replace("(xs)", "(xs, k)"), TOTAL_OK.replace("(xs)", "(xs, k)")),  # changed signature
+], ids=["decorator", "docstring", "default", "signature"])
+def test_known_name_variants_are_not_canonical(bug, fixed):
+    assert ast_differs(bug, fixed)   # the repair did change the function
+    assert not _all_canonical(bug, fixed)
+
+
+def ast_differs(a: str, b: str) -> bool:
+    import ast
+    return ast.dump(ast.parse(a)) != ast.dump(ast.parse(b))
 
 
 def test_one_unknown_changed_function_makes_it_not_canonical():

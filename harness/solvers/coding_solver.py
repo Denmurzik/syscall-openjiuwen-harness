@@ -1038,6 +1038,7 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             raise
         _write_mylib(mylib, cur)
         shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+        # deliberately before _ambiguity: a known correct text needs no tie preference or swap
         if _all_canonical(original, cur):  # known correct text of every changed function: no 2c/2d
             return SolveResult("solved", answer="DONE", note="repaired by mutation, canonical")
         try:  # the deterministic choice is already on disk; ambiguity adds a hint and may
