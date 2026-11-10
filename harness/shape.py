@@ -34,8 +34,16 @@ _IS_INT = re.compile(r"[-+]?\d+")
 _IS_NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 
 
+# a count or a difference is a number whatever field words the question holds ("How many employees of X were
+# born after 1975?", "How many people have X as their mentor?"): no shape is known for it
+_COUNT_ASK = re.compile(r"\bhow (?:many|much|old)\b|\bnumber of\b|\byes or no\b", re.I)
+
+
 def _search_shape(instruction: str) -> str | None:
-    words = set(_WORD.findall(_INTRO.sub(" ", strip_boilerplate(instruction)).casefold()))
+    text = _INTRO.sub(" ", strip_boilerplate(instruction))
+    if _COUNT_ASK.search(text):
+        return None
+    words = set(_WORD.findall(text.casefold()))
     year_ask, name_ask = bool(words & _YEAR_ASK), bool(words & _NAME_ASK)
     if year_ask and not name_ask and "when" not in words and words & _NAME_NOUNS:
         return None

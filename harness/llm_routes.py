@@ -44,12 +44,17 @@ KB_PREAMBLE = (
     "import os\n"
     "class KbMissing(KeyError):\n"
     "    pass\n"
+    "class KbFieldMissing(KbMissing):\n"
+    "    pass\n"
     "class _KbDict(dict):\n"
     "    def __missing__(self, key):\n"
     "        raise KbMissing(key)\n"
+    "class _KbPage(dict):\n"
+    "    def __missing__(self, key):\n"
+    "        raise KbFieldMissing(key)\n"
     "kb = _KbDict()\n"
     "for _f in (sorted(os.listdir('kb')) if os.path.isdir('kb') else []):\n"
-    "    _name, _d = None, _KbDict()\n"
+    "    _name, _d = None, _KbPage()\n"
     "    try:\n"
     "        _text = open(os.path.join('kb', _f), encoding='utf-8', errors='replace').read()\n"
     "    except OSError:\n"
@@ -309,7 +314,27 @@ def _kb_key_error(stderr: str) -> bool:
     """The traceback ends in KbMissing: the preamble's `kb` or one of its pages had no such key. A KeyError of
     the model's own dicts is something else and takes the normal retry."""
     lines = [ln for ln in stderr.strip().splitlines() if ln.strip()]
-    return bool(lines) and lines[-1].startswith("KbMissing")
+    return bool(lines) and lines[-1].startswith(("KbMissing", "KbFieldMissing"))
+
+
+def _kb_field_missing(stderr: str) -> str | None:
+    """The field a page was asked for and does not have (a page that is there: the name was found)."""
+    lines = [ln for ln in stderr.strip().splitlines() if ln.strip()]
+    if not lines or not lines[-1].startswith("KbFieldMissing"):
+        return None
+    return lines[-1].partition(":")[2].strip().strip("'\"") or "?"
+
+
+def _kb_fields(ws: Path) -> list[str]:
+    fields: set[str] = set()
+    for f in (sorted((ws / "kb").iterdir()) if (ws / "kb").is_dir() else []):
+        try:
+            for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                if ":" in ln and not ln.startswith("#"):
+                    fields.add(ln.split(":", 1)[0].strip())
+        except OSError:
+            continue
+    return sorted(fields)[:20]
 
 
 def _is_container_repr(answer: str) -> bool:
@@ -349,6 +374,7 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
     note = ""
     attempt, attempts, shape_retried = 0, 2, False
     literal_retried = False
+    field_retried = False
     guess = None  # the latest wrong-shape answer: a best guess for the scheduler's last pass
     while attempt < attempts:
         try:
@@ -371,6 +397,20 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             continue
         # subprocess + copytree block for up to 20 s: keep them off the event loop
         res = await asyncio.to_thread(run_program, kb_program(code) if use_kb else code, task.workspace)
+        field = _kb_field_missing(res.stderr) if use_kb and res.returncode != 0 and not res.timed_out else None
+        if field is not None and not field_retried:
+            # the page is there, the field is not: an invented field ("Mentee") or a field of the other kind of
+            # page asked while scanning all pages. One more try with the fields that exist
+            field_retried, attempts = True, attempts + 1
+            note = f"kb page has no field {field!r}"
+            messages = messages + [{"role": "assistant", "content": r.text}, {"role": "user", "content":
+                f"Your program asked a page for the field {field!r}, which that page does not have. The only fields "
+                f"are: {', '.join(_kb_fields(task.workspace))}; a page has only the fields of its kind (see the "
+                "examples). For a relation in the other direction (who is mentored by X, who works for X) scan "
+                "kb.items() and compare with .get(). If the question needs a fact that no field holds, print "
+                "IMPOSSIBLE. Output only code."}]
+            attempt += 1
+            continue
         if use_kb and res.returncode != 0 and not res.timed_out and _kb_key_error(res.stderr):
             # clean "not found": no retry. A best_guess of a wrong-shape first attempt is dropped on purpose:
             # for an infeasible task a wrong-shape file on disk is worse than no file

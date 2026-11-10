@@ -737,10 +737,18 @@ def test_search_own_keyerror_takes_the_retry(tmp_path):
     assert r.status == "solved" and r.answer == "1951" and len(c.calls) == 2
 
 
-def test_search_missing_field_is_not_found(tmp_path):
-    c = FakeClient(["print(kb['C D']['Mentor'])", "print(1)"])
+def test_search_missing_field_is_retried_once_then_not_found(tmp_path):
+    # expert pass 3: the page is there, the field is not: one retry with the fields that exist
+    c = FakeClient(["print(kb['C D']['Mentee'])", "print(kb['C D']['Mentee'])", "print(1)"])
     r = run(solve_with_program(_kb_task(tmp_path), c))
-    assert r.status == "unparsed" and "not found" in r.note and len(c.calls) == 1
+    assert r.status == "unparsed" and "not found" in r.note and len(c.calls) == 2
+    assert "'Mentee'" in c.calls[1]["messages"][-1]["content"] and "Born" in c.calls[1]["messages"][-1]["content"]
+
+
+def test_search_missing_field_retry_can_answer(tmp_path):
+    c = FakeClient(["print(kb['C D']['Birth'])", "print(kb['C D']['Born'])"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1951" and len(c.calls) == 2
 
 
 def test_search_traceback_lines_are_the_models(tmp_path):
