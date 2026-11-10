@@ -584,3 +584,75 @@ def test_gate_fix_9007_lowest_region_still_replaced(tmp_path):
            "print(df.groupby('region')['rev'].sum().idxmin())")
     v = _vote_real(t, "east", _CodeClient({config.MODEL_FAST: fast, config.MODEL_ALT: alt}))
     assert v.replacement == "west"
+
+
+# ---------------------------------------------------------------- fix round 2: reviewer's probes (p_r1.py)
+
+_Q = "The file sales.csv has columns order_id,region,product,month,units,price (2 rows). "
+_CSV = "order_id,region,product,month,units,price\n1,east,gizmo,1,1000,1.2345\n2,east,gizmo,1,234,1.0\n"
+_KB = {"kb/ann.md": "# Ann Lee\n- Employer: Acme Corp\n"}
+_SQ = "The directory kb/ contains a small knowledge base of markdown files. Who is the employer of Ann Lee?"
+
+
+def _probe(tmp_path, ttype, check, instruction, answer_2a, code, files=None):
+    t = _task(tmp_path, tid=f"{ttype}_p", ttype=ttype, check=check, instruction=instruction)
+    for name, text in (files or {}).items():
+        p = t.workspace / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    return _vote_real(t, answer_2a, _CodeClient({config.MODEL_FAST: code, config.MODEL_ALT: code}))
+
+
+@pytest.mark.parametrize("label, ttype, check, instruction, answer_2a, code, files", [
+    ("N1a thousands", "data_analysis", "exact_str", _Q + "What is the total revenue, rounded to 2 decimal places?",
+     "1468.5", "x = 1000*1.2345 + 234*1.0\nprint(f'{x:,.2f}')", {"sales.csv": _CSV}),
+    ("N1b currency", "data_analysis", "exact_str", _Q + "What is the total revenue, rounded to 2 decimal places?",
+     "1468.5", "x = 1000*1.2345 + 234*1.0\nprint(f'${x:.2f}')", {"sales.csv": _CSV}),
+    ("N2 nearest thousandth", "data_analysis", "exact_str", _Q + "What is the average price, to the nearest thousandth?",
+     "1.117", "x = (1.2345 + 1.0) / 2\nprint(round(x, 3))", {"sales.csv": _CSV}),
+    ("N2b 3 dp in parens", "data_analysis", "exact_str", _Q + "What is the average price (3 d.p.)?",
+     "1.117", "x = (1.2345 + 1.0) / 2\nprint(round(x, 3))", {"sales.csv": _CSV}),
+    ("N3 percent", "data_analysis", "exact_str", _Q + "What share of units is in month 1, in percent?",
+     "100", "print(str(100.0) + '%')", {"sales.csv": _CSV}),
+    ("N4 neg zero str", "data_analysis", "exact_str", _Q + "What is the change in price, rounded to 2 decimal places?",
+     "0.00", "print('%.2f' % (-0.001))", {"sales.csv": _CSV}),
+    ("N4b neg zero int", "math", "exact_int", "A has 5 and loses 5. How many are left?", "0", "a = 5\nprint(-(a - 5) * 1.0)", None),
+    ("N5a case+space", "search", "exact_str", _SQ, "Acme Corp", "s = 'ACME  corp'\nprint(s)", _KB),
+    ("N5c markdown bold", "search", "exact_str", _SQ, "Acme Corp", "x = 'Acme Corp'\nprint('**' + x + '**')", _KB),
+    ("N6a debug after (int)", "math", "exact_int", "A store has 500 apples and sells 80. How many remain?",
+     "420", "a = 500 - 80\nprint(a)\nprint('checked', 2, 'steps')", None),
+    ("N6b debug after (str)", "data_analysis", "exact_str", _Q + "Which region has most units?",
+     "east", "r = 'east'\nprint(r)\nprint('done')", {"sales.csv": _CSV}),
+    ("N6c answer prefix", "data_analysis", "exact_str", _Q + "Which region has most units?",
+     "east", "r = 'east'\nprint('Region: ' + r)", {"sales.csv": _CSV}),
+    ("N7 exponent int", "math", "exact_int", "A has 20 boxes of 1000000000000000000 nails. How many nails?",
+     "20000000000000000000", "print(20 * 1e18)", None),
+    ("N8 tie half", "data_analysis", "exact_str", _Q + "What is the average price, rounded to 2 decimal places?",
+     "1.12", "print(round((1.2345 + 1.0) / 2, 4))", {"sales.csv": _CSV}),
+])
+def test_probe_keeps_a_correct_2a_answer(tmp_path, label, ttype, check, instruction, answer_2a, code, files):
+    v = _probe(tmp_path, ttype, check, instruction, answer_2a, code, files)
+    assert v.replacement is None, label
+
+
+def test_a_single_bare_line_still_replaces(tmp_path):
+    v = _probe(tmp_path, "data_analysis", "exact_str", _Q + "Which region has most units?", "west",
+               "print('east')", {"sales.csv": _CSV})
+    assert v.replacement == "east"
+
+
+def test_a_name_vote_passes_the_narrow_name_check(tmp_path):
+    v = _probe(tmp_path, "search", "exact_str", _SQ, "Bob Ray", "print('Acme Corp')", _KB)
+    assert v.replacement == "Acme Corp"
+
+
+def test_three_place_2a_answer_compares_at_three_places(tmp_path):
+    """2a shows three places: a vote that differs in the third place is a real difference, written at three places."""
+    v = _probe(tmp_path, "data_analysis", "exact_str", _Q + "What is the average price, to the nearest thousandth?",
+               "1.117", "print(1.1183)", {"sales.csv": _CSV})
+    assert v.replacement == "1.118"
+
+
+def test_exact_int_accepts_a_trailing_zero_fraction(tmp_path):
+    v = _probe(tmp_path, "math", "exact_int", "How many?", "12", "print(13.0)")
+    assert v.replacement == "13"

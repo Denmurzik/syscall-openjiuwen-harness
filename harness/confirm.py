@@ -3,8 +3,9 @@
 2a's answer comes from a model spec run by an exact executor. A MODEL_FAST program written from the task text alone
 (it never sees the spec or the answer) is the second vote; when it differs, a MODEL_ALT program is the third. 2a's
 answer is replaced only when the two programs agree with each other on another answer of the right shape. A vote that
-crashes, times out, prints IMPOSSIBLE or the wrong shape does not count, nor (exact_int) one that printed a fraction,
-nor a second vote answered by the same weights as the first; numbers compare at 2a's precision. Without a majority
+crashes, times out, prints IMPOSSIBLE or the wrong shape does not count, nor one whose output is not a single bare
+value in canonical form (see `_canonical`), nor a second vote answered by the same weights as the first; numbers
+compare at 2a's precision. Without a majority
 2a stays.
 """
 import logging
@@ -45,30 +46,54 @@ def family(model: str | None) -> str:
     return m[:-len("-noreason")] if m.endswith("-noreason") else m
 
 
-def _integral_print(stdout: str) -> bool:
-    """exact_int: the program printed an integer (24, 24.0), not a fraction the normaliser would round (12.6)."""
-    from harness.llm_routes import last_number
-    num = last_number(stdout or "")
-    try:
-        return num is not None and Decimal(num) == Decimal(num).to_integral_value()
-    except InvalidOperation:
-        return False
+_INT_LINE = re.compile(r"-?\d+(?:\.0+)?")
+# a text value that is not a name (a region, a product): words only, no label, markup or closing period
+_TEXT_LINE = re.compile(r"[^\W_][\w'&-]*(?: [\w'&-]+){0,4}")
 
 
-def at_precision(task, answer: str) -> str:
+def _canonical(task, answer: str, line: str, answer_2a: str) -> bool:
+    """A vote counts only in the canonical form of a bare answer: `line` is the program's only output line. exact_int:
+    the whole line an integer (24, 24.0; not 12.6, 2e+19, 'checked 2 steps'). A plain number for 2a: a plain number
+    (not 1,468.50, $1468.50, 100.0%). A name: the bare-answer name check. Other text: words only (not 'Region: east')."""
+    line = line.strip()
+    if task.check == "exact_int":
+        return bool(_INT_LINE.fullmatch(line))
+    if _PLAIN.fullmatch(answer_2a.strip()):
+        return bool(_PLAIN.fullmatch(line))
+    if _PLAIN.fullmatch(answer):
+        return bool(_PLAIN.fullmatch(line))
+    from harness.llm_routes import _looks_like_name
+    from harness.shape import NAME, expected_shape
+    if expected_shape(task) == NAME:
+        return _looks_like_name(answer)
+    return bool(_TEXT_LINE.fullmatch(answer))
+
+
+def _places(text: str) -> int:
+    return len(text.split(".", 1)[1]) if "." in text else 0
+
+
+def at_precision(task, answer: str, answer_2a: str = "") -> str:
     """A number at 2a's precision, by the phase-1 executor's rule (`_fmt`): the places the question asks for, else two
-    with trailing zeros stripped. Float noise (0.30000000000000004) then reads 0.3; other answers stay as they are."""
+    with trailing zeros stripped, and never fewer places than 2a's answer shows (a spec may carry decimals=3 for a
+    phrase the regex misses). Float noise (0.30000000000000004) then reads 0.3; other answers stay as they are."""
     if task.check == "exact_int" or not _PLAIN.fullmatch(answer):
         return answer
     from harness.llm_routes import _requested_decimals
     from harness.solvers.data_solver import _fmt
+    asked = _requested_decimals(task.instruction)
+    shown = _places(answer_2a.strip()) if _PLAIN.fullmatch(answer_2a.strip()) else 0
+    if asked is None and shown <= 2:
+        places = None   # two places, trailing zeros stripped: what the executor writes
+    else:
+        places = max(asked or 0, shown, 2 if asked is None else 0)
     try:
-        return _fmt(Decimal(answer), "exact_str", _requested_decimals(task.instruction))
+        return _fmt(Decimal(answer), "exact_str", places)
     except (InvalidOperation, ValueError):
         return answer
 
 
-async def _vote(program, task, client, model: str) -> tuple[str | None, set]:
+async def _vote(program, task, client, model: str, answer_2a: str) -> tuple[str | None, set]:
     """One program on `model` (its shape retry too): its answer, or None when it does not count, and the models
     whose replies it used (a failing model falls through to another one)."""
     from harness.llm import BudgetExhausted
@@ -85,22 +110,26 @@ async def _vote(program, task, client, model: str) -> tuple[str | None, set]:
     answer = res.answer if res is not None and res.status == "solved" else None
     if answer is None or answer.strip() == "" or answer.strip() == "IMPOSSIBLE" or mismatch(task, answer) is not None:
         return None, used
-    if task.check == "exact_int" and not _integral_print((res.extra or {}).get("stdout", answer)):
-        return None, used   # two programs that both printed 12.6 agree only on the normaliser's rounding
-    return at_precision(task, answer.strip()), used
+    answer = answer.strip()
+    lines = [ln for ln in str((res.extra or {}).get("stdout", answer)).splitlines() if ln.strip()]
+    # one bare line only: two programs share habits (a debug line, a label, thousands commas, a currency sign), so
+    # agreeing on a non-canonical print says nothing about the value
+    if len(lines) != 1 or not _canonical(task, answer, lines[0], answer_2a):
+        return None, used
+    return at_precision(task, answer, answer_2a), used
 
 
 async def confirm(task, answer: str, client, program, can_afford) -> Verdict:
     """`program(task, client, model=, shape_model=)` is the 2b program route; `can_afford()` says whether the third
     vote may be bought."""
-    fast, fast_models = await _vote(program, task, client, config.MODEL_FAST)
+    fast, fast_models = await _vote(program, task, client, config.MODEL_FAST, answer)
     if fast is None:
         return Verdict(None, "confirm: fast vote did not count, 2a kept", False)
     if same_answer(fast, answer):
         return Verdict(None, "confirm: fast agrees with 2a", True)
     if not can_afford():
         return Verdict(None, f"confirm: fast {fast!r} differs, no budget for the third vote, 2a kept", False)
-    alt, alt_models = await _vote(program, task, client, config.MODEL_ALT)
+    alt, alt_models = await _vote(program, task, client, config.MODEL_ALT, answer)
     if alt is None:
         return Verdict(None, f"confirm: fast {fast!r} differs, alt vote did not count, 2a kept", False)
     if same_answer(alt, answer):

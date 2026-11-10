@@ -108,12 +108,6 @@ def _with_decimals(ans: str, instruction: str | None) -> str:
 _PREFIX = re.compile(r"^(?:answer|result)\s*:\s*", re.I)
 
 
-def last_number(stdout: str) -> str | None:
-    """The last number printed (thousands commas dropped): what an exact_int answer is read from."""
-    nums = _NUM.findall(re.sub(r"(?<=\d),(?=\d{3})", "", stdout))
-    return nums[-1] if nums else None
-
-
 def normalize_answer(stdout: str, check: str | None, instruction: str | None = None) -> str | None:
     if check == "exact_int":
         nums = _NUM.findall(re.sub(r"(?<=\d),(?=\d{3})", "", stdout))
