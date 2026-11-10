@@ -668,13 +668,31 @@ def test_default_confirms_data_only():
 
 
 def test_zero_votes_never_replace_non_zero_2a(tmp_path):
-    for zero in ("0", "0.00"):
-        v = _confirm(_task(tmp_path, check="exact_str"), "64092", _program({config.MODEL_FAST: zero, config.MODEL_ALT: zero}))
-        assert v.replacement is None and "kept 2a" in v.note
+    for check, zero in (("exact_str", "0"), ("exact_str", "0.00"), ("exact_int", "0")):
+        seen = []
+        v = _confirm(_task(tmp_path, check=check), "64092",
+                     _program({config.MODEL_FAST: zero, config.MODEL_ALT: zero}, seen))
+        assert v.replacement is None and not v.fast_agrees
+        assert "both votes" in v.note and "kept 2a" in v.note
+        assert [m for _, m, _ in seen] == [config.MODEL_FAST, config.MODEL_ALT]   # the alt vote was really requested
 
 
-def test_non_zero_agreement_still_replaces_and_zero_2a_is_unchanged(tmp_path):
+def test_guard_does_not_block_replacement_of_a_zero_2a(tmp_path):
+    v = _confirm(_task(tmp_path), "0", _program({config.MODEL_FAST: "5", config.MODEL_ALT: "5"}))
+    assert v.replacement == "5"
+
+
+def test_zero_2a_with_zero_votes_is_unchanged(tmp_path):
+    for a in ("0", "-0", "0.0"):
+        v = _confirm(_task(tmp_path, check="exact_str"), a, _program({config.MODEL_FAST: "0", config.MODEL_ALT: "0"}))
+        assert v.replacement is None and v.fast_agrees
+
+
+def test_non_zero_agreement_still_replaces(tmp_path):
     v = _confirm(_task(tmp_path), "64092", _program({config.MODEL_FAST: "7", config.MODEL_ALT: "7"}))
     assert v.replacement == "7"
-    v = _confirm(_task(tmp_path), "0", _program({config.MODEL_FAST: "0", config.MODEL_ALT: "0"}))
-    assert v.replacement is None and v.fast_agrees
+
+
+def test_non_numeric_2a_with_zero_votes_keeps_previous_behaviour(tmp_path):
+    v = _confirm(_task(tmp_path, check="exact_str"), "Gizmo", _program({config.MODEL_FAST: "0", config.MODEL_ALT: "0"}))
+    assert v.replacement == "0" and "both votes" not in v.note
