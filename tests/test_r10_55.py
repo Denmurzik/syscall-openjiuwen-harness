@@ -148,6 +148,17 @@ MORE_MEANING = {   # the visible test cannot tell these from the known text, the
             "            best = abs(x)\n    return best\n", "abs("),
     "negative_n": ("first_n", "def first_n(xs, n):\n    if n < 0:\n        return []\n    return xs[:n + 1]\n", "n < 0"),
     "round": ("average", "def average(xs):\n    return round(sum(xs) / 2)\n", "round("),
+    # guards written as expressions change no statement kind and no call (final review I1)
+    "ifexp_maximum": ("maximum", "def maximum(xs):\n    best = xs[0] if xs else None\n    for x in xs:\n"
+                      "        if x < best:\n            best = x\n    return best\n", "if xs else None"),
+    "ifexp_average": ("average", "def average(xs):\n    return sum(xs) / 2 if xs else 0\n", "if xs else 0"),
+    "boolop_total": ("total", "def total(xs):\n    s = 0\n    for x in xs:\n        s += x or 0\n    return s - 1\n",
+                     "x or 0"),
+    "ifexp_first_n": ("first_n", "def first_n(xs, n):\n    return xs[:n + 1] if n > 0 else []\n", "if n > 0"),
+    "and_guard_count_even": ("count_even", "def count_even(xs):\n    return sum(1 for x in xs if x is not None and "
+                             "x % 2 == 1)\n", "x is not None"),
+    "and_guard_maximum": ("maximum", "def maximum(xs):\n    best = xs and xs[0]\n    for x in xs:\n"
+                          "        if x < best:\n            best = x\n    return best\n", "xs and xs[0]"),
 }
 
 
@@ -159,6 +170,26 @@ def test_function_with_more_meaning_is_not_replaced(tmp_path, case):
     res = solve(t)
     assert "canonical" not in res.note                     # never final without a second opinion
     assert mark in (t.workspace / "mylib.py").read_text(encoding="utf-8")
+
+
+def test_expression_guard_probe_behaves_as_before(tmp_path):
+    # the final review's probe: the one-token fix of the comparison, the guard kept, a second opinion still due
+    name, lib, _ = MORE_MEANING["ifexp_maximum"]
+    t = _task(tmp_path, lib, _tests([name]))
+    res = solve(t)
+    assert res.status == "solved" and "canonical" not in res.note
+    assert (t.workspace / "mylib.py").read_text(encoding="utf-8") == lib.replace("x < best", "x > best")
+
+
+def test_flipped_comparison_keeps_the_known_shape():
+    lib = GOOD["maximum"].replace("x > best", "x < best")
+    assert _canonical_substitute(lib, {"maximum"}) == GOOD["maximum"]
+
+
+def test_extra_value_condition_is_not_a_guard():
+    # coding_matrix's `x % 2 == 0 and x > 2`: a planted extra condition, the known text takes its place
+    lib = GOOD["count_even"].replace("x % 2 == 0", "x % 2 == 0 and x > 2")
+    assert _canonical_substitute(lib, {"count_even"}) == GOOD["count_even"]
 
 
 def test_same_shape_with_another_call_argument_is_replaced():

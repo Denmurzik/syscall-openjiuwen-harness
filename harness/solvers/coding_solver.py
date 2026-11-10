@@ -1077,10 +1077,27 @@ def _called(fn: ast.AST) -> set[str]:
     return out
 
 
+_VALUE_CMP = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+
+
+def _guards(fn: ast.AST) -> int:
+    """Guards written as expressions, which change no statement kind and no call: `... if xs else None`, `x or 0`,
+    and an `and` with an operand other than a value comparison (`xs and xs[0]`, `x is not None and ...`).
+    `x % 2 == 0 and x > 2` is an extra condition, not a guard: the known text may take its place."""
+    def guard(n):
+        if isinstance(n, ast.IfExp) or isinstance(n, ast.BoolOp) and isinstance(n.op, ast.Or):
+            return True
+        return isinstance(n, ast.BoolOp) and any(
+            not (isinstance(v, ast.Compare) and all(isinstance(o, _VALUE_CMP) for o in v.ops)) for v in n.values)
+    return sum(guard(n) for n in ast.walk(fn))
+
+
 def _same_shape(node: ast.FunctionDef, ref: ast.FunctionDef) -> bool:
     """The known text plus a slip, not a function with more meaning: the same statement kinds (a docstring, a guard
-    or an extra branch differ) and no call the known text lacks (`abs`, `round`) beyond a few common slips."""
-    return _stmt_kinds(node) == _stmt_kinds(ref) and _called(node) <= _called(ref) | _SHAPE_CALLS
+    or an extra branch differ), no call the known text lacks (`abs`, `round`) beyond a few common slips, and no
+    more expression guards (`_guards`) than the known text: a one-token slip adds none."""
+    return _stmt_kinds(node) == _stmt_kinds(ref) and _called(node) <= _called(ref) | _SHAPE_CALLS \
+        and _guards(node) <= _guards(ref)
 
 
 def _canonical_substitute(src: str, names: set[str]) -> str | None:
