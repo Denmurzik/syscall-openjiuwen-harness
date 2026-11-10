@@ -1041,11 +1041,33 @@ def _all_canonical(original: str, cur: str) -> bool:
 
 _CANON_NODES = {n.name: n for n in ast.parse(_CANON_SRC).body}
 _CANON_TEXT = {n.name: ast.get_source_segment(_CANON_SRC, n) for n in ast.parse(_CANON_SRC).body}
+_SHAPE_CALLS = {"sorted", "max", "min", "len", "sum", "reversed"}   # a slip may call these where the known text does not
+
+
+def _stmt_kinds(fn: ast.AST) -> list[type]:
+    """Statement kinds in walk order; `s = x` for `s += x` is a slip of the same shape."""
+    return [ast.Assign if type(n) is ast.AugAssign else type(n) for n in ast.walk(fn) if isinstance(n, ast.stmt)]
+
+
+def _called(fn: ast.AST) -> set[str]:
+    out = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            f = n.func
+            out.add(f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else "<expr>")
+    return out
+
+
+def _same_shape(node: ast.FunctionDef, ref: ast.FunctionDef) -> bool:
+    """The known text plus a slip, not a function with more meaning: the same statement kinds (a docstring, a guard
+    or an extra branch differ) and no call the known text lacks (`abs`, `round`) beyond a few common slips."""
+    return _stmt_kinds(node) == _stmt_kinds(ref) and _called(node) <= _called(ref) | _SHAPE_CALLS
 
 
 def _canonical_substitute(src: str, names: set[str]) -> str | None:
     """`src` with the known correct text in place of every top-level function of `names` that has a known name,
-    the known parameters, no decorators and another body; None when there is nothing to replace."""
+    the known parameters, no decorators, the known shape (`_same_shape`) and another body; None when there is
+    nothing to replace."""
     try:
         tree = ast.parse(src)
     except (SyntaxError, ValueError, RecursionError):
@@ -1056,7 +1078,8 @@ def _canonical_substitute(src: str, names: set[str]) -> str | None:
         if type(node) is not ast.FunctionDef or node.name not in names or node.name not in _CANON:
             continue
         ref = _CANON_NODES[node.name]
-        if node.decorator_list or node.col_offset or ast.dump(node.args) != ast.dump(ref.args):
+        if node.decorator_list or node.col_offset or ast.dump(node.args) != ast.dump(ref.args) \
+                or not _same_shape(node, ref):
             continue
         if ast.dump(node) == _CANON[node.name]:
             continue
@@ -1114,6 +1137,7 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         initially_failing = list(report.failed)
         cur = original
         hint_base, hint_failing = original, initially_failing
+        substituted: list[str] = []
         try:
             # the functions of the organizers' examples have one known correct text: where a failing test uses a
             # function of that name written differently, the known text is tried first. Kept only when it turns
@@ -1130,6 +1154,7 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                                   and set(rep.failed) < set(report.failed)):
                         cur, report = canon, rep
                         hint_base, hint_failing = canon, list(rep.failed)
+                        substituted.append(name)
                     if report.ok:
                         break
             except _OutOfTime:
@@ -1168,7 +1193,11 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             return SolveResult("solved", answer="DONE", note="repaired by mutation, ambiguous",
                                tentative=True, extra=extra)
         try:
-            hint = _verify_hint(hint_base, preferred, test_src) if config.verify_coding() else None
+            # the model must see the real buggy text: a known text the search changed again is not the original
+            final = {n.name: ast.dump(n) for n in ast.parse(preferred).body if type(n) is ast.FunctionDef}
+            kept = {n for n in substituted if final.get(n) == _CANON[n]}
+            verify_base = hint_base if len(kept) == len(substituted) else                 (_canonical_substitute(original, kept) if kept else None) or original
+            hint = _verify_hint(verify_base, preferred, test_src) if config.verify_coding() else None
         except Exception:
             hint = None   # the fix is on disk: an answer without a check beats none
         if hint:   # on disk and answered already: a check that never comes changes nothing
