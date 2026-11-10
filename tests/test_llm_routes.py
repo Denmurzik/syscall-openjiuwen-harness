@@ -728,4 +728,66 @@ def test_search_without_kb_dir_keeps_generic_prompt(tmp_path):
 def test_non_search_program_has_no_preamble(tmp_path):
     c = FakeClient(["print('kb' in globals())"])
     r = run(solve_with_program(_task(tmp_path, check=None), c))
-    assert r.answer in ("False",) or r.status != "solved"
+    assert r.status == "solved" and r.answer == "False"
+
+
+def test_search_own_keyerror_takes_the_retry(tmp_path):
+    c = FakeClient(["c = {}\nc['x'] += 1", "print(kb['C D']['Born'])"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1951" and len(c.calls) == 2
+
+
+def test_search_missing_field_is_not_found(tmp_path):
+    c = FakeClient(["print(kb['C D']['Mentor'])", "print(1)"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "unparsed" and "not found" in r.note and len(c.calls) == 1
+
+
+def test_search_traceback_lines_are_the_models(tmp_path):
+    c = FakeClient(["x = 1\nprint(1/0)", "print(kb['C D']['Born'])"])
+    run(solve_with_program(_kb_task(tmp_path), c))
+    fb = c.calls[1]["messages"][-1]["content"]
+    assert 'File "<program>", line 2' in fb
+
+
+def test_search_dict_output_is_retried_and_never_a_guess(tmp_path):
+    c = FakeClient(["print(kb['C D'])", "print(kb['C D']['Born'])"])
+    r = run(solve_with_program(_kb_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1951"
+    assert "only the one requested value" in c.calls[1]["messages"][-1]["content"]
+    c = FakeClient(["print(kb['C D'])", "print(list(kb['C D'].items()))"])
+    r = run(solve_with_program(_kb_task(tmp_path / "b"), c))
+    assert r.status == "unparsed" and not r.extra
+
+
+def test_kb_examples_and_preamble_agree(tmp_path):
+    from harness.llm_routes import KB_PREAMBLE, _kb_examples
+    t = _kb_task(tmp_path)
+    (t.workspace / "kb" / "notes.md").write_text("no title here\nx: y\n", encoding="utf-8")
+    ex, n = _kb_examples(t.workspace)
+    old = Path.cwd()
+    import os
+    os.chdir(t.workspace)
+    try:
+        g = {}
+        exec(KB_PREAMBLE, g)
+    finally:
+        os.chdir(old)
+    kb = g["kb"]
+    assert n == len(kb) == 3
+    for line in ex:
+        key = line[len("kb["):line.index("] ==")]
+        assert line.endswith(repr(dict(kb[eval(key)])))
+
+
+def test_reason_pass_gets_the_kb_preamble(tmp_path):
+    c = FakeClient(["print(kb['C D']['Born'])"])
+    r = run(solve_with_reason(_kb_task(tmp_path), c))
+    assert r.status == "solved" and r.answer == "1951"
+
+
+def test_reason_pass_kb_not_found_and_dict(tmp_path):
+    r = run(solve_with_reason(_kb_task(tmp_path), FakeClient(["print(kb['Nobody'])"])))
+    assert r.status == "unparsed" and "not found" in r.note
+    r = run(solve_with_reason(_kb_task(tmp_path / "b"), FakeClient(["print(kb['C D'])"])))
+    assert r.status == "unparsed" and not r.extra

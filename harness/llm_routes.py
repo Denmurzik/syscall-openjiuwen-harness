@@ -42,9 +42,14 @@ SEARCH_SYSTEM = ("Write a short Python 3 program that prints only the final answ
 
 KB_PREAMBLE = (
     "import os\n"
-    "kb = {}\n"
+    "class KbMissing(KeyError):\n"
+    "    pass\n"
+    "class _KbDict(dict):\n"
+    "    def __missing__(self, key):\n"
+    "        raise KbMissing(key)\n"
+    "kb = _KbDict()\n"
     "for _f in (sorted(os.listdir('kb')) if os.path.isdir('kb') else []):\n"
-    "    _name, _d = None, {}\n"
+    "    _name, _d = None, _KbDict()\n"
     "    try:\n"
     "        _text = open(os.path.join('kb', _f), encoding='utf-8', errors='replace').read()\n"
     "    except OSError:\n"
@@ -57,6 +62,13 @@ KB_PREAMBLE = (
     "            _d[_k.strip()] = _v.strip()\n"
     "    if _name:\n"
     "        kb[_name] = _d\n")
+
+
+def kb_program(code: str) -> str:
+    """The preamble plus the model's code, which runs under its own file name so that traceback lines are its own."""
+    return KB_PREAMBLE + f"exec(compile({code!r}, '<program>', 'exec'), globals())\n"
+
+
 PATCH_SYSTEM = ("You fix bugs in mylib.py so that the tests pass. Return only the corrected "
                 "functions, no explanations, in this format, one block per function:\n"
                 "FUNC <name>\n<complete new text of the function>\n"
@@ -252,15 +264,12 @@ def is_bare_literal(code: str) -> bool:
 
 
 def _kb_examples(ws: Path) -> tuple[list[str], int]:
-    """One example page per kind of file (the part of the name before the first "_") and the page count."""
+    """One example page per kind of file (the part of the name before the first "_") and the number of pages
+    that the preamble loads into `kb` (files with a "# Title" line)."""
     kb_dir = ws / "kb"
     files = sorted(p for p in kb_dir.iterdir() if p.is_file()) if kb_dir.is_dir() else []
-    out, seen = [], set()
+    out, seen, pages = [], set(), set()
     for f in files:
-        kind = f.name.split("_")[0]
-        if kind in seen:
-            continue
-        seen.add(kind)
         name, d = None, {}
         try:
             lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -272,11 +281,15 @@ def _kb_examples(ws: Path) -> tuple[list[str], int]:
             elif ":" in ln:
                 k, v = ln.split(":", 1)
                 d[k.strip()] = v.strip()
-        if name:
-            out.append(f"kb[{name!r}] == {d!r}")
-        if len(out) >= 4:
-            break
-    return out, len(files)
+        if not name:
+            continue
+        pages.add(name)
+        kind = f.name.split("_")[0]
+        if kind in seen or len(out) >= 4:
+            continue
+        seen.add(kind)
+        out.append(f"kb[{name!r}] == {d!r}")
+    return out, len(pages)
 
 
 def _is_kb_task(task: Task) -> bool:
@@ -293,9 +306,21 @@ def _program_messages(task: Task) -> list[dict]:
 
 
 def _kb_key_error(stderr: str) -> bool:
-    """The traceback ends in a KeyError raised by a `kb[...]` lookup of the model's program."""
+    """The traceback ends in KbMissing: the preamble's `kb` or one of its pages had no such key. A KeyError of
+    the model's own dicts is something else and takes the normal retry."""
     lines = [ln for ln in stderr.strip().splitlines() if ln.strip()]
-    return bool(lines) and lines[-1].startswith("KeyError")
+    return bool(lines) and lines[-1].startswith("KbMissing")
+
+
+def _is_container_repr(answer: str) -> bool:
+    """A printed dict or list (a whole page): never the one value a question asks for."""
+    t = answer.strip()
+    if not t.startswith(("{", "[")):
+        return False
+    try:
+        return isinstance(ast.literal_eval(t), (dict, list))
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return False
 
 
 async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_model: str = MODEL_ALT) -> SolveResult:
@@ -327,13 +352,16 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             attempt += 1
             continue
         # subprocess + copytree block for up to 20 s: keep them off the event loop
-        res = await asyncio.to_thread(run_program, KB_PREAMBLE + code if use_kb else code, task.workspace)
+        res = await asyncio.to_thread(run_program, kb_program(code) if use_kb else code, task.workspace)
         if use_kb and res.returncode != 0 and not res.timed_out and _kb_key_error(res.stderr):
             return SolveResult("unparsed", note="kb page or field not found")  # clean "not found": no retry
         lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
         if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
             return SolveResult("infeasible", note="program printed IMPOSSIBLE")
         answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
+        container = use_kb and answer is not None and _is_container_repr(answer)
+        if container:
+            answer = None  # a whole page is never the answer and never a best guess
         if answer is not None:
             bad = mismatch(task, answer)
             if bad is None:
@@ -349,12 +377,15 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
         else:
             why = "timed out" if res.timed_out else (
                 f"exit code {res.returncode}" if res.returncode != 0 else "no usable answer printed")
+            if container:
+                why = "it printed a whole page or list"
             note = f"program {why}"
             feedback = (f"Your program failed ({why}).\nstderr:\n{res.stderr[-FEEDBACK_LIMIT // 2:]}\n"
                         f"stdout:\n{res.stdout[-FEEDBACK_LIMIT // 2:]}")
         messages = messages + [{"role": "assistant", "content": r.text},
                                {"role": "user", "content": feedback + "\nFix it. Print the final answer with print(); "
-                                           "do not write it to a file. Output only code."}]
+                                           "do not write it to a file. Output only code."
+                                           + (" Print only the one requested value." if container else "")}]
         attempt += 1
     return SolveResult("unparsed", note=note, extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})
 
@@ -421,11 +452,17 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
     bare = bare_answer(r.text, task)  # the model answered without a program (a lone number)
     if bare is not None:
         return SolveResult("solved", answer=bare, note="model reason answer")
-    res = await asyncio.to_thread(run_program, extract_code(r.text, join_all=False), task.workspace)
+    use_kb = _is_kb_task(task)
+    code = extract_code(r.text, join_all=False)
+    res = await asyncio.to_thread(run_program, kb_program(code) if use_kb else code, task.workspace)
+    if use_kb and res.returncode != 0 and not res.timed_out and _kb_key_error(res.stderr):
+        return SolveResult("unparsed", note="kb page or field not found")
     lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
     if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
         return SolveResult("infeasible", note="reason program printed IMPOSSIBLE")
     answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
+    if answer is not None and use_kb and _is_container_repr(answer):
+        return SolveResult("unparsed", note="reason program printed a whole page or list")
     if answer is None:
         return SolveResult("unparsed", note="reason program gave no usable answer")
     bad = mismatch(task, answer)
