@@ -37,6 +37,19 @@ BudgetExhausted = None
 
 REASON_PASS_MAX_CALLS = 10      # hard cap of the final reasoning pass, whatever the ledger shows
 REASON_PASS_SPEND_LIMIT = 0.5   # no final reasoning pass once this share of the budget is spent
+REASON_CALL_TOKENS = 3000       # output limit of solve_with_reason's one call: what the ledger must hold for it
+
+
+def _reason_fits(ledger: TokenLedger, task: Task) -> bool:
+    """A whole MODEL_REASON call fits the ledger. A call cut below its limit reasons to the end and answers nothing
+    (the ledger stops it only under MIN_REASONING_CALL_TOKENS): such a task goes the cheap way instead."""
+    return ledger.can_afford(estimate_tokens(task) + REASON_CALL_TOKENS)
+
+
+def _reason_votes(task: Task) -> bool:
+    """The 2a answer of `task` is confirmed by MODEL_REASON (`confirm_reason`), not by two programs."""
+    return (task.task_type not in config.CONFIRM_TYPES and task.task_type in config.CONFIRM_REASON_TYPES
+            and config.reason_math())
 
 
 # infeasible notes that do not depend on the model's reading of the question
@@ -459,6 +472,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     await _drive(units, t0, deadline_s, ledger, state)
 
     unavailable: list = []  # factories of the 2c/2b units whose model call got no answer
+    reasoned: set = set()   # math tasks MODEL_REASON was asked in 2b: the final REASON pass does not ask again
 
     # 2c: model arbitration among behaviourally different green fixes (cheap: before 2b)
     def unit_2c(task):
@@ -490,6 +504,21 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
             start = time.monotonic()
             if task.task_type == "coding":
                 res = await (fix_coding(task, client, resume) if resume else fix_coding(task, client))
+            elif task.task_type == "math" and config.reason_math() and _reason_fits(ledger, task):
+                # 2a declined it (not "how much is left at the end") or failed: such a question takes reasoning,
+                # not a transcription. The FAST program is the fallback, and a guess for a task still open
+                reasoned.add(task.task_id)
+                try:
+                    res = await solve_with_reason(task, client)
+                except BudgetExhausted:
+                    raise
+                except Exception as e:  # the route is lost, the task is not
+                    log.warning("reason route on %s failed: %r", task.task_id, e)
+                    res = SolveResult("unparsed", note=f"reason route failed: {e!r}"[:200])
+                if res.status != "solved":
+                    if res.status == "infeasible" or (res.extra or {}).get("best_guess") is not None:
+                        settle(2, task, res, time.monotonic() - start)
+                    res = await solve_with_program(task, client)
             else:
                 res = await solve_with_program(task, client)
             settle(2, task, res, time.monotonic() - start)
@@ -516,7 +545,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         rewards = rewards if rewards is not None else [t.reward for t in left]
         median = statistics.median(rewards) if rewards else 0
         cands = [t for t in left if (status.get(t.task_id) == "unparsed" or t.task_id in soft_infeasible) and t.task_type in JSON_TYPES
-                 and t.task_id not in tentative and t.reward >= median]
+                 and t.task_id not in tentative and t.reward >= median and t.task_id not in reasoned]
         cands.sort(key=lambda t: -t.reward)
 
         def unit_reason(task):
@@ -586,11 +615,12 @@ def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_
                    reserve: float, n_2d: int) -> list:
     """One unit per 2a group, best-paid groups first. A group of more than CONFIRM_GROUP_SAMPLE answered members is
     accepted when the FAST votes on its best-paid members all agree; otherwise every member is checked. Each member's
-    calls are recorded on its own trajectory line."""
-    from harness.confirm import confirm
+    calls are recorded on its own trajectory line. A math group (HARNESS_REASON_MATH) takes MODEL_REASON's vote in
+    place of the first FAST vote (`confirm_reason`) and runs after every group of CONFIRM_TYPES."""
+    from harness.confirm import confirm, confirm_reason
     by_group: dict = {}
     for tid, (task, answer) in answered.items():
-        if task.task_type not in config.CONFIRM_TYPES:
+        if task.task_type not in config.CONFIRM_TYPES and not _reason_votes(task):
             continue
         by_group.setdefault(group_of.get(tid, tid), []).append((task, answer))
 
@@ -599,7 +629,10 @@ def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_
 
     def unit(members):
         members = sorted(members, key=lambda m: (-m[0].reward, m[0].task_id))
-        est = estimate_tokens(members[0][0])
+        # a REASON vote needs its whole call on the ledger (see _reason_fits); the third vote is a FAST program
+        by_reason = _reason_votes(members[0][0])
+        extra = REASON_CALL_TOKENS if by_reason else 0
+        est = estimate_tokens(members[0][0]) + extra
 
         async def go():
             sample = config.CONFIRM_GROUP_SAMPLE if len(members) > config.CONFIRM_GROUP_SAMPLE else len(members)
@@ -608,11 +641,14 @@ def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_
                 if i >= sample and all_agree:
                     return   # the spec held on the sampled members
                 vote_est = estimate_tokens(task)
-                if not _confirm_time_left(t0, deadline_s, n_2d) or not affordable(vote_est):
+                if not _confirm_time_left(t0, deadline_s, n_2d) or not affordable(vote_est + extra):
                     return
                 start = time.monotonic()
-                verdict = await confirm(task, answer, client, confirm_program,
-                                        lambda: affordable(vote_est) and _confirm_time_left(t0, deadline_s, n_2d))
+                more = lambda: affordable(vote_est) and _confirm_time_left(t0, deadline_s, n_2d)  # noqa: E731
+                if by_reason:
+                    verdict = await confirm_reason(task, answer, client, solve_with_reason, confirm_program, more)
+                else:
+                    verdict = await confirm(task, answer, client, confirm_program, more)
                 all_agree = all_agree and verdict.fast_agrees
                 if verdict.replacement is not None:
                     settle(2, task, SolveResult("solved", answer=verdict.replacement, note=verdict.note),
@@ -623,8 +659,9 @@ def _confirm_units(answered: dict, group_of: dict, client, ledger, t0, deadline_
                     traj.record({"phase": 2, "task_id": task.task_id, "status": "solved", **_take_calls(),
                                  "elapsed": round(time.monotonic() - start, 3), "note": verdict.note[:200]})
         return {"prio": sum(t.reward for t, _ in members), "estimate": est + reserve, "run": go,
-                "name": f"confirm:{members[0][0].task_id}"}
+                "name": f"confirm:{members[0][0].task_id}", "by_reason": by_reason}
 
     units = [unit(m) for m in by_group.values()]
-    units.sort(key=lambda u: -u["prio"])
+    # the data votes first, as in round 9 (the only measured fixes); the math REASON votes after them
+    units.sort(key=lambda u: (u["by_reason"], -u["prio"]))
     return units

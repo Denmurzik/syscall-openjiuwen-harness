@@ -606,6 +606,7 @@ def _open_tasks(tmp_path, monkeypatch, n=3):
 
     async def no_batch(ttype, chunk, client, on_group=None):
         return {}
+    monkeypatch.setenv("HARNESS_REASON_MATH", "0")   # these tests are about the retry pass of the program route
     monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
     monkeypatch.setattr(scheduler, "solve_group", no_spec)
     monkeypatch.setattr(scheduler, "solve_batch", no_batch)
@@ -840,3 +841,56 @@ def test_final_reason_pass_retries_a_model_impossible(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     scheduler.run(tasks, 100000, client)
     assert sorted(asked) == ["s00", "s01", "s02"]
+
+
+# ---------------------------------------------------------------- round 10, task 56: MODEL_REASON answers math in 2b
+
+def _math_reason_setup(tmp_path, monkeypatch, reason_result, prog_result):
+    tasks = tmp_path / "tasks"
+    for i in range(2):
+        _make(tasks, f"math_{i:04d}", "math", f"Riddle number {i} with no parseable numbers")
+    asked = {"reason": [], "prog": []}
+
+    async def no_spec(ttype, template, members, client):
+        return {}
+
+    async def no_batch(ttype, chunk, client, on_group=None):
+        return {}
+
+    async def reason(task, client):
+        asked["reason"].append(task.task_id)
+        return reason_result
+
+    async def prog(task, client):
+        asked["prog"].append(task.task_id)
+        return prog_result
+    monkeypatch.delenv("HARNESS_REASON_MATH", raising=False)
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    monkeypatch.setattr(scheduler, "solve_group", no_spec)
+    monkeypatch.setattr(scheduler, "solve_batch", no_batch)
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(scheduler, "solve_with_reason", reason, raising=False)
+    return tasks, asked
+
+
+def test_math_2b_asks_reason_first_and_not_again_in_the_final_pass(tmp_path, monkeypatch):
+    tasks, asked = _math_reason_setup(tmp_path, monkeypatch, SolveResult("solved", "66"), SolveResult("solved", "-66"))
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["solved"] == 2 and sorted(asked["reason"]) == ["math_0000", "math_0001"] and asked["prog"] == []
+    assert (tasks / "math_0000" / "answer.txt").read_text(encoding="utf-8").strip() == "66"
+
+
+def test_math_2b_falls_back_to_the_program_when_reason_has_no_answer(tmp_path, monkeypatch):
+    tasks, asked = _math_reason_setup(tmp_path, monkeypatch, SolveResult("infeasible", note="reason program printed IMPOSSIBLE"),
+                                      SolveResult("solved", "7"))
+    summary = scheduler.run(tasks, 100000, object())
+    assert summary["solved"] == 2 and len(asked["reason"]) == 2 and len(asked["prog"]) == 2
+    assert (tasks / "math_0001" / "answer.txt").read_text(encoding="utf-8").strip() == "7"
+
+
+def test_math_2b_reason_is_off_with_the_flag(tmp_path, monkeypatch):
+    tasks, asked = _math_reason_setup(tmp_path, monkeypatch, SolveResult("solved", "66"), SolveResult("solved", "7"))
+    monkeypatch.setenv("HARNESS_REASON_MATH", "0")
+    scheduler.run(tasks, 100000, object())
+    assert len(asked["prog"]) == 2 and asked["reason"] == []
+    assert (tasks / "math_0000" / "answer.txt").read_text(encoding="utf-8").strip() == "7"

@@ -7,6 +7,9 @@ crashes, times out, prints IMPOSSIBLE or the wrong shape does not count, nor one
 value in canonical form (see `_canonical`), nor a second vote answered by the same weights as the first; numbers
 compare at 2a's precision. Without a majority
 2a stays.
+
+math (round 10, task 56, `confirm_reason`): the second vote is MODEL_REASON's own answer and the third a MODEL_FAST
+program; 2a's answer is replaced only when those two agree.
 """
 import logging
 import re
@@ -154,3 +157,37 @@ async def confirm(task, answer: str, client, program, can_afford) -> Verdict:
         # two programs sharing one habit (an empty selection, e.g. a case-sensitive filter) is no evidence for zero
         return Verdict(None, f"confirm: both votes {fast!r} against non-zero 2a {answer!r}: kept 2a", False)
     return Verdict(fast, f"confirm: fast and alt agree on {fast!r} against 2a {answer!r}", False)
+
+
+async def confirm_reason(task, answer: str, client, reason, program, can_afford) -> Verdict:
+    """math (round 10, task 56): `reason(task, client)` is the MODEL_REASON route; it never sees 2a's answer. It
+    agrees: 2a kept. It differs: a MODEL_FAST program (`program`, as in `confirm`) is the third vote, and 2a's answer
+    is replaced only when that program gives REASON's answer. One REASON answer alone never changes 2a."""
+    from harness.llm import BudgetExhausted
+    try:
+        res = await reason(task, client)
+    except BudgetExhausted:
+        raise
+    except Exception as e:  # the vote is lost, 2a's answer is not
+        log.warning("confirm reason vote on %s failed: %r", task.task_id, e)
+        res = None
+    vote = str(res.answer).strip() if res is not None and res.status == "solved" and res.answer is not None else ""
+    if vote in ("", "IMPOSSIBLE") or mismatch(task, vote) is not None:
+        return Verdict(None, "confirm: reason vote did not count, 2a kept", False)
+    vote = at_precision(task, vote, answer)
+    if same_answer(vote, answer):
+        return Verdict(None, "confirm: reason agrees with 2a", True)
+    if not can_afford():
+        return Verdict(None, f"confirm: reason {vote!r} differs, no budget for the third vote, 2a kept", False)
+    calls = CALLS.get()
+    start = len(calls) if calls is not None else 0
+    third, _ = await _vote(program, task, client, config.MODEL_FAST, answer)
+    if third is not None and any(c.get("model") == config.MODEL_REASON and not c.get("error")
+                                 for c in (calls[start:] if calls is not None else [])):
+        # the FAST program fell through to MODEL_REASON (FAST failing): the same model twice is one vote
+        return Verdict(None, f"confirm: reason {vote!r} differs, third vote answered by {config.MODEL_REASON}, "
+                       "2a kept", False)
+    if third is not None and same_answer(third, vote):
+        return Verdict(vote, f"confirm: reason and fast program agree on {vote!r} against 2a {answer!r}", False)
+    return Verdict(None, f"confirm: reason {vote!r} differs, fast program {third!r} does not side with it, 2a kept",
+                   False)
