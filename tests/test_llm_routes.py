@@ -853,3 +853,17 @@ def test_search_placeholder_after_other_output_retries(tmp_path):
     assert r.status == "unparsed" and not r.extra and len(c.calls) == 2
     r = run(solve_with_reason(_kb_task(tmp_path / "c"), FakeClient([first])))
     assert r.status == "unparsed" and not r.extra and len(c.calls) == 2
+
+
+def test_search_field_retry_then_wrong_shape_leaves_no_guess(tmp_path):
+    # round 10 fix: after a field retry nothing is written for a task that may be infeasible
+    t = _kb_task(tmp_path)
+    t = Task(t.task_id, t.task_type, "In which year did C D retire?", t.reward, "exact_int", t.dir, t.workspace)
+    c = FakeClient(["print(kb['C D']['Retired'])", "print(kb['C D']['Employer'])", "print(kb['C D']['Employer'])"])
+    r = run(solve_with_program(t, c))
+    assert r.status == "unparsed" and not r.extra and len(c.calls) == 3
+
+
+def test_reason_pass_missing_field_is_not_found_without_guess(tmp_path):
+    r = run(solve_with_reason(_kb_task(tmp_path), FakeClient(["print(kb['C D']['Mentee'])"])))
+    assert r.status == "unparsed" and "not found" in r.note and not r.extra

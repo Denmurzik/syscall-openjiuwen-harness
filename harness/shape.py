@@ -35,13 +35,31 @@ _IS_NUMBER = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 
 
 # a count or a difference is a number whatever field words the question holds ("How many employees of X were
-# born after 1975?", "How many people have X as their mentor?"): no shape is known for it
-_COUNT_ASK = re.compile(r"\bhow (?:many|much|old)\b|\bnumber of\b|\byes or no\b", re.I)
+# born after 1975?", "How many people have X as their mentor?"): no shape is known for it. Only when the count
+# phrase is the question's ask: the question opens with it (or with a yes/no verb), or it appears and no explicit
+# who/which/where/when/what-city ask does ("Which company has the largest number of employees?" keeps its shape)
+_COUNT_PHRASE = re.compile(r"\bhow (?:many|much|old)\b|\bnumber of\b|\byes or no\b", re.I)
+_COUNT_OPENS = re.compile(
+    r"^\W*(?:answer\s+(?:with\s+)?yes or no\W+)?(?:how (?:many|much|old)\b|what (?:is|was|are|were) the (?:total )?"
+    r"number of\b|(?:is|are|does|did|was|were|do|has|have|can|will)\b)", re.I)
+_EXPLICIT_ASK = {"who", "whom", "whose", "which", "where", "when"}
+_ASKED_NOUN = {"city", "company", "firm", "person", "year", "organisation", "organization", "individual"}
+
+
+def _count_ask(text: str) -> bool:
+    if _COUNT_OPENS.match(text):
+        return True
+    if not _COUNT_PHRASE.search(text):
+        return False
+    words = _WORD.findall(text.casefold())
+    if set(words) & _EXPLICIT_ASK:
+        return False
+    return not any(a == "what" and b in _ASKED_NOUN for a, b in zip(words, words[1:]))
 
 
 def _search_shape(instruction: str) -> str | None:
     text = _INTRO.sub(" ", strip_boilerplate(instruction))
-    if _COUNT_ASK.search(text):
+    if _count_ask(text):
         return None
     words = set(_WORD.findall(text.casefold()))
     year_ask, name_ask = bool(words & _YEAR_ASK), bool(words & _NAME_ASK)

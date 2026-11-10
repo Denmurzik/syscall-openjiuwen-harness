@@ -35,6 +35,8 @@ SEARCH_SYSTEM = ("Write a short Python 3 program that prints only the final answ
                  "are strings): do not open files, do not define parsers, use `kb` directly, a few lines. "
                  "A field that names a person or company is the title of that page: follow it with kb[...]. "
                  "If a page or field the question needs is missing, print IMPOSSIBLE. "
+                 "Answer only with the field the question asks for; if that field does not exist for the entity, "
+                 "print IMPOSSIBLE. "
                  "Never write answer.txt or any file: the task text mentions answer.txt, ignore that, "
                  "the answer is read from the program's output. "
                  "Output only code, no comments, no markdown.")
@@ -432,7 +434,8 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
                 return SolveResult("solved", answer=answer, note="model program", extra={"stdout": res.stdout[-FEEDBACK_LIMIT:]})
             guess = answer
             if shape_retried:
-                return SolveResult("unparsed", note=f"answer shape: {bad}", extra={"best_guess": guess, "shape_mismatch": True})
+                return SolveResult("unparsed", note=f"answer shape: {bad}", extra=None if field_retried else
+                                   {"best_guess": guess, "shape_mismatch": True})
             shape_retried, model, attempts = True, shape_model, attempt + 2  # exactly one more call
             note = f"answer shape: {bad}"
             feedback = (f"Your program printed {answer[:60]!r}, but the question asks for "
@@ -450,7 +453,8 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
                                            "do not write it to a file. Output only code."
                                            + (" Print only the one requested value." if container else "")}]
         attempt += 1
-    return SolveResult("unparsed", note=note, extra=None if guess is None else {"best_guess": guess, "shape_mismatch": True})
+    return SolveResult("unparsed", note=note,
+                       extra=None if guess is None or field_retried else {"best_guess": guess, "shape_mismatch": True})
 
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
