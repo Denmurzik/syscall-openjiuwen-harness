@@ -15,16 +15,45 @@ _MARK = "@@HARNESS_RESULT@@"
 _RUNNER = r'''
 import json, sys, unittest
 suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[1:])
+script_ok = None
+if suite.countTestCases() == 0 and len(sys.argv) == 2 and "." not in sys.argv[1]:
+    # no TestCase in the file: plain test functions (pytest style), or a script of bare asserts
+    import importlib, inspect
+    mod = importlib.import_module(sys.argv[1])
+
+    def _free(f):
+        return not any(p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                       for p in inspect.signature(f).parameters.values())
+    fns = [f for n, f in vars(mod).items() if n.startswith("test") and inspect.isfunction(f)
+           and f.__module__ == mod.__name__]
+    if fns and all(_free(f) for f in fns):
+        suite = unittest.TestSuite(unittest.FunctionTestCase(f) for f in fns)
+    elif not fns:
+        # `python3 test_x.py` is the whole test: it passes when the script ends without an error
+        import runpy
+        try:
+            runpy.run_path(mod.__file__, run_name="__main__")
+            script_ok = True
+        except SystemExit as e:
+            script_ok = e.code in (None, 0)
+        except BaseException as e:
+            import traceback
+            traceback.print_exc()
+            script_ok = False
+        sys.stdout.flush()
+        print("%s" + json.dumps({"ok": script_ok, "failed": [] if script_ok else ["<script>"]}), flush=True)
+        sys.exit(0)
 res = unittest.TextTestRunner(stream=sys.stderr, verbosity=0).run(suite)
 names = []
 for t, _ in list(res.failures) + list(res.errors):
     t = getattr(t, "test_case", t)
-    n = getattr(t, "_testMethodName", None) or t.id().rsplit(".", 1)[-1]
+    n = (getattr(getattr(t, "_testFunc", None), "__name__", None) or getattr(t, "_testMethodName", None)
+         or t.id().rsplit(".", 1)[-1])
     if n not in names:
         names.append(n)
 sys.stdout.flush()
 print("%s" + json.dumps({"ok": res.wasSuccessful() and res.testsRun > 0, "failed": names}), flush=True)
-''' % _MARK
+''' % (_MARK, _MARK)
 
 
 @dataclass(frozen=True)

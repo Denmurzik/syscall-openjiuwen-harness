@@ -750,19 +750,43 @@ def apply_patch(src: str, patch: str) -> str | None:
 
 
 def _test_file(ws: Path) -> str:
-    """Same discovery as phase 1: test_mylib.py, else the first test_*.py."""
+    """Same discovery as phase 1: test_mylib.py, else the first test_*.py (then the first *_test.py)."""
     if (ws / "test_mylib.py").is_file():
         return "test_mylib.py"
-    cands = sorted(p.name for p in ws.glob("test_*.py"))
+    cands = sorted(p.name for p in ws.glob("test_*.py")) or sorted(p.name for p in ws.glob("*_test.py"))
     return cands[0] if cands else "test_mylib.py"
 
 
-def _run_candidate(ws: Path, mylib_text: str) -> TestReport:
+def _target_file(ws: Path, tests: str) -> str:
+    """The file under repair: mylib.py; in a workspace without one, the first module of the workspace that the
+    test file imports (`inventory.py` for `from inventory import ...`), else the only other .py file."""
+    if (ws / "mylib.py").is_file():
+        return "mylib.py"
+    try:
+        tree = ast.parse(tests)
+    except (SyntaxError, ValueError):
+        tree = None
+    for node in (ast.walk(tree) if tree is not None else ()):
+        mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                else [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
+        for m in mods:
+            name = m.split(".")[0] + ".py"
+            if (ws / name).is_file():
+                return name
+    try:
+        others = sorted(p.name for p in ws.glob("*.py") if not p.name.startswith("test_")
+                        and not p.name.endswith("_test.py"))
+    except OSError:
+        others = []
+    return others[0] if len(others) == 1 else "mylib.py"
+
+
+def _run_candidate(ws: Path, mylib_text: str, target: str = "mylib.py") -> TestReport:
     tmp = Path(tempfile.mkdtemp(prefix="llm_fix_"))
     try:
         cand = tmp / "ws"
         shutil.copytree(ws, cand, ignore=shutil.ignore_patterns("__pycache__"))
-        (cand / "mylib.py").write_text(mylib_text, encoding="utf-8", newline="\n")
+        (cand / target).write_text(mylib_text, encoding="utf-8", newline="\n")
         return run_in_dir(cand, _test_file(ws))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -775,11 +799,17 @@ def _cap(text: str, limit: int = FILE_CAP) -> str:
     return f"{text[:h]}\n...[{len(text) - limit} chars cut]...\n{text[-h:]}"
 
 
-def _patch_messages(mylib: str, tests: str, output: str) -> list[dict]:
-    user = (f"mylib.py:\n{_cap(mylib)}\n\ntest_mylib.py:\n{_cap(tests)}\n\n"
+def _patch_messages(mylib: str, tests: str, output: str, target: str = "mylib.py",
+                    test_name: str = "test_mylib.py") -> list[dict]:
+    """With mylib.py the text is the round-10 text. A file under another name (`_target_file`) is shown under its
+    own name, in the system line as well."""
+    if target == "mylib.py":
+        test_name = "test_mylib.py"
+    user = (f"{target}:\n{_cap(mylib)}\n\n{test_name}:\n{_cap(tests)}\n\n"
             f"Output of the failing tests:\n{output[-TEST_OUTPUT_LIMIT:]}\n\n"
             "Return only the corrected functions in the FUNC format.")
-    return [{"role": "system", "content": PATCH_SYSTEM}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": PATCH_SYSTEM.replace("mylib.py", target)},
+            {"role": "user", "content": user}]
 
 
 TIMEOUT_HINT = ("(the test run was stopped by the time limit and printed nothing more: a function never returns or "
@@ -811,14 +841,17 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
     ws = Path(task.workspace)
     mylib_path = ws / "mylib.py"
     try:
-        base = resume.get("base") or mylib_path.read_text(encoding="utf-8")
         test_name = _test_file(ws)
         tests = (ws / test_name).read_text(encoding="utf-8")
+        target = _target_file(ws, tests)   # mylib.py whenever the workspace has one
+        targs = () if target == "mylib.py" else (target,)
+        mylib_path = ws / target
+        base = resume.get("base") or mylib_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
         if is_free_coding(task):  # nothing to repair: the text asks for a program's output
             return await solve_with_program(task, client)
         return SolveResult("unparsed", note=f"cannot read workspace: {e}")
-    base_report = await asyncio.to_thread(_run_candidate, ws, base)
+    base_report = await asyncio.to_thread(_run_candidate, ws, base, *targs)
     if base_report.ok:
         return SolveResult("solved", answer="DONE", note="tests already pass")
     if provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
@@ -833,12 +866,12 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         # phase 1 left a partial repair: mutations no one checked. One MODEL_FAST call for the whole repair from
         # the file before them; a green result is taken, anything else leaves the ladder below as it was
         try:
-            first = await asyncio.to_thread(_run_candidate, ws, restart)
+            first = await asyncio.to_thread(_run_candidate, ws, restart, *targs)
             if not first.ok and not any(f.startswith("<") for f in first.failed):
-                r = await client.chat(MODEL_FAST, _patch_messages(restart, tests, _shown_output(first)), 400)
+                r = await client.chat(MODEL_FAST, _patch_messages(restart, tests, _shown_output(first), target, test_name), 400)
                 restarted = True
                 fixed = apply_patch(restart, r.text)
-                if fixed is not None and (await asyncio.to_thread(_run_candidate, ws, fixed)).ok:
+                if fixed is not None and (await asyncio.to_thread(_run_candidate, ws, fixed, *targs)).ok:
                     write_mylib(mylib_path, fixed)
                     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                     return SolveResult("solved", answer="DONE",
@@ -861,7 +894,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         failing = False
         for model, max_tokens, extra in [a for a in attempts if a[0] not in answered]:
             try:
-                r = await client.chat(model, _patch_messages(base, tests, output), max_tokens, **extra)
+                r = await client.chat(model, _patch_messages(base, tests, output, target, test_name), max_tokens, **extra)
             except ProxyDown as e:  # says nothing of this rung: the next one would only cost more. The retry pass asks it again
                 unavailable = e
                 break
@@ -876,7 +909,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
             if fixed is None:
                 note = f"{model}: patch did not apply"
                 continue
-            report = await asyncio.to_thread(_run_candidate, ws, fixed)
+            report = await asyncio.to_thread(_run_candidate, ws, fixed, *targs)
             if report.ok:
                 write_mylib(mylib_path, fixed)
                 shutil.rmtree(ws / "__pycache__", ignore_errors=True)

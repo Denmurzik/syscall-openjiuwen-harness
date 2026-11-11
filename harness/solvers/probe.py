@@ -131,7 +131,9 @@ def visible_call(test_src: str, func: str) -> tuple[tuple, str] | None:
         if isinstance(node, ast.Import):
             modules |= {a.asname or a.name for a in node.names if a.name == "mylib"}
         elif isinstance(node, ast.ImportFrom) and node.module == "mylib":
-            imported |= {a.asname or a.name for a in node.names if a.name == func}
+            # `from mylib import *` binds every public name of mylib, `func` among them
+            imported |= {func if a.name == "*" else (a.asname or a.name) for a in node.names
+                         if a.name == func or (a.name == "*" and not func.startswith("_"))}
     for stmt in ast.walk(tree):
         if not isinstance(stmt, ast.stmt) or isinstance(stmt, (ast.ClassDef, ast.FunctionDef,
                                                                ast.AsyncFunctionDef)):
