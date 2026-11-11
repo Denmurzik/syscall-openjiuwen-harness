@@ -477,6 +477,28 @@ _BATCH_NOTE = (
 )
 
 
+_HOP_WORDS = {
+    "Mentor": re.compile(r"\bmentor", re.I),
+    "Employer": re.compile(r"\bemploy|\bworks? for\b|\bpayroll\b", re.I),
+}
+
+
+def hop_count_mismatch(template: str, spec: object) -> bool:
+    """A search spec whose Mentor or Employer hops are not as many as the relation words of its text. The prompt
+    asks for one hop per relation word; in a batched reply the model at times copies a hop from a neighbour text
+    (expert pass 8: 1 of 6 batched replies added a second Mentor, 6 of 6 single replies were right). Used only to
+    send the text to its own call, never to reject a reply to a single call."""
+    if not isinstance(spec, dict) or spec.get("impossible") is True:
+        return False
+    path, field = spec.get("path"), spec.get("field")
+    if not isinstance(path, list) or not isinstance(field, str):
+        return False
+    hops = [h for h in path if isinstance(h, str)] + [field]
+    # a relation the text never names by these words is worded another way ("pays the salary of"): not counted
+    counts = {name: len(rx.findall(template)) for name, rx in _HOP_WORDS.items()}
+    return any(n and hops.count(name) != n for name, n in counts.items())
+
+
 def batchable(task_type: str, template: str, members: list) -> bool:
     """Small groups of a type with a spec prompt; reverse-relation search texts never get a call at all."""
     if len(members) > BATCH_MAX_MEMBERS or _system_prompt(task_type) is None:
@@ -552,6 +574,11 @@ async def solve_batch(task_type: str, items: list[tuple[str, list[tuple[Task, di
             on_group(part, res)
 
     async def one(template, members, spec):
+        if task_type == "search" and spec is not None and hop_count_mismatch(template, spec):
+            # the batched reply mixed this text up with a neighbour (a relation too many or too few): its own
+            # call, as without batching
+            log.info("2a batch spec dropped, hop count differs from the text: %s", json.dumps(spec)[:200])
+            spec = None
         try:
             res = await solve_group(task_type, template, members, client, spec=spec)
         except BudgetExhausted as e:  # keep what this group's retry produced; the others finish first
