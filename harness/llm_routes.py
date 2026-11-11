@@ -702,13 +702,15 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         return SolveResult("infeasible", note="tests contradict each other")
     output = base_report.output
     restart = restart or resume.get("restart")
-    if restart and restart != base and not resume.get("answered"):
+    restarted = bool(resume.get("restarted"))   # the restart call has answered already: never bought twice
+    if restart and restart != base and not resume.get("answered") and not restarted:
         # phase 1 left a partial repair: mutations no one checked. One MODEL_FAST call for the whole repair from
         # the file before them; a green result is taken, anything else leaves the ladder below as it was
         try:
             first = await asyncio.to_thread(_run_candidate, ws, restart)
             if not first.ok and not any(f.startswith("<") for f in first.failed):
                 r = await client.chat(MODEL_FAST, _patch_messages(restart, tests, first.output), 400)
+                restarted = True
                 fixed = apply_patch(restart, r.text)
                 if fixed is not None and (await asyncio.to_thread(_run_candidate, ws, fixed)).ok:
                     write_mylib(mylib_path, fixed)
@@ -764,5 +766,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         unavailable = None
     if unavailable is None:
         return SolveResult("unparsed", note=note)
-    return SolveResult("unparsed", note=f"llm unavailable: {unavailable}",
-                       extra={"ladder": {"answered": answered, "base": base}})
+    ladder = {"answered": answered, "base": base}
+    if restarted:
+        ladder["restarted"] = True
+    return SolveResult("unparsed", note=f"llm unavailable: {unavailable}", extra={"ladder": ladder})

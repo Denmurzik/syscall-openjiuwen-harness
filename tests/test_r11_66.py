@@ -1,8 +1,12 @@
-"""Final review of round 11: a mixed red test on mined texts proves nothing; cut mining makes no text final."""
+"""Final review of round 11: a mixed red test on mined texts proves nothing; cut mining makes no text final; the
+retry pass does not buy an answered restart again."""
+import asyncio
 import time
 
 import pytest
 
+from harness.llm import ChatResult, ProxyDown
+from harness.llm_routes import MODEL_FAST, fix_coding
 from harness.solvers import coding_solver
 from harness.tasks import Task
 
@@ -117,3 +121,47 @@ def test_loop_cut_by_the_budget_leaves_texts_weak(tmp_path, monkeypatch):
     monkeypatch.setattr(coding_solver, "_mine_run", slow_third)
     texts, final = coding_solver.mine_known_texts(_min_set(tmp_path, 4), budget_s=4.0, run_timeout=10.0)
     assert len(calls) == 3 and sorted(texts) == ["minimum"] and final == set()
+
+
+# ---------------------------------------------------------------- M2: an answered restart is not bought again
+MIN_BUG = MIN_OK.replace("x < best", "x > best")
+LAST_BUG = "def last_n(xs, n):\n    return xs[:n]\n"
+TWO = (M_HEAD + "    def test_minimum(self):\n        self.assertEqual(m.minimum([3, 9, 2]), 2)\n\n"
+       "    def test_last_n(self):\n        self.assertEqual(m.last_n([5, 6, 7, 8], 3), [6, 7, 8])\n")
+LAST_FIX = "FUNC last_n\ndef last_n(xs, n):\n    return xs[len(xs) - n:]\n"
+
+
+class FakeClient:
+    def __init__(self, replies):
+        self.replies, self.calls = list(replies), []
+
+    async def chat(self, model, messages, max_tokens, **extra):
+        self.calls.append({"model": model, "user": messages[-1]["content"]})
+        r = self.replies.pop(0)
+        if isinstance(r, BaseException):
+            raise r
+        return ChatResult(text=r, prompt_tokens=10, completion_tokens=10, cost=11)
+
+
+def test_retry_pass_does_not_repeat_an_answered_restart(tmp_path):
+    lib = MIN_BUG + "\n\n" + LAST_BUG
+    ws = _ws(tmp_path, "c", lib, TWO)
+    t = _task(ws)
+    res = coding_solver.solve(t, time_limit=60)
+    assert res.extra == {"restart": lib}
+    c = FakeClient(["nonsense", ProxyDown("dead")])   # the restart answers, then the proxy dies on the ladder
+    out = asyncio.run(fix_coding(t, c, restart=res.extra["restart"]))
+    assert out.status == "unparsed" and out.note.startswith("llm unavailable") and len(c.calls) == 2
+    assert out.extra["ladder"]["restarted"] is True and out.extra["ladder"]["answered"] == []
+    c2 = FakeClient([LAST_FIX])
+    again = asyncio.run(fix_coding(t, c2, out.extra["ladder"], restart=res.extra["restart"]))   # as the scheduler
+    assert again.status == "solved" and "before mutations" not in again.note
+    assert len(c2.calls) == 1 and c2.calls[0]["model"] == MODEL_FAST and "x < best" in c2.calls[0]["user"]
+
+
+def test_ladder_without_a_restart_call_has_no_restarted_mark(tmp_path):
+    lib = MIN_BUG + "\n\n" + LAST_BUG
+    t = _task(_ws(tmp_path, "c", lib, TWO))
+    coding_solver.solve(t, time_limit=60)
+    out = asyncio.run(fix_coding(t, FakeClient([ProxyDown("dead")])))
+    assert out.extra == {"ladder": {"answered": [], "base": (t.workspace / "mylib.py").read_text(encoding="utf-8")}}
