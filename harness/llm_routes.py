@@ -715,6 +715,8 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
                     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                     return SolveResult("solved", answer="DONE",
                                        note=f"patched by {MODEL_FAST} from the file before mutations")
+        except ModelFailing:
+            pass  # only MODEL_FAST is out: the ladder below goes on to the other models
         except LLMUnavailable as e:
             # the same proxy would cost the ladder a second timeout: stop here and keep the restart, so that the
             # retry pass asks it again

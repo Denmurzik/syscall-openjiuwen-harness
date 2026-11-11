@@ -85,12 +85,17 @@ def _unavailable(tmp_path, exc):
 
 
 def test_unavailable_model_on_the_restart_call_stops_and_keeps_the_restart(tmp_path):
-    for exc in (LLMUnavailable("down"), ProxyDown("dead"), ModelFailing("flaky")):
+    for exc in (LLMUnavailable("down"), ProxyDown("dead")):
         lib, t, c, out = _unavailable(tmp_path / type(exc).__name__, exc)
         assert out.status == "unparsed" and out.note.startswith("llm unavailable")
         assert len(c.calls) == 1                                   # the ladder did not go on
         assert out.extra["restart"] == lib and out.extra["ladder"]["restart"] == lib
         assert out.extra["ladder"]["answered"] == []
+
+
+def test_failing_fast_model_on_the_restart_call_goes_on_to_the_ladder(tmp_path):
+    lib, t, c, out = _unavailable(tmp_path, ModelFailing("flaky"))
+    assert out.status == "solved" and len(c.calls) == 2 and "before mutations" not in out.note
 
 
 def test_retry_pass_redoes_the_restart_call(tmp_path):
