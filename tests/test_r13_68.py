@@ -197,8 +197,8 @@ def test_plain_pages_of_any_page_suffix_keep_the_kb_route(tmp_path):
     bom = chr(0xfeff)
     assert _plain(tmp_path / "a", {"kb/person_ann.txt": PAGE, "kb/person_bob.markdown": PAGE, "kb/person_cy": PAGE})
     assert _plain(tmp_path / "b", {"kb/a.md": chr(10) + "  " + chr(10) + PAGE, "kb/b.MD": bom + PAGE})
-    assert _plain(tmp_path / "c", {"kb/a.md": PAGE, "kb/.gitkeep": "", "kb/.DS_Store": "x", "kb/README.txt": "about",
-                                   "kb/index.json": "{}", "kb/._a.md": "x", "kb/.empty": ""})
+    assert _plain(tmp_path / "c", {"kb/a.md": PAGE, "kb/.gitkeep": "", "kb/.DS_Store": "x", "kb/README.md": "# About",
+                                   "kb/._a.md": "x", "kb/.empty": ""})
 
 
 def test_other_files_make_the_base_mixed(tmp_path):
@@ -261,3 +261,13 @@ def test_a_page_with_stray_non_utf8_bytes_stays_plain(tmp_path):
     (d / "a.md").write_text(PAGE, encoding="utf-8")
     (d / "b.md").write_bytes(b"# Arktika Labs\n\nFounded: 1993\n\nCaf\xe9 \xc6\xff\xfe\x80")
     assert _kb_is_plain(d.parent)
+
+
+def test_readme_and_index_files_with_data_make_the_base_mixed(tmp_path):
+    nl = chr(10)
+    assert not _plain(tmp_path / "a", {"kb/a.md": PAGE, "kb/index.json": '{"S-1": {"price": 89.5}}'})
+    assert not _plain(tmp_path / "b", {"kb/a.md": PAGE, "kb/index.csv": "sku,price" + nl + "S-1,89.5" + nl})
+    assert not _plain(tmp_path / "c", {"kb/a.md": PAGE, "kb/README.txt": "Registry token: ABC123" + nl})
+    assert not _plain(tmp_path / "d", {"kb/a.md": PAGE, "kb/readme_data.csv": "k,v" + nl + "a,1" + nl})
+    assert _plain(tmp_path / "e", {"kb/a.md": PAGE, "kb/README.md": "# About" + nl + "Owner: Ann" + nl,
+                                   "kb/index.txt": "# Index" + nl})

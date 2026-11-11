@@ -306,9 +306,10 @@ _PAGE_SUFFIXES = {".md", ".markdown", ".txt", ""}
 
 
 def _kb_junk(p: Path) -> bool:
-    """An entry that says nothing about the base: OS and VCS litter, an empty dot-file, a README or an index."""
+    """An entry that says nothing about the base: OS and VCS litter or an empty dot-file. A README or an index is
+    not junk: as a `# Title` page it is a page, with data (index.csv, a token in README.txt) the base is mixed."""
     n = p.name
-    if n in _OS_JUNK or n.startswith("._") or n.upper().startswith("README") or n.lower().startswith("index."):
+    if n in _OS_JUNK or n.startswith("._"):
         return True
     try:
         return n.startswith(".") and p.stat().st_size == 0
