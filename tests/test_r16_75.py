@@ -167,3 +167,35 @@ def test_a_file_of_uncalled_checks_is_red(tmp_path):
     # the same checks called at the top level are a script: green with the right mylib
     # (a failing top-level assert already fails the import: red as "<unknown>", as before)
     _red_then_green(tmp_path / "b", tests + "\n\ncheck_zero()\n", ["<unknown>"])
+
+
+# ------------------------------------------------------------------ fix round 2: a pytest class with a base
+def test_a_pytest_class_with_an_object_base_runs_by_name(tmp_path):
+    tests = ("from mylib import double\n\n\nclass TestDouble(object):\n    def test_zero(self):\n"
+             "        assert double(0) == 0\n")
+    ws = _ws(tmp_path, {"mylib.py": FIXED, "test_mylib.py": tests})
+    assert run_tests(ws, only=["test_zero"]).ok          # the whole file: unittest cannot load it by id
+    (ws / "mylib.py").write_text(BROKEN, encoding="utf-8")
+    assert run_tests(ws, only=["test_zero"]).failed == ["test_zero"]
+
+
+def test_phase1_repairs_a_pytest_class_with_an_object_base(tmp_path):
+    from harness.solvers import coding_solver
+    for i, base in enumerate(("", "(object)")):
+        ws = _ws(tmp_path, {"mylib.py": "def top(xs, n):\n    return sorted(xs)[:n - 1]\n",
+                            "test_mylib.py": f"from mylib import top\n\n\nclass TestTop{base}:\n    def test_top(self):\n"
+                                             "        assert top([3, 1, 2], 2) == [1, 2]\n        assert top([5], 1) == [5]\n"},
+                 f"c{i}")
+        r = coding_solver.solve(Task(f"c{i}", "coding", INS, 2.0, "unittest", ws.parent, ws))
+        assert "no repair found" not in r.note, (base, r.note)
+        assert "repaired" in r.note and run_tests(ws).ok, (base, r.note)   # e.g. `n - 1` -> `n - 0`
+
+
+def test_testcase_files_keep_their_per_test_ids(tmp_path):
+    from harness.solvers.testrun import _test_ids
+    p = tmp_path / "test_mylib.py"
+    p.write_text("import unittest\nfrom unittest import TestCase\n\n\nclass A(unittest.TestCase):\n    def test_a(self):\n"
+                 "        pass\n\n\nclass B(TestCase):\n    def test_b(self):\n        pass\n\n\n"
+                 "class C(object):\n    def test_c(self):\n        pass\n", encoding="utf-8")
+    assert _test_ids(p, ["test_a", "test_b"]) == ["test_mylib.A.test_a", "test_mylib.B.test_b"]
+    assert _test_ids(p, ["test_a", "test_c"]) is None     # a pytest-style class: the whole file

@@ -106,9 +106,16 @@ class TestReport:
     output: str = ""
 
 
+def _is_testcase_base(base: ast.expr) -> bool:
+    """`TestCase`, `unittest.TestCase`, `MyTestCase`: a base whose name ends in TestCase."""
+    name = base.id if isinstance(base, ast.Name) else base.attr if isinstance(base, ast.Attribute) else ""
+    return name.endswith("TestCase")
+
+
 def _test_ids(test_path: Path, names: list[str]) -> list[str] | None:
-    """Resolve method names to unittest ids; None when any name is unknown or sits in a class with no base (a
-    pytest-style class, which unittest cannot load by id: the whole file is run instead)."""
+    """Resolve method names to unittest ids; None when any name is unknown or sits in a class with no `...TestCase`
+    base (a pytest-style class, `class TestX:` or `class TestX(object):`, which unittest cannot load by id: the
+    whole file is run instead)."""
     try:
         tree = ast.parse(test_path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeDecodeError):
@@ -117,7 +124,7 @@ def _test_ids(test_path: Path, names: list[str]) -> list[str] | None:
     for name in names:
         hits = [c for c in tree.body if isinstance(c, ast.ClassDef)
                 for f in c.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == name]
-        if not hits or any(not c.bases for c in hits):
+        if not hits or not all(any(_is_testcase_base(b) for b in c.bases) for c in hits):
             return None
         found = [f"{test_path.stem}.{c.name}.{name}" for c in hits]
         ids += found
