@@ -175,6 +175,23 @@ def test_a_function_used_only_by_skipped_tests_gets_no_vote(tmp_path):
     assert mined([_ws(tmp_path, "c", MIN_BUG, xfail), _ws(tmp_path, "d", MIN_BUG, xfail.replace("[3,", "[4,"))]) == {}
     inner = T_MIN.replace("        self.assertEqual", "        self.skipTest('x')\n        self.assertEqual")
     assert mined([_ws(tmp_path, "e", MIN_BUG, inner), _ws(tmp_path, "f", MIN_BUG, inner.replace("[3,", "[4,"))]) == {}
+    raised = T_MIN.replace("        self.assertEqual", "        raise unittest.SkipTest('x')\n        self.assertEqual")
+    assert mined([_ws(tmp_path, "g", MIN_BUG, raised), _ws(tmp_path, "h", MIN_BUG, raised.replace("[3,", "[4,"))]) == {}
+
+
+def test_cross_check_covers_tests_mixed_with_final_known_texts(tmp_path):
+    green = [_ws(tmp_path, f"g{i}", MIN_OK, t_min(i)) for i in range(3)]
+    mix = "    def test_mix(self):\n        self.assertEqual(m.minimum([3, 9, 2]) + m.total([1]), {})\n"
+    # minimum with another bug next to the known total as it stands; with the candidate the mixed test stays red
+    red = _ws(tmp_path, "r", MIN_BUG + "\n\n" + TOTAL, mix.format(4))
+    assert mined(green + [red]) == {}
+    # ... and turns green: the candidate passes
+    fixed = _ws(tmp_path, "f", MIN_BUG + "\n\n" + TOTAL, mix.format(3))
+    assert coding_solver.mine_known_texts(green + [fixed]) == ({"minimum": MIN_OK.rstrip("\n")}, {"minimum"})
+    # a mixed test with a function that is not a known text is no evidence either way
+    other = _ws(tmp_path, "o", MIN_BUG + "\n\n" + SQ,
+                "    def test_mix(self):\n        self.assertEqual(m.minimum([3, 9, 2]) + m.square(1), 4)\n")
+    assert mined(green + [other]) == {"minimum": MIN_OK.rstrip("\n")}
 
 
 def test_example_names_keep_their_example_texts(tmp_path, learned):

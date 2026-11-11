@@ -156,6 +156,28 @@ def test_variants_with_a_meaning_of_their_own_are_not_judged(tmp_path):
         assert res.status != "infeasible", name
 
 
+def test_a_known_function_green_on_its_own_is_not_judged(tmp_path):
+    # the reviewer's probes: a lawful one-edit variant of a known function stands untouched; the bug is in the
+    # unknown `double`, which shares the red test_mix with it; its own test is green on the original text
+    double = "\n\ndef double(x):\n    return x + 2\n"
+    t_double = "    def test_double(self):\n        self.assertEqual(m.double(4), 8)\n"
+    cases = {
+        "total_plus_one": ("def total(xs):\n    s = 1\n    for x in xs:\n        s += x\n    return s\n",
+                           "self.assertEqual(m.total([1, 2]), 4)", "m.double(m.total([2]))", 6),
+        "split_space": ("def reverse_words(s):\n    return ' '.join(reversed(s.split(' ')))\n",
+                        "self.assertEqual(m.reverse_words('a  b'), 'b  a')", "len(m.reverse_words('a b')) + m.double(1)", 5),
+        "floor_average": ("def average(xs):\n    return sum(xs) // len(xs)\n",
+                          "self.assertEqual(m.average([1, 2]), 1)", "m.double(m.average([1, 2]))", 2),
+    }
+    for name, (lib, own, mix, want) in cases.items():
+        tests = (HEAD + f"    def test_own(self):\n        {own}\n\n"
+                 f"    def test_mix(self):\n        self.assertEqual({mix}, {want})\n\n" + t_double + MAIN)
+        t = _coding(tmp_path / name, lib + double, tests)
+        res = coding_solver.solve(t, time_limit=60)
+        assert res.status != "infeasible", name
+        assert lib in (t.workspace / "mylib.py").read_text(encoding="utf-8"), name   # the variant is untouched
+
+
 def test_one_edit_detection():
     assert coding_solver._one_edit(TOTAL.replace("+=", "-="), "total")
     assert coding_solver._one_edit(MAXIMUM.replace("x > best", "x < best"), "maximum")

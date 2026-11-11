@@ -1102,7 +1102,8 @@ def _self_contained(fn: ast.FunctionDef, module_names: set[str]) -> bool:
 
 def _skipped_tests(tree: ast.Module) -> set[str]:
     """Test methods that may not run or whose failure counts as success: a skip or expectedFailure decorator on the
-    method or its class, or a skipTest call. Their functions are not tested by them."""
+    method or its class, or any skip in the body (`self.skipTest(...)`, `raise unittest.SkipTest(...)`). Their
+    functions are not tested by them."""
     def marked(decos) -> bool:
         return any("skip" in n.lower() or n == "expectedFailure"
                    for d in decos for n in [x.id if isinstance(x, ast.Name) else x.attr for x in ast.walk(d)
@@ -1114,7 +1115,9 @@ def _skipped_tests(tree: ast.Module) -> set[str]:
         for fn in cls.body:
             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
                     marked(cls.decorator_list) or marked(fn.decorator_list)
-                    or any(isinstance(n, ast.Attribute) and n.attr == "skipTest" for n in ast.walk(fn))):
+                    or any(isinstance(n, (ast.Name, ast.Attribute))
+                           and "skip" in (n.id if isinstance(n, ast.Name) else n.attr).lower()
+                           for n in ast.walk(fn))):
                 out.add(fn.name)
     return out
 
@@ -1126,7 +1129,14 @@ class _MineRun:
     src: str
     refs: dict
     green: dict      # name -> (AST dump, text): self-contained functions whose tests are all green here
-    alone: dict      # name -> node: functions red alone here (a red test that uses that function and nothing else)
+    alone: dict      # name -> node: functions red on their own here (`_on_its_own`)
+    exact: set       # final names (`_FINAL`) whose function stands here in its known text
+
+
+def _on_its_own(name: str, test_refs: set, exact: set) -> bool:
+    """A test of `name` that uses nothing else of mylib but final known texts standing as they are: the tests that
+    `known_text_fails` would judge."""
+    return name in test_refs and test_refs <= exact | {name}
 
 
 def _mine_run(ws: Path, timeout: float) -> _MineRun | None:
@@ -1145,7 +1155,9 @@ def _mine_run(ws: Path, timeout: float) -> _MineRun | None:
     if not rep.ok and (not rep.failed or any(f.startswith("<") or not refs.get(f) for f in rep.failed)):
         return None   # the run failed, timed out, or a failure cannot be laid on functions: no evidence here
     red = set().union(*(refs[f] for f in rep.failed)) if rep.failed else set()
-    red_alone = {next(iter(refs[f])) for f in rep.failed if len(refs[f]) == 1}
+    exact = {n.name for n in tree.body if type(n) is ast.FunctionDef and n.name in _FINAL
+             and _CANON.get(n.name) == ast.dump(n)}
+    red_alone = {n for f in rep.failed for n in refs[f] if _on_its_own(n, refs[f], exact)}
     tested = set().union(set(), *(r for f, r in refs.items() if f not in skipped))
     defined = Counter(n.name for n in tree.body
                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
@@ -1162,13 +1174,13 @@ def _mine_run(ws: Path, timeout: float) -> _MineRun | None:
         text = ast.get_source_segment(src, node)
         if text:
             green[node.name] = (ast.dump(node), text)
-    return _MineRun(ws, test_file, src, refs, green, alone)
+    return _MineRun(ws, test_file, src, refs, green, alone, exact)
 
 
 def _cross_check(name: str, text: str, runs: list, stop: float, run_timeout: float) -> bool:
-    """The candidate text in every workspace where `name` is red alone and has the candidate's shape: no test that
-    uses `name` alone may be red there with it (a red one says the text is not what the tests want, or the task is
-    infeasible; either way the text proves nothing). Running out of time is a refusal."""
+    """The candidate text in every workspace where `name` is red on its own (`_on_its_own`) and has the candidate's
+    shape: no such test may be red there with it (a red one says the text is not what the tests want, or the task
+    is infeasible; either way the text proves nothing). Running out of time is a refusal."""
     node = ast.parse(text).body[0]
     for run in runs:
         own = run.alone.get(name)
@@ -1189,7 +1201,7 @@ def _cross_check(name: str, text: str, runs: list, stop: float, run_timeout: flo
             rep = run_in_dir(tmp / "ws", run.test_file, timeout=min(run_timeout, left))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-        if any(f.startswith("<") or run.refs.get(f) == {name} for f in rep.failed):
+        if any(f.startswith("<") or _on_its_own(name, run.refs.get(f, set()), run.exact) for f in rep.failed):
             return False
     return True
 
@@ -1468,7 +1480,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                     if canon is None:
                         continue
                     rep = ctx.run(canon, None, BASE_TIMEOUT)
-                    slip = name in _FINAL and _one_edit(cur, name)
+                    # judged only when the function is red on its own text (a test of it and of nothing but
+                    # known texts as they stand), not when a mixed red test with another buggy function brought it
+                    slip = name in _FINAL and _one_edit(cur, name) and any(
+                        name in refs.get(f, ()) and refs[f] <= provable | {name} for f in initially_failing)
                     if slip and known_text_fails(test_src, canon, rep.failed, refs, provable | {name}):
                         # with the known text in place of a one-edit slip a test that uses only known texts is
                         # red, whether or not it was red before: it asks for what they are not
