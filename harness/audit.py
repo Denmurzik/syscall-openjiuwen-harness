@@ -40,8 +40,9 @@ CENSUS_BUDGET_S = 60.0
 MIN_HOLDERS = 2          # files that must hold the function green under a visible test, all forms together
 REASON_TOKENS = 1500     # output limit of the third opinion on a minority pick
 _THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
-_LONE = re.compile(r"[^\w]*(?:option\s*)?(\d)[^\w]*", re.I)
-_OPTION = re.compile(r"option\s*(\d)", re.I)
+# the last line of MODEL_REASON's reply, markdown stripped: "2", "2.", "Option 2", "Answer: 2", "Final answer: option 2"
+_LAST = re.compile(r"(?:(?:final\s+)?answer\s*[:\-]?\s*)?(?:option\s*)?(\d)\s*[.!]?", re.I)
+_MARKDOWN = re.compile(r"[*_`#>]+")
 SYSTEM = ("Several versions of one Python function were found in different files; hidden tests check other inputs "
           "than the examples, edge cases included. Pick the version that implements what the function name means "
           "for every input. Reply with the option number only.")
@@ -65,14 +66,15 @@ class Holder:
 
 
 def _key(ws: Path, test_files: list) -> tuple:
-    """Workspaces with the same code and tests (AST) count once, as in `coding_solver.mine_known_texts`."""
+    """Workspaces with the same code and the same test files (names and AST) count once, as in
+    `coding_solver.mine_known_texts`."""
     return (ast.dump(ast.parse((ws / "mylib.py").read_bytes())),
-            "\0".join(ast.dump(ast.parse((ws / f).read_bytes())) for f in test_files))
+            tuple((f, ast.dump(ast.parse((ws / f).read_bytes()))) for f in test_files))
 
 
-def _holder(task, timeout: float = RUN_TIMEOUT) -> Holder | None:
+def _holder(task, timeout: float = RUN_TIMEOUT, stop: float | None = None) -> Holder | None:
     """One coding workspace whose test files are all green: its top-level self-contained functions defined once,
-    undecorated, names the examples do not show."""
+    undecorated, names the examples do not show. No test file runs past the monotonic time `stop`."""
     ws = Path(task.workspace)
     if not (ws / "mylib.py").is_file():
         return None
@@ -89,7 +91,7 @@ def _holder(task, timeout: float = RUN_TIMEOUT) -> Holder | None:
             return None   # a test that cannot be laid on functions: nothing is known about this file
         skipped = cs._skipped_tests(ast.parse(test_src))
         tested |= set().union(set(), *(r for f, r in refs.items() if f not in skipped))
-    if not _green(ws, test_files, timeout):
+    if not _green(ws, test_files, timeout, stop=stop):
         return None
     names = cs._module_names(tree)
     defined: dict = {}
@@ -107,14 +109,20 @@ def _holder(task, timeout: float = RUN_TIMEOUT) -> Holder | None:
     return h
 
 
-def _green(ws: Path, test_files: list, timeout: float, mylib_text: str | None = None) -> bool:
-    """Every test file of `ws` passes, run in a throw-away copy (with `mylib_text` as mylib.py when given)."""
+def _green(ws: Path, test_files: list, timeout: float, mylib_text: str | None = None,
+           stop: float | None = None) -> bool:
+    """Every test file of `ws` passes, run in a throw-away copy (with `mylib_text` as mylib.py when given). Each run
+    takes at most `timeout` s and none ends past the monotonic time `stop`: out of time is not green."""
     tmp = Path(tempfile.mkdtemp(prefix="audit_"))
     try:
         shutil.copytree(ws, tmp / "ws", ignore=shutil.ignore_patterns("__pycache__"))
         if mylib_text is not None:
             (tmp / "ws" / "mylib.py").write_text(mylib_text, encoding="utf-8", newline="\n")
-        return all(run_in_dir(tmp / "ws", f, timeout).ok for f in test_files)
+        for f in test_files:
+            limit = timeout if stop is None else min(timeout, stop - time.monotonic())
+            if limit <= 0 or not run_in_dir(tmp / "ws", f, limit).ok:
+                return False
+        return True
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -142,7 +150,7 @@ def census(tasks: list, budget_s: float = CENSUS_BUDGET_S) -> tuple[list, dict]:
                 holders.append(Holder(t, ws, h0.test_files, h0.test_srcs, dict(h0.forms), votes=False))
             continue
         try:
-            h = _holder(t, min(RUN_TIMEOUT, left))
+            h = _holder(t, RUN_TIMEOUT, stop)
         except Exception:
             h = None
         first[key] = h
@@ -255,20 +263,17 @@ def unit_estimate(forms: list) -> int:
 
 
 def reason_pick(text: str, n: int) -> int | None:
-    """MODEL_REASON's option (0-based): a lone digit (or "Option k") on the last line, else the last "option k" of
-    the reply. Anything else: None."""
-    text = _THINK.sub("", text or "").strip()
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    """MODEL_REASON's option (0-based), read from the last non-empty line of its reply only, markdown stripped: a
+    lone digit, "k.", "Option k", "Answer: k" or "Final answer: k". Anything else is None (no replacement): an option
+    named in the reasoning above is as often the one rejected."""
+    text = _THINK.sub("", text or "")
+    lines = [ln for ln in (_MARKDOWN.sub("", ln).strip() for ln in text.splitlines()) if ln]
     if not lines:
         return None
-    m = _LONE.fullmatch(lines[-1])
-    if m:
-        d = int(m.group(1))
-    else:
-        found = _OPTION.findall(text)
-        if not found:
-            return None
-        d = int(found[-1])
+    m = _LAST.fullmatch(lines[-1])
+    if not m:
+        return None
+    d = int(m.group(1))
     return d - 1 if 1 <= d <= n else None
 
 

@@ -97,6 +97,27 @@ def test_rival_forms_are_found_with_votes(tmp_path):
     assert rows and all(c.startswith("minimum(") and len(res) == 2 and res[0] != res[1] for c, res in rows)
 
 
+def test_workspaces_differing_only_in_test_file_names_both_vote(tmp_path):
+    tasks = _tasks(tmp_path, [GOOD, BAD, GOOD, BAD])
+    (tasks[3].workspace / "mylib.py").write_text(_lib(tasks[1]), encoding="utf-8")
+    (tasks[3].workspace / "test_mylib.py").rename(tasks[3].workspace / "test_other.py")
+    holders, rivals = audit.census(tasks)
+    assert all(h.votes for h in holders) and [f["votes"] for f in rivals["minimum"]] == [2, 2]
+
+
+def test_the_census_has_one_time_cap_over_every_test_file(tmp_path, monkeypatch):
+    """Each run gets at most the time left of the census budget, not a fresh per-file timeout."""
+    seen = []
+    real = audit.run_in_dir
+    monkeypatch.setattr(audit, "run_in_dir", lambda d, f, timeout: (seen.append(timeout), real(d, f, timeout))[1])
+    tasks = _tasks(tmp_path, [GOOD, BAD, GOOD])
+    for t in tasks:
+        (t.workspace / "test_extra.py").write_text(TEST, encoding="utf-8")
+    assert audit.census(tasks, budget_s=8.0)[1]
+    assert len(seen) == 6 and all(0 < x <= 8.0 for x in seen) and all(a > b for a, b in zip(seen, seen[1:]))
+    assert audit.census(tasks, budget_s=0.001) == ([], {})
+
+
 def test_identical_workspaces_vote_once_and_still_take_the_winner(tmp_path):
     tasks = _tasks(tmp_path, [GOOD, BAD, GOOD, BAD])
     (tasks[3].workspace / "mylib.py").write_text(_lib(tasks[1]), encoding="utf-8")   # coding_3 = coding_1
@@ -195,7 +216,7 @@ def test_the_minority_wins_only_with_the_reasoning_model_too(tmp_path):
     tasks = _tasks(tmp_path, [BAD, BAD, GOOD])
     holders, rivals = audit.census(tasks)
     assert "best = 0" in rivals["minimum"][0]["text"]
-    client = Fake({ARBITRATE_MODELS[0]: ["2"], ARBITRATE_MODELS[1]: ["2"], MODEL_REASON: ["Option 2 is right. 2"]})
+    client = Fake({ARBITRATE_MODELS[0]: ["2"], ARBITRATE_MODELS[1]: ["2"], MODEL_REASON: ["Option 2 is right.\n2"]})
     winner, note = _decide(client, rivals, holders)
     assert winner["text"] == GOOD.strip() and "all three" in note and len(client.calls) == 3
     assert client.calls[-1][0] == MODEL_REASON and client.calls[-1][2] == audit.REASON_TOKENS
@@ -350,8 +371,15 @@ def test_alt_sees_the_options_in_reverse_order(tmp_path):
 
 
 @pytest.mark.parametrize("text, pick", [
-    ("2", 1), ("Option 2", 1), ("**2**", 1), ("Option 1 has a bug.\n2", 1), ("<think>option 1</think>Option 2.", 1),
-    ("Option 1 is wrong, option 2 is right.", 1), ("the answer is option 2 (n=1)", 1),
+    ("2", 1), ("2.", 1), ("Option 2", 1), ("**2**", 1), ("Answer: 2", 1), ("Final answer: 2", 1),
+    ("**Final answer: Option 2**", 1), ("Option 1 has a bug.\n2", 1), ("<think>option 1</think>Option 2.", 1),
+    ("Option 2 mishandles [3, 5].\nAnswer: 1", 0),
+    ("Option 2 returns 0 for [3, 5], which is wrong.\n\n**Final answer: 1**", 0),
+    ("Option 1 crashes on []; option 2 is right.\n\nOption 2", 1),
+    # an unclear last line is no answer, whatever the reasoning above names
+    ("Option 1 fails on [3, 5]. Answer: 2", None), ("I pick option 2 because option 1 crashes.", None),
+    ("Option 1 is wrong, option 2 is right.", None), ("the answer is option 2 (n=1)", None),
+    ("Option 2 is right.\nBoth 1 and 2 look fine", None),
     ("I would pick the second one", None), ("Answer: 9", None), ("", None), ("option 3", None)])
 def test_reason_pick(text, pick):
     assert audit.reason_pick(text, 2) == pick
