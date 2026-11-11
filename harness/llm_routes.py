@@ -300,8 +300,45 @@ def _kb_examples(ws: Path) -> tuple[list[str], int]:
     return out, len(pages)
 
 
+_OS_JUNK = {".DS_Store", "Thumbs.db", "desktop.ini"}  # the organizers' archive was packed on a Mac
+
+
+def _kb_is_plain(ws: Path) -> bool:
+    """True when kb/ holds only what the preamble loads: markdown files right inside kb/. A subdirectory or a
+    file of another kind (csv, json, log, a dot-file) is invisible to `kb`, and the model, shown only `kb`,
+    answers IMPOSSIBLE; such a base goes to the generic program route with the file tree instead."""
+    try:
+        entries = list((ws / "kb").iterdir())
+    except OSError:
+        return True
+    return all(p.is_file() and (p.suffix.lower() == ".md" or p.name in _OS_JUNK or p.name.startswith("._"))
+               for p in entries)
+
+
 def _is_kb_task(task: Task) -> bool:
-    return task.task_type == "search" and (task.workspace / "kb").is_dir()
+    return task.task_type == "search" and (task.workspace / "kb").is_dir() and _kb_is_plain(task.workspace)
+
+
+MIXED_KB_HINT = (" The answer may be in any file listed below, of any format, also in subdirectories and "
+                 "hidden files: read the files that matter with open() / os.walk('kb').")
+FREE_OUTPUT_HINT = " The program's whole stdout is the answer: print exactly what the task asks, nothing else."
+
+
+_NAMES_TESTS = re.compile(r"mylib|test_|unittest|pytest")
+
+
+def is_free_coding(task: Task) -> bool:
+    """A coding task with nothing to repair: no mylib.py, no test file, and the text names neither. Today it
+    ends as `unparsed` with no call at all; the program route can answer it (the text asks for an output)."""
+    if task.task_type != "coding" or task.workspace is None:
+        return False
+    ws = Path(task.workspace)
+    if (ws / "mylib.py").exists() or (task.check or "") == "unittest" or _NAMES_TESTS.search(task.instruction or ""):
+        return False
+    try:  # a test file anywhere (tests/test_x.py, x_test.py) makes it a repair task of another layout
+        return not any(p.is_file() for pat in ("test*.py", "*_test.py") for p in ws.rglob(pat))
+    except OSError:
+        return False
 
 
 def _program_messages(task: Task) -> list[dict]:
@@ -309,7 +346,12 @@ def _program_messages(task: Task) -> list[dict]:
         ex, n = _kb_examples(task.workspace)
         user = (f"{strip_boilerplate(task.instruction)}\n\nkb has {n} pages, for example:\n" + "\n".join(ex))
         return [{"role": "system", "content": SEARCH_SYSTEM}, {"role": "user", "content": user}]
-    user = f"{task.instruction}\n\n{describe_workspace(task.workspace)}"
+    hint = ""
+    if task.task_type == "search" and (task.workspace / "kb").is_dir():
+        hint = MIXED_KB_HINT
+    elif is_free_coding(task):
+        hint = FREE_OUTPUT_HINT
+    user = f"{task.instruction}{hint}\n\n{describe_workspace(task.workspace)}"
     return [{"role": "system", "content": PROGRAM_SYSTEM}, {"role": "user", "content": user}]
 
 
@@ -374,6 +416,7 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
     A confirmation vote (scheduler) passes the same model twice: the vote is then one model's program."""
     messages = _program_messages(task)
     use_kb = _is_kb_task(task)
+    free_text = task.check != "exact_int" and is_free_coding(task)  # the whole output, not its last line
     note = ""
     attempt, attempts, shape_retried = 0, 2, False
     literal_retried = False
@@ -422,6 +465,8 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
         if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
             return SolveResult("infeasible", note="program printed IMPOSSIBLE")
         answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
+        if answer is not None and free_text and len(lines) > 1:  # a list or a table: every line is the answer
+            answer = "\n".join(ln.rstrip() for ln in res.stdout.strip().splitlines())
         ph = _kb_placeholder(res, answer) if use_kb else None
         if ph == "clean":  # same as KbMissing, also when the shape check would only guess
             return SolveResult("unparsed", note="kb page or field not found")
@@ -560,13 +605,39 @@ def _locate(src: str) -> dict[str, tuple[int, int, int]]:
         first = min([node.lineno] + [d.lineno for d in node.decorator_list])
         out.setdefault(qual, (first - 1, node.end_lineno, node.col_offset))
 
-    for node in ast.parse(src).body:
+    try:
+        body = ast.parse(src).body
+    except SyntaxError:
+        return _locate_text(src)
+    for node in body:
         if isinstance(node, _DEFS):
             add(node, node.name)
         elif isinstance(node, ast.ClassDef):
             for sub in node.body:
                 if isinstance(sub, _DEFS):
                     add(sub, f"{node.name}.{sub.name}")
+    return out
+
+
+_TOP_DEF = re.compile(r"(?:async[ \t]+)?def[ \t]+(\w+)")
+
+
+def _locate_text(src: str) -> dict[str, tuple[int, int, int]]:
+    """Top-level functions of a file that does not parse (a missing colon, a bad indent): by text. A function
+    runs from its `def` line to the next line that starts at column 0 (blank lines and comments before it
+    stay outside). A wrong span cannot be written: the patched file must parse (apply_patch) and pass the visible
+    tests (fix_coding)."""
+    lines = src.split("\n")
+    tops = [i for i, ln in enumerate(lines) if ln[:1] not in ("", " ", "\t", "#", ")", "]", "}")]
+    out: dict[str, tuple[int, int, int]] = {}
+    for n, i in enumerate(tops):
+        m = _TOP_DEF.match(lines[i])
+        if not m:
+            continue
+        stop = tops[n + 1] if n + 1 < len(tops) else len(lines)
+        while stop > i + 1 and (not lines[stop - 1].strip() or lines[stop - 1].startswith("#")):
+            stop -= 1
+        out.setdefault(m.group(1), (i, stop, 0))
     return out
 
 
@@ -694,6 +765,8 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         test_name = _test_file(ws)
         tests = (ws / test_name).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
+        if is_free_coding(task):  # nothing to repair: the text asks for a program's output
+            return await solve_with_program(task, client)
         return SolveResult("unparsed", note=f"cannot read workspace: {e}")
     base_report = await asyncio.to_thread(_run_candidate, ws, base)
     if base_report.ok:
