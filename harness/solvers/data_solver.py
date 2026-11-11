@@ -108,6 +108,33 @@ def _column_values(path: Path, column: str) -> set[str] | None:
         return None
 
 
+def _file_has_other_months(workspace: Path | None, file: str) -> bool:
+    """True when the file is readable and its month column holds a value outside 1..12 (months of several years):
+    then a month above 12 may be a real month of this file."""
+    if workspace is None:
+        return False
+    try:
+        with (Path(workspace) / file).open(newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            names = {(c or "").strip().casefold(): c for c in (reader.fieldnames or [])}
+            if "month" not in names:
+                return False
+            for row in reader:
+                try:
+                    if not 1 <= int((row[names["month"]] or "").strip()) <= 12:
+                        return True
+                except ValueError:
+                    continue
+    except (OSError, ValueError, csv.Error):
+        return False
+    return False
+
+
+def _other_number(value: str, seen: set[str]) -> bool:
+    """The value with a trailing "s" stripped or added occurs in the file (widgets / widget)."""
+    return (value[:-1] in seen) if value.endswith("s") else ((value + "s") in seen)
+
+
 def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult:
     sentences = [" ".join(s.split()) for s in split_sentences(strip_boilerplate(instruction))]
     if len(sentences) != 2:
@@ -158,7 +185,8 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
         return _unparsed("conflicting month filters")
     if ranges:
         month_from, month_to = ranges[0]
-        bad_month = not (1 <= month_from <= 12 and 1 <= month_to <= 12)
+        bad_month = (not (1 <= month_from <= 12 and 1 <= month_to <= 12)
+                     and not _file_has_other_months(workspace, file))
 
     found, text = _take(_ROUND, text)
     if found is False:
@@ -513,6 +541,9 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
         # word missing from a small file stays an honest 0
         if count == 0 and ((product is not None and product not in seen_products and product not in _KNOWN_VALUES)
                            or (region is not None and region not in seen_regions and region not in _KNOWN_VALUES)):
+            if ((product is not None and _other_number(product, seen_products))
+                    or (region is not None and _other_number(region, seen_regions))):
+                return _unparsed("filter value is the singular/plural of a value in the file")
             return SolveResult("infeasible", note="the product/region does not occur in the file")
         if top_col is not None:
             if not groups:

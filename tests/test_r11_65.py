@@ -54,3 +54,34 @@ def test_month_13_of_a_recognized_question_is_infeasible(tmp_path):
     assert res.status == "infeasible" and "month outside" in res.note
     q = "How many units of product 'widget' were returned in months 13 through 14 inclusive?"
     assert data_solver.solve(_data(tmp_path, q)).status == "unparsed"
+
+
+def _file_task(tmp_path, csv_text, question):
+    t = _data(tmp_path, question)
+    (t.workspace / "sales.csv").write_text(csv_text, encoding="utf-8")
+    return t
+
+
+def test_region_collection_covers_all_rows_with_a_value_outside_the_known_words(tmp_path):
+    csv_text = CSV + "4,central,widget,2,1,1\n"
+    q = "How many units of product 'gizmo' were sold in region 'central' in months 5 through 6 inclusive?"
+    assert _status(data_solver.solve(_file_task(tmp_path, csv_text, q))) == ("solved", "0")
+    q = "How many units of product 'gizmo' were sold in region 'orbital' in months 5 through 6 inclusive?"
+    assert data_solver.solve(_file_task(tmp_path, csv_text, q)).status == "infeasible"
+
+
+def test_month_13_is_a_real_month_of_a_two_year_file(tmp_path):
+    csv_text = CSV + "4,west,widget,14,9,10\n"
+    q = "How many units of product 'widget' were sold in months 13 through 14 inclusive?"
+    assert _status(data_solver.solve(_file_task(tmp_path, csv_text, q))) == ("solved", "9")
+    # a file of 1..12 only: no such month
+    assert data_solver.solve(_data(tmp_path / "x", q)).status == "infeasible"
+    # no workspace: the rule stays
+    assert data_solver.parse(_data(tmp_path / "y", q).instruction).status == "infeasible"
+
+
+def test_plural_or_singular_of_a_value_in_the_file_goes_to_the_model(tmp_path):
+    q = "How many units of product 'gizmos' were sold in months 5 through 6 inclusive?"
+    assert data_solver.solve(_data(tmp_path, q)).status == "unparsed"
+    q = "How many units of product 'tesseracts' were sold in months 5 through 6 inclusive?"
+    assert data_solver.solve(_data(tmp_path / "z", q)).status == "infeasible"
