@@ -784,6 +784,13 @@ _COMMON_PACKAGES = frozenset({
     "attr", "attrs", "six", "mock", "dateutil", "pytz", "typing_extensions", "nose", "parameterized", "freezegun",
     "toolz", "more_itertools", "numba", "networkx", "pydantic", "click", "tqdm", "regex", "bs4", "lxml", "PIL",
     "jsonschema", "simplejson", "ujson", "orjson", "deepdiff", "faker", "pytest_mock", "responses", "httpx",
+    "sortedcontainers", "cachetools", "tabulate", "termcolor", "colorama", "rich", "toml", "tomli", "tomllib",
+    "joblib", "polars", "pyarrow", "seaborn", "plotly", "statsmodels", "torch", "tensorflow", "cv2", "flask",
+    "django", "fastapi", "sqlalchemy", "aiohttp", "boto3", "jwt", "Crypto", "cryptography", "marshmallow",
+    "arrow", "pendulum", "psutil", "packaging", "setuptools", "pkg_resources", "pip", "certifi", "urllib3",
+    "chardet", "idna", "decorator", "wrapt", "jinja2", "markupsafe", "pygments", "dotenv", "cytoolz", "funcy",
+    "pyrsistent", "frozendict", "multipledispatch", "intervaltree", "bitarray", "ddt", "nose2", "assertpy",
+    "hamcrest", "testfixtures", "pytest_benchmark", "tzdata", "zoneinfo", "backports", "dataclasses_json",
 })
 
 

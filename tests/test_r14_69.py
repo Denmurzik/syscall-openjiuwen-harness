@@ -164,7 +164,7 @@ def test_missing_import_after_mylib_is_not_a_proof(tmp_path):
 
 
 def test_stdlib_and_popular_packages_are_never_missing(tmp_path):
-    for name in ("tkinter", "numpy", "pytest", "hypothesis"):
+    for name in ("tkinter", "numpy", "pytest", "hypothesis", "sortedcontainers", "torch", "tabulate", "tomllib"):
         out = f"ModuleNotFoundError: No module named '{name}'"
         assert cs.missing_test_import(_file("", _head(name)), tmp_path, out, INS) is None, name
 
