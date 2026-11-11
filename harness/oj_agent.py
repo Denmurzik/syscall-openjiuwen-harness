@@ -10,6 +10,7 @@ framework layer falls back to the plain call (`HARNESS_OJ_AGENT=0` turns the lay
 in it can never cost a task.
 """
 import asyncio
+import contextvars
 import logging
 import os
 from pathlib import Path
@@ -18,21 +19,39 @@ log = logging.getLogger("harness")
 
 AGENT_ID = "syscall-harness"
 _TOOLS: dict = {}   # name -> openJiuwen tool, filled by build_agent(); empty: the plain functions are called
+# what the tool's own function did in the current call_tool: {"res": [result]} or {"exc": exception}
+_CALL: contextvars.ContextVar = contextvars.ContextVar("harness_oj_call", default=None)
 
 
 def enabled() -> bool:
     return (os.environ.get("HARNESS_OJ_AGENT") or "1").strip().lower() not in ("0", "false", "no", "off")
 
 
+async def _recorded(awaitable):
+    """Await the tool's own work and note in call_tool's holder how it ended: once the function has run, a failure
+    of the framework around it never runs the unit a second time, and an error of the function itself comes out
+    as the plain call would raise it."""
+    holder = _CALL.get()
+    try:
+        res = await awaitable
+    except Exception as exc:
+        if holder is not None:
+            holder["exc"] = exc
+        raise
+    if holder is not None:
+        holder["res"] = [res]
+    return res
+
+
 async def _run_program(code: str, workspace: str):
     from harness.sandbox import run_program
-    return await asyncio.to_thread(run_program, code, Path(workspace))   # up to 20 s: off the event loop
+    return await _recorded(asyncio.to_thread(run_program, code, Path(workspace)))   # up to 20 s: off the event loop
 
 
 async def _run_tests(workspace: str, source: str, target: str | None = None):
     from harness.llm_routes import _run_candidate
     # the framework fills a parameter the caller left out with None
-    return await asyncio.to_thread(_run_candidate, Path(workspace), source, target or "mylib.py")
+    return await _recorded(asyncio.to_thread(_run_candidate, Path(workspace), source, target or "mylib.py"))
 
 
 _SPECS = {
@@ -123,15 +142,25 @@ def run(tasks_dir: Path, budget: float, client) -> dict | None:
 
 async def call_tool(name: str, plain, *args):
     """Run tool `name` through its openJiuwen wrapper; `plain(*args)` in a thread when the layer is off or the
-    wrapped call fails for any reason. Both tools work in throw-away copies of the workspace, so the plain call
-    after a failed wrapped one repeats nothing that matters, and an error of the tool's own function comes out of
-    the plain call as it always did. `args` follow the order of the tool's parameters."""
+    framework fails before the tool's function ran. Once the function has run, its own result or its own error
+    is what comes out (the unit is never run twice). `args` follow the order of the tool's parameters."""
     tool = _TOOLS.get(name)
     if tool is not None:
+        holder: dict = {}
+        token = _CALL.set(holder)
         try:
             keys = list(_SPECS[name][2]["properties"])
             inputs = {k: (str(v) if isinstance(v, Path) else v) for k, v in zip(keys, args)}
-            return await tool.invoke(inputs)
+            out = await tool.invoke(inputs)
+            if "exc" in holder:   # the function raised and the framework swallowed it: raise it as the plain call
+                raise holder["exc"]
+            return holder["res"][0] if "res" in holder else out
         except Exception as exc:
+            if "exc" in holder:   # the function's own error (OSError of a full disk...): never run it twice
+                raise holder["exc"]
+            if "res" in holder:   # the function finished; only the framework after it failed
+                return holder["res"][0]
             log.warning("openJiuwen tool %s failed (%s: %s); plain call", name, type(exc).__name__, str(exc)[:120])
+        finally:
+            _CALL.reset(token)
     return await asyncio.to_thread(plain, *args)

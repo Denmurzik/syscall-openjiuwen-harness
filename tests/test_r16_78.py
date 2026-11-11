@@ -1,14 +1,19 @@
-"""Expert pass 8: task shapes far from the examples (plain test functions, another module name, `import *`, prose
-knowledge bases), the hop check of batched 2a specs, and the harness as an openJiuwen agent."""
+"""Round 16, task 78 (expert pass 8, patch d): the harness as an openJiuwen agent."""
 import asyncio
-import json
 
-from harness import json_route, llm_routes as L, oj_agent
+import pytest
+
+from harness import llm_routes as L, oj_agent
 from harness.llm import ChatResult
-from harness.result import SolveResult
-from harness.solvers import probe
-from harness.solvers.testrun import run_tests
 from harness.tasks import Task
+
+
+@pytest.fixture(autouse=True)
+def _logs_in_tmp(tmp_path, monkeypatch):
+    """openJiuwen writes ./logs into the cwd on import: keep it in the test's tmp dir, not in the tree."""
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setenv("HARNESS_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.chdir(tmp_path)
 
 INS = ("Run `python3 test_mylib.py` in the current directory; some tests fail. Fix the bugs in mylib.py (do not edit "
        "the tests) until all tests pass. Work only inside the current directory. When you are done, write ONLY the "
@@ -117,3 +122,80 @@ def test_run_never_solves_a_task_set_twice(tmp_path, monkeypatch):
         assert oj_agent.run(tmp_path, 100.0, None) == {"solved": 3} and calls == [1]
     finally:
         oj_agent._TOOLS.clear()
+
+
+# ------------------------------------------------------------------ fix round 1: a unit is never run twice
+def _plain_counter():
+    calls = []
+
+    def plain(*args):
+        calls.append(args)
+        return "plain"
+    return plain, calls
+
+
+def test_an_error_of_the_tool_function_is_raised_once(tmp_path, monkeypatch):
+    from harness import sandbox
+    runs = []
+
+    def broken_run_program(code, ws, *a, **k):
+        runs.append(code)
+        raise OSError("no space left on device")
+    monkeypatch.setattr(sandbox, "run_program", broken_run_program)
+    plain, calls = _plain_counter()
+    oj_agent.build_agent(None)
+    try:
+        with pytest.raises(OSError, match="no space"):
+            asyncio.run(oj_agent.call_tool("run_program", plain, "print(1)", tmp_path))
+    finally:
+        oj_agent._TOOLS.clear()
+    assert runs == ["print(1)"] and calls == []
+
+
+def test_a_framework_failure_after_the_function_keeps_its_result(tmp_path):
+    marker = object()
+
+    class FailsAfter:
+        async def invoke(self, inputs):
+            await oj_agent._recorded(asyncio.sleep(0, marker))
+            raise RuntimeError("hook after the call")
+    plain, calls = _plain_counter()
+    oj_agent._TOOLS["run_program"] = FailsAfter()
+    try:
+        assert asyncio.run(oj_agent.call_tool("run_program", plain, "x", tmp_path)) is marker
+    finally:
+        oj_agent._TOOLS.clear()
+    assert calls == []
+
+
+def test_a_framework_that_swallows_the_function_error_still_raises_it(tmp_path):
+    class Swallows:
+        async def invoke(self, inputs):
+            async def boom():
+                raise ValueError("own error")
+            try:
+                await oj_agent._recorded(boom())
+            except ValueError:
+                return {"error": "swallowed"}
+    plain, calls = _plain_counter()
+    oj_agent._TOOLS["run_program"] = Swallows()
+    try:
+        with pytest.raises(ValueError, match="own error"):
+            asyncio.run(oj_agent.call_tool("run_program", plain, "x", tmp_path))
+    finally:
+        oj_agent._TOOLS.clear()
+    assert calls == []
+
+
+def test_a_framework_failure_before_the_function_is_the_plain_call(tmp_path):
+    plain, calls = _plain_counter()
+
+    class Broken:
+        async def invoke(self, inputs):
+            raise RuntimeError("schema")
+    oj_agent._TOOLS["run_program"] = Broken()
+    try:
+        assert asyncio.run(oj_agent.call_tool("run_program", plain, "x", tmp_path)) == "plain"
+    finally:
+        oj_agent._TOOLS.clear()
+    assert calls == [("x", tmp_path)]
