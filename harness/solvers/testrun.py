@@ -18,17 +18,58 @@ suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[1:])
 script_ok = None
 if suite.countTestCases() == 0 and len(sys.argv) == 2 and "." not in sys.argv[1]:
     # no TestCase in the file: plain test functions (pytest style), or a script of bare asserts
-    import importlib, inspect
+    import ast, importlib, inspect
     mod = importlib.import_module(sys.argv[1])
 
-    def _free(f):
+    def _free(f, skip=0):
         return not any(p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-                       for p in inspect.signature(f).parameters.values())
+                       for p in list(inspect.signature(f).parameters.values())[skip:])
+
+    def _sync(f):
+        # an async or generator test returns without running its body when called: it can never pass here
+        return not (inspect.iscoroutinefunction(f) or inspect.isgeneratorfunction(f) or inspect.isasyncgenfunction(f))
+
+    def _method_case(c, m):
+        def run():
+            o = c()   # a class whose constructor needs arguments errors here: red
+            hook = getattr(o, "setup_method", None)
+            if callable(hook):
+                hook(getattr(o, m))
+            try:
+                getattr(o, m)()
+            finally:
+                hook = getattr(o, "teardown_method", None)
+                if callable(hook):
+                    hook(getattr(o, m))
+        run.__name__ = m
+        return unittest.FunctionTestCase(run)
+
+    def _acts(path):
+        # a statement that tests something when the file runs: anything but imports, defs, classes, assignments
+        # and docstrings (a file of uncalled check_* functions tests nothing)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                body = ast.parse(fh.read()).body
+        except Exception:
+            return True
+        quiet = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Assign,
+                 ast.AnnAssign, ast.AugAssign, ast.Pass)
+        return any(not isinstance(n, quiet) and not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))
+                   for n in body)
     fns = [f for n, f in vars(mod).items() if n.startswith("test") and inspect.isfunction(f)
            and f.__module__ == mod.__name__]
-    if fns and all(_free(f) for f in fns):
-        suite = unittest.TestSuite(unittest.FunctionTestCase(f) for f in fns)
-    elif not fns:
+    # pytest-style classes: Test* without a TestCase base, their test* methods
+    classes = [c for n, c in vars(mod).items() if n.startswith("Test") and inspect.isclass(c)
+               and c.__module__ == mod.__name__ and not issubclass(c, unittest.TestCase)
+               and getattr(c, "__test__", True) is not False]
+    methods = [(c, m) for c in classes for m in dir(c) if m.startswith("test") and inspect.isfunction(getattr(c, m))]
+    if (fns or methods) and all(_free(f) and _sync(f) for f in fns) and all(
+            _free(getattr(c, m), 1) and _sync(getattr(c, m)) for c, m in methods):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(f) for f in fns]
+                                   + [_method_case(c, m) for c, m in methods])
+    elif not fns and not methods and not _acts(mod.__file__):
+        pass   # nothing in the file tests anything: no test ran, red
+    elif not fns and not methods:
         # `python3 test_x.py` is the whole test: it passes when the script ends without an error
         import runpy
         try:
@@ -66,19 +107,19 @@ class TestReport:
 
 
 def _test_ids(test_path: Path, names: list[str]) -> list[str] | None:
-    """Resolve method names to unittest ids; None when any name is unknown."""
+    """Resolve method names to unittest ids; None when any name is unknown or sits in a class with no base (a
+    pytest-style class, which unittest cannot load by id: the whole file is run instead)."""
     try:
         tree = ast.parse(test_path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeDecodeError):
         return None
     ids = []
     for name in names:
-        found = [f"{test_path.stem}.{c.name}.{f.name}"
-                 for c in tree.body if isinstance(c, ast.ClassDef)
-                 for f in c.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
-                 and f.name == name]
-        if not found:
+        hits = [c for c in tree.body if isinstance(c, ast.ClassDef)
+                for f in c.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == name]
+        if not hits or any(not c.bases for c in hits):
             return None
+        found = [f"{test_path.stem}.{c.name}.{name}" for c in hits]
         ids += found
     return ids
 

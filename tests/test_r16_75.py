@@ -1,11 +1,9 @@
-"""Expert pass 8: task shapes far from the examples (plain test functions, another module name, `import *`, prose
-knowledge bases), the hop check of batched 2a specs, and the harness as an openJiuwen agent."""
+"""Round 16, task 75 (expert pass 8, patch a): coding tasks with plain test functions, another module name,
+`import *`."""
 import asyncio
-import json
 
-from harness import json_route, llm_routes as L
+from harness import llm_routes as L
 from harness.llm import ChatResult
-from harness.result import SolveResult
 from harness.solvers import probe
 from harness.solvers.testrun import run_tests
 from harness.tasks import Task
@@ -110,3 +108,62 @@ def test_the_ladder_repairs_a_module_of_another_name(tmp_path):
     res = asyncio.run(L.fix_coding(task, client))
     assert res.status == "solved" and "<= t" in (ws / "inventory.py").read_text(encoding="utf-8")
     assert client.calls[0][1]["content"].startswith("inventory.py:\n")
+
+
+# ------------------------------------------------------------------ fix round 1: script mode fails closed
+BROKEN = "def double(x):\n    return x + 2\n"
+FIXED = "def double(x):\n    return x * 2\n"
+
+
+def _red_then_green(tmp_path, tests, failed):
+    ws = _ws(tmp_path, {"mylib.py": BROKEN, "test_mylib.py": tests})
+    rep = run_tests(ws)
+    assert not rep.ok and rep.failed == failed
+    (ws / "mylib.py").write_text(FIXED, encoding="utf-8")
+    assert run_tests(ws).ok
+    return ws
+
+
+def test_a_pytest_style_class_is_run(tmp_path):
+    tests = ("from mylib import double\n\n\nclass TestDouble:\n    def test_two(self):\n        assert double(2) == 4\n\n"
+             "    def test_zero(self):\n        assert double(0) == 0\n")
+    ws = _red_then_green(tmp_path, tests, ["test_zero"])
+    (ws / "mylib.py").write_text(BROKEN, encoding="utf-8")
+    assert run_tests(ws, only=["test_zero"]).failed == ["test_zero"]   # by name: the whole file is run
+
+
+def test_setup_method_of_a_pytest_style_class_is_called(tmp_path):
+    tests = ("from mylib import double\n\n\nclass TestDouble:\n    def setup_method(self, method):\n        self.x = 0\n\n"
+             "    def test_zero(self):\n        assert double(self.x) == 0\n")
+    _red_then_green(tmp_path, tests, ["test_zero"])
+
+
+def test_plain_functions_and_a_class_together(tmp_path):
+    tests = ("from mylib import double\n\n\ndef test_two():\n    assert double(2) == 4\n\n\n"
+             "class TestMore:\n    def test_zero(self):\n        assert double(0) == 0\n")
+    _red_then_green(tmp_path, tests, ["test_zero"])
+
+
+def test_a_class_that_needs_arguments_is_red(tmp_path):
+    tests = ("from mylib import double\n\n\nclass TestDouble:\n    def __init__(self, x):\n        self.x = x\n\n"
+             "    def test_zero(self):\n        assert double(0) == 0\n")
+    ws = _ws(tmp_path, {"mylib.py": FIXED, "test_mylib.py": tests})
+    assert not run_tests(ws).ok
+
+
+def test_async_and_generator_tests_are_red(tmp_path):
+    for i, tests in enumerate(["from mylib import double\n\n\nasync def test_zero():\n    assert double(0) == 0\n",
+                               "from mylib import double\n\n\ndef test_zero():\n    yield\n    assert double(0) == 0\n",
+                               "from mylib import double\n\n\nclass TestD:\n    async def test_zero(self):\n"
+                               "        assert double(0) == 0\n"]):
+        ws = _ws(tmp_path, {"mylib.py": FIXED, "test_mylib.py": tests}, f"t{i}")
+        assert not run_tests(ws).ok, tests
+
+
+def test_a_file_of_uncalled_checks_is_red(tmp_path):
+    tests = '"""Checks."""\nfrom mylib import double\n\nN = 2\n\n\ndef check_zero():\n    assert double(0) == 0\n'
+    ws = _ws(tmp_path, {"mylib.py": FIXED, "test_mylib.py": tests})
+    assert not run_tests(ws).ok
+    # the same checks called at the top level are a script: green with the right mylib
+    # (a failing top-level assert already fails the import: red as "<unknown>", as before)
+    _red_then_green(tmp_path / "b", tests + "\n\ncheck_zero()\n", ["<unknown>"])
