@@ -407,9 +407,13 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
 
         left = sorted((by_id[i] for i, s in status.items() if s == "unparsed" or i in tentative),
                       key=lambda t: t.task_id)  # batch composition depends only on the task set
-        if client is not None and left:
+        # the audit of rival green forms (HARNESS_AUDIT_FORMS) runs at the very end of phase 2, even when phase 1
+        # left nothing open. Off, or too few coding tasks: phase 2 is called exactly as in round 13
+        audit_tasks = _audit_tasks(tasks) if client is not None else []
+        if client is not None and (left or audit_tasks):
             _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative,
-                    [t.reward for t in tasks], soft_infeasible=soft_infeasible)
+                    [t.reward for t in tasks], soft_infeasible=soft_infeasible,
+                    **({"audit_tasks": audit_tasks} if audit_tasks else {}))
         _write_guesses(by_id, guesses, tentative, status, written)
     except Exception:
         log.exception("scheduler failed")
@@ -455,15 +459,18 @@ def _phase2(*args, **kw) -> None:
 
 
 async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, traj,
-                        tentative=None, rewards=None, soft_infeasible=()) -> None:
+                        tentative=None, rewards=None, soft_infeasible=(), audit_tasks=()) -> None:
     tentative = tentative if tentative is not None else {}
     try:
         os.chdir(_log_dir())  # openjiuwen writes ./logs relative to cwd
     except OSError:
         pass
+    state = {"stop": False, "traj": traj}
+    if not left:   # phase 1 settled everything: only the audit of rival green forms may have work
+        await _audit_stage(audit_tasks, client, ledger, t0, deadline_s, status, traj, state)
+        return
     _load_phase2()
     from harness.templates import group
-    state = {"stop": False, "traj": traj}
 
     # 2a: one JSON-spec call per template group
     units = []
@@ -667,6 +674,85 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         units = [make() for make in unchecked]
         units.sort(key=lambda u: -u["prio"])
         await _drive(units, t0, deadline_s, ledger, state)
+
+    # last of all: every answer of the run is on disk, the audit only rewrites mylib.py of answered coding tasks
+    await _audit_stage(audit_tasks, client, ledger, t0, deadline_s, status, traj, state)
+
+
+AUDIT_MIN_TASKS = 3        # fewer coding tasks cannot show one function in rival forms worth a question
+AUDIT_SPEND_LIMIT = 0.5    # no audit unit and no third opinion once this share of the budget is spent
+AUDIT_MIN_LEFT_S = 60      # the stage starts only with this much time left before new units stop
+AUDIT_CENSUS_SHARE = 0.1   # the census takes at most this share of that time (and audit.CENSUS_BUDGET_S)
+AUDIT_MAX_FUNCS = 20       # functions asked about, the most-held first
+AUDIT_MAX_REASON = 6       # third opinions (MODEL_REASON) on minority picks in a run
+
+
+def _audit_tasks(tasks: list) -> list:
+    """The coding tasks the audit stage looks at; [] when HARNESS_AUDIT_FORMS is off or they are too few."""
+    if not config.audit_forms():
+        return []
+    coding = [t for t in tasks if t.task_type == "coding" and t.workspace is not None]
+    return coding if len(coding) >= AUDIT_MIN_TASKS else []
+
+
+async def _audit_stage(tasks, client, ledger, t0, deadline_s, status, traj, state) -> None:
+    """HARNESS_AUDIT_FORMS: functions that stand green in rival forms across the answered coding tasks
+    (`harness.audit`). One unit per function: two 8-token calls (MODEL_FAST, MODEL_ALT); the option both name replaces
+    the other forms where the visible tests stay green, and an option the set holds less often needs MODEL_REASON too.
+    No rival forms: no call. The spend gate holds for every unit and every third opinion. Never fails the run."""
+    if not tasks or state["stop"] or ledger.exhausted or ledger.spent >= AUDIT_SPEND_LIMIT * ledger.budget:
+        return
+    try:
+        from harness import audit
+
+        def left_s() -> float:
+            return deadline_s - config.stop_new_before_deadline_s() - (time.monotonic() - t0)
+
+        done = [t for t in tasks if status.get(t.task_id) == "solved" and (t.dir / "answer.txt").exists()]
+        if left_s() < AUDIT_MIN_LEFT_S or len(done) < AUDIT_MIN_TASKS:
+            return
+        holders, rivals = await asyncio.to_thread(audit.census, done,
+                                                  min(audit.CENSUS_BUDGET_S, AUDIT_CENSUS_SHARE * left_s()))
+        if not rivals:
+            return
+        log.info("audit: rival forms of %s in %d green coding tasks", sorted(rivals), len(holders))
+        _load_phase2()
+        lock = asyncio.Lock()
+        reasons = [0]
+
+        def gate() -> bool:
+            return not ledger.exhausted and ledger.spent < AUDIT_SPEND_LIMIT * ledger.budget
+
+        def may_reason(est: float) -> bool:
+            if reasons[0] >= AUDIT_MAX_REASON or not gate() or not ledger.can_afford(est):
+                return False
+            reasons[0] += 1
+            return True
+
+        def unit(name, forms):
+            est = (sum(len(f["text"]) for f in forms[:audit.MAX_FORMS]) // 30 + 60) * len(config.ARBITRATE_MODELS)
+
+            async def go():
+                if not gate():
+                    return
+                start = time.monotonic()
+                winner, note = await audit.decide(client, name, forms, holders, may_reason)
+                changed = []
+                if winner is not None:
+                    async with lock:
+                        stop = t0 + deadline_s - config.stop_new_before_deadline_s()
+                        changed = await asyncio.to_thread(audit.apply, name, winner, holders, stop)
+                traj.record({"phase": 2, "task_id": f"audit:{name}", "status": "unit", **_take_calls(),
+                             "elapsed": round(time.monotonic() - start, 3),
+                             "note": f"{note}; {len(forms)} forms; replaced in {changed}"[:300]})
+            return {"prio": sum(f["votes"] + f["untested"] for f in forms), "estimate": est, "run": go,
+                    "name": f"audit:{name}"}
+
+        units = [unit(n, fs) for n, fs in sorted(rivals.items())]
+        units.sort(key=lambda u: -u["prio"])
+        await _drive(units[:AUDIT_MAX_FUNCS], t0, deadline_s, ledger, state)
+    except Exception:
+        log.exception("audit stage failed; the files stay as they are")
 
 
 def _reserve_2d(units: list) -> float:

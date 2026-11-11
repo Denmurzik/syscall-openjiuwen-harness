@@ -98,6 +98,17 @@ def mine_texts() -> bool:
     return _env_bool("HARNESS_MINE_TEXTS", MINE_TEXTS)
 
 
+# default of HARNESS_AUDIT_FORMS. Round 14, task 71 (expert 7, idea a): on trap sets 65 -> 83 of 90, v4 coding
+# 14 -> 16 of 20, 41 replacements and none wrong; no call on sets without rival forms. See the task report
+AUDIT_FORMS = True
+
+
+def audit_forms() -> bool:
+    """The end-of-run audit of coding functions that stand green in rival forms across the task set
+    (`harness.audit`). Off: round 13. Read at call time: HARNESS_AUDIT_FORMS=1/0."""
+    return _env_bool("HARNESS_AUDIT_FORMS", AUDIT_FORMS)
+
+
 def verify_coding() -> bool:
     """A model checks green single coding fixes on its own. Read at call time: HARNESS_VERIFY_CODING=1/0."""
     return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)
