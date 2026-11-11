@@ -561,7 +561,11 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         async def go():
             start = time.monotonic()
             if task.task_type == "coding":
-                res = await (fix_coding(task, client, resume) if resume else fix_coding(task, client))
+                # a partial repair of phase 1 carries the file before its mutations: the ladder asks for the whole
+                # repair from it first (task 63). Without one the call is the round-10 call
+                restart = ((tentative.get(task.task_id) and tentative[task.task_id].extra) or {}).get("restart")
+                args = (task, client, resume) if resume else (task, client)
+                res = await (fix_coding(*args, restart=restart) if restart else fix_coding(*args))
             elif (task.task_type == "math" and task.task_id not in reasoned
                   and _reason_2b(ledger, task, t0, deadline_s)):
                 # 2a declined it (not "how much is left at the end") or failed: such a question takes reasoning,

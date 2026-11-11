@@ -394,6 +394,14 @@ def guess_target(queue, task, solver_name=None):
     queue.put((task.task_id, SolveResult("unparsed", note="guess", extra={"best_guess": "42"})))
 
 
+RESTART_TEXT = "def f():\n    return 2\n"
+
+
+def tentative_restart_target(queue, task, solver_name=None):
+    queue.put((task.task_id, SolveResult("solved", "DONE", "partial repair, still failing: ['t']", tentative=True,
+                                         extra={"restart": RESTART_TEXT})))
+
+
 def mixed_target(queue, task, solver_name=None):
     (tentative_amb_target if task.task_id == "c_arb" else unparsed_target)(queue, task)
 
@@ -698,6 +706,52 @@ def test_retry_pass_continues_the_ladder_of_a_coding_task(tmp_path, monkeypatch)
     monkeypatch.setattr(scheduler, "fix_coding", ladder)
     summary = scheduler.run(tasks, 100000, object())
     assert summary["solved"] == 1 and seen == [None, {"answered": ["fast"]}]
+
+
+def _restart_ladder(seen, first=None):
+    async def ladder(task, client, resume=None, restart=None):
+        seen.append((resume, restart))
+        if first is not None and len(seen) == 1:
+            return first
+        return SolveResult("solved", "FINAL", "model fixed")
+    return ladder
+
+
+def test_partial_repair_passes_its_restart_file_to_the_ladder(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    d = _coding(tasks)
+    seen = []
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_restart_target)
+    monkeypatch.setattr(scheduler, "fix_coding", _restart_ladder(seen))
+    scheduler.run(tasks, 100000, object())
+    assert seen == [(None, RESTART_TEXT)] and (d / "answer.txt").read_text() == "FINAL\n"
+
+
+def test_without_a_restart_file_the_ladder_gets_none(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _coding(tasks, "c_partial")
+    _coding(tasks, "c_open")
+    seen = []
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_plain_target)
+    monkeypatch.setattr(scheduler, "fix_coding", _restart_ladder(seen))
+    scheduler.run(tasks, 100000, object())
+    monkeypatch.setattr(scheduler, "_phase1_target", unparsed_target)
+    tasks2 = tmp_path / "tasks2"
+    _coding(tasks2)
+    scheduler.run(tasks2, 100000, object())
+    assert seen == [(None, None)] * 3
+
+
+def test_retry_pass_keeps_the_restart_file(tmp_path, monkeypatch):
+    tasks = tmp_path / "tasks"
+    _coding(tasks)
+    seen = []
+    ladder = {"answered": [], "base": "x", "restart": RESTART_TEXT}
+    unavailable = SolveResult("unparsed", note="llm unavailable: 503", extra={"ladder": ladder, "restart": RESTART_TEXT})
+    monkeypatch.setattr(scheduler, "_phase1_target", tentative_restart_target)
+    monkeypatch.setattr(scheduler, "fix_coding", _restart_ladder(seen, unavailable))
+    scheduler.run(tasks, 100000, object())
+    assert seen == [(None, RESTART_TEXT), (ladder, RESTART_TEXT)]
 
 
 # ---------------------------------------------------------------- task 36: guesses on disk, final reason pass
