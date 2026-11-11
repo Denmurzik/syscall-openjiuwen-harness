@@ -782,6 +782,18 @@ def _patch_messages(mylib: str, tests: str, output: str) -> list[dict]:
     return [{"role": "system", "content": PATCH_SYSTEM}, {"role": "user", "content": user}]
 
 
+TIMEOUT_HINT = ("(the test run was stopped by the time limit and printed nothing more: a function never returns or "
+                "is far too slow. Find it by reading the code, make it finish, and fast)")
+
+
+def _shown_output(report: TestReport) -> str:
+    """What the model is told of a test run. A run killed by the time limit prints nothing that says so: without
+    the note the model sees no failure of the function that hangs and repairs only the others."""
+    if "<timeout>" in report.failed:
+        return report.output + "\n" + TIMEOUT_HINT
+    return report.output
+
+
 def _budget_is_free(client) -> bool:
     """More than half of the budget left: the reasoning step is affordable for any reward."""
     ledger = getattr(client, "ledger", None)
@@ -814,7 +826,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
     missing = missing_test_import(tests, ws, base_report.output, task.instruction)
     if missing is not None:   # the tests cannot even load: nothing done to mylib.py turns them green
         return SolveResult("infeasible", note=f"the tests import a module that does not exist: {missing}")
-    output = base_report.output
+    output = _shown_output(base_report)
     restart = restart or resume.get("restart")
     restarted = bool(resume.get("restarted"))   # the restart call has answered already: never bought twice
     if restart and restart != base and not resume.get("answered") and not restarted:
@@ -823,7 +835,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         try:
             first = await asyncio.to_thread(_run_candidate, ws, restart)
             if not first.ok and not any(f.startswith("<") for f in first.failed):
-                r = await client.chat(MODEL_FAST, _patch_messages(restart, tests, first.output), 400)
+                r = await client.chat(MODEL_FAST, _patch_messages(restart, tests, _shown_output(first)), 400)
                 restarted = True
                 fixed = apply_patch(restart, r.text)
                 if fixed is not None and (await asyncio.to_thread(_run_candidate, ws, fixed)).ok:
@@ -870,7 +882,9 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
                 shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                 return SolveResult("solved", answer="DONE", note=f"patched by {model}")
             note = f"{model}: tests still failing"
-            output = report.output
+            # a candidate that hangs where the base did not: its empty run says nothing of the base asked next
+            hung = "<timeout>" in report.failed and "<timeout>" not in base_report.failed
+            output = _shown_output(base_report if hung else report)
             if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
                 base, base_report = fixed, report  # keep partial progress for the next attempt
         if answered or not failing:
