@@ -1,5 +1,6 @@
 """Short proxy outages must not cost the run; a proxy gone for good must still end it."""
 import json
+import math
 import re
 import time
 from pathlib import Path
@@ -68,11 +69,10 @@ def _spent(run) -> float:
 
 
 def _failed_input(bodies) -> float:
-    """Most the failed real calls in `bodies` may cost (round 15, task 73: a request that reached the proxy is charged
-    its input, prompt / 10). The client estimates the prompt from len(str(messages)) // 4; a margin covers the
-    difference in spelling. A ping (max_tokens 1) that fails is free."""
-    real = [b for b in bodies if (b.get("max_tokens") or b.get("max_completion_tokens")) != 1]
-    return 1.5 * sum(len(str(b.get("messages"))) // 4 / 10 for b in real) + 1
+    """Most the failed requests in `bodies` may cost (round 15, task 73: a request that reached the proxy, a ping
+    too, is charged its input, prompt / 10). The client estimates a failed prompt at len(str(messages)) / 3; a margin
+    covers the difference in spelling between its messages and the JSON body."""
+    return 1.5 * sum(math.ceil(len(str(b.get("messages"))) / 3) / 10 for b in bodies) + 1
 
 
 def _trajectory(tmp: Path) -> list:

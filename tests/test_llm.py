@@ -14,7 +14,10 @@ from harness.config import TIMEOUT_CHARGE
 
 CHARGE_16 = 17  # a timed-out call of "hi" with a limit of 16: what it can cost at most, far below TIMEOUT_CHARGE
 DEAD_S = 300  # the default is the run deadline: these tests want the limit within reach
-HI_INPUT = (len(str([{"role": "user", "content": "hi"}])) // 4) / 10  # the input charge of a failed "hi" call
+# the input charge of a failed "hi" call and of a failed ping: chars / 3, the conservative estimate of round 15
+HI_INPUT = math.ceil(len(str([{"role": "user", "content": "hi"}])) / 3) / 10
+PING_INPUT = math.ceil(len(str(llm_mod._PING)) / 3) / 10
+EMPTY_INPUT = math.ceil(len(str([{"role": "user", "content": ""}])) / 3) / 10
 
 
 @pytest.fixture(autouse=True)
@@ -172,8 +175,8 @@ def _raiser(exc_factory):
 
 
 def _failed_input(*fakes):
-    """What the failed real calls (not the pings) of these fakes cost: their input, as they reached the proxy."""
-    return HI_INPUT * sum(1 for f in fakes for lim in f.limits if lim != 1)
+    """What the failed requests of these fakes cost: their input, as they reached the proxy (a ping asks for 1 token)."""
+    return sum(PING_INPUT if lim == 1 else HI_INPUT for f in fakes for lim in f.limits)
 
 
 def _no_sleep(monkeypatch):
@@ -208,7 +211,7 @@ def _req():
 
 
 def test_real_httpx_connect_error_waits_for_the_proxy(monkeypatch):
-    """A connection refused is an outage like a 5xx: never charged, retried until the proxy is dead."""
+    """A connection refused is an outage like a 5xx, but free: it never left. Retried until the proxy is dead."""
     async def bad():
         try:
             raise httpx.ConnectError("refused")
@@ -650,7 +653,7 @@ def test_retry_after_5xx_takes_a_fresh_hold(monkeypatch):
         return _ok(p=0, c=5)
     c, fake, ledger, seen = _budgeted(1000, 100, beh)
     asyncio.run(_ask(c, 16))
-    assert ledger.held == 0 and ledger.spent == pytest.approx(5 + HI_INPUT)  # the served call, the input of the 500 (8 tokens too)
+    assert ledger.held == 0 and ledger.spent == pytest.approx(5 + EMPTY_INPUT)  # the served call, the 500's input
 
 
 def test_reasoning_outside_completion_is_charged():
@@ -865,7 +868,7 @@ def test_model_that_answered_nothing_yet_is_not_taken_for_alive(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_down(), reason=_down())
     with pytest.raises(BudgetExhausted):
         _say(c, "fast")
-    assert ledger.spent == pytest.approx(_failed_input(*fakes.values())) and clock.t - 1000 >= DEAD_S  # failed pings are free
+    assert ledger.spent == pytest.approx(_failed_input(*fakes.values())) and clock.t - 1000 >= DEAD_S  # pings too
 
 
 def test_success_elsewhere_ends_the_wait_on_a_pause():

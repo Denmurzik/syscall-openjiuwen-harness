@@ -1,5 +1,6 @@
 """Round 15, task 73: a request that reached the proxy and failed is charged its input (prompt / 10), in the ledger
-and in the unit's call list; a connect error never left and stays free; a transport failure keeps its flat charge."""
+and in the unit's call list; a connect error never left and stays free; a transport failure keeps its flat charge.
+The fix round: the input of a failed request is estimated high (chars / 3), and a failed ping is charged too."""
 import asyncio
 import math
 from types import SimpleNamespace
@@ -14,7 +15,8 @@ from harness.llm import BudgetExhausted, LLMClient, LLMUnavailable
 from harness.trajectory import CALLS
 
 MSGS = [{"role": "user", "content": "q" * 400}]
-P = len(str(MSGS)) // 4  # prompt tokens the client estimates for MSGS
+P_OK = len(str(MSGS)) // 4  # prompt tokens of the success-path estimate (and of hold())
+P = math.ceil(len(str(MSGS)) / 3)  # prompt tokens charged for a failed request: the conservative estimate
 INPUT = P / 10
 
 
@@ -175,7 +177,7 @@ def test_transport_failure_keeps_its_flat_charge_only(monkeypatch):
     c, ledger = _client(fake, monkeypatch)
     exc, calls = _chat(c)
     assert isinstance(exc, LLMUnavailable)  # ProxyDown: no model shows the proxy alive
-    flat = min(TIMEOUT_CHARGE, math.ceil(INPUT + 16))
+    flat = min(TIMEOUT_CHARGE, math.ceil(P_OK / 10 + 16))
     assert len(calls) == 1 and calls[0]["prompt_tokens"] == 0 and calls[0]["completion_tokens"] == flat
     assert ledger.spent == flat and ledger.held == 0  # not the flat amount plus the input
 
@@ -194,3 +196,90 @@ def test_charge_stays_inside_the_hold_on_a_tight_budget(monkeypatch):
     with pytest.raises((LLMUnavailable, BudgetExhausted)):
         asyncio.run(go())
     assert 0 < ledger.spent <= budget - reserve and ledger.held == 0
+
+
+# ---------------------------------------------------------------- fix round: estimate, other exceptions, pings
+
+@pytest.mark.parametrize("chars", [0, 1, 7, 100, 4001])
+def test_failed_input_estimate_is_never_below_the_success_path(chars):
+    msgs = [{"role": "user", "content": "z" * chars}]
+    n = len(str(msgs))
+    assert llm_mod._failed_input_tokens(msgs) == math.ceil(n / 3) >= n // 4
+
+
+def test_failed_input_capped_by_the_hold(monkeypatch):
+    """A long prompt with a small output limit: the charge stays within what hold() set aside."""
+    big = [{"role": "user", "content": "q" * 30000}]
+    fake = Fake(HTTPErr(500))
+    c, ledger = _client(fake, monkeypatch)
+    calls = []
+
+    async def go():
+        tok = CALLS.set(calls)
+        try:
+            return await c.chat("m", big, 1)
+        finally:
+            CALLS.reset(tok)
+    asyncio.run(go())
+    p_ok = len(str(big)) // 4
+    assert calls[0]["prompt_tokens"] == min(math.ceil(len(str(big)) / 3), p_ok + 10 * 1) == p_ok + 10
+    assert ledger.held == 0
+
+
+def test_failure_with_no_status_that_is_not_a_transport_error_is_charged(monkeypatch):
+    fake = Fake(ValueError("bad reply"))
+    c, ledger = _client(fake, monkeypatch)
+    exc, calls = _chat(c)
+    assert isinstance(exc, LLMUnavailable) and len(fake.kws) == 1
+    assert ledger.spent == pytest.approx(INPUT) and ledger.held == 0 and len(calls) == 1
+
+
+def _pinged(monkeypatch, ping_exc):
+    """fast keeps failing with 503; alt answers the ping with `ping_exc` (None: a reply)."""
+    ledger = TokenLedger(100000, 1000)
+    c = LLMClient("http://x/v1", "k", ledger)
+    fast, alt = Fake(*[HTTPErr(503)] * 50), Fake(*([ping_exc] * 50 if ping_exc is not None else []))
+    c._model = lambda name: {"fast": fast, "alt": alt}[name]
+    c.probe_models = ("fast", "alt")
+    clock = {"t": 1000.0}
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(s):
+        clock["t"] += s
+        await real_sleep(0)
+    c._now = lambda: clock["t"]
+    monkeypatch.setattr(llm_mod.asyncio, "sleep", fake_sleep)
+    monkeypatch.setenv("HARNESS_PROXY_DEAD_S", "300")
+    calls = []
+
+    async def go():
+        tok = CALLS.set(calls)
+        try:
+            return await c.chat("fast", MSGS, 16)
+        finally:
+            CALLS.reset(tok)
+    try:
+        asyncio.run(go())
+    except Exception:
+        pass
+    return ledger, fast, alt, calls
+
+
+PING_P = math.ceil(len(str(llm_mod._PING)) / 3)
+
+
+@pytest.mark.parametrize("ping_exc", [HTTPErr(503), HTTPErr(429), HTTPErr(400)])
+def test_failed_ping_that_reached_the_proxy_is_charged(monkeypatch, ping_exc):
+    ledger, fast, alt, calls = _pinged(monkeypatch, ping_exc)
+    pings = [e for e in calls if e["model"] == "alt"]
+    assert alt.kws and all(k == {"max_tokens": 1} for k in alt.kws) and len(pings) == len(alt.kws)
+    assert all(e["prompt_tokens"] == PING_P and e["cost"] == pytest.approx(PING_P / 10) for e in pings)
+    assert ledger.spent == pytest.approx(len(fast.kws) * INPUT + len(alt.kws) * PING_P / 10)
+    assert ledger.held == 0
+
+
+@pytest.mark.parametrize("ping_exc", [httpx.ConnectError("refused"), httpx.ReadTimeout("hung")])
+def test_ping_that_never_left_or_hung_stays_free(monkeypatch, ping_exc):
+    ledger, fast, alt, calls = _pinged(monkeypatch, ping_exc)
+    assert alt.kws and not [e for e in calls if e["model"] == "alt"]
+    assert ledger.spent == pytest.approx(len(fast.kws) * INPUT)

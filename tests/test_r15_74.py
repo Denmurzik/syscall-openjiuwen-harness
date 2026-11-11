@@ -11,7 +11,9 @@ from harness.tasks import Task
 from tests.test_scheduler import _make, guess_target
 
 
-def _run(tmp_path, monkeypatch, note, n=1):
+def _run(tmp_path, monkeypatch, note, n=1, reason=None):
+    """Phase 1 stores the guess 42; 2a/2b fail; the program route returns `note`'s infeasible verdict; the final
+    REASON pass (tracked like the other model routes) returns `reason` (default: nothing found)."""
     tasks = tmp_path / "tasks"
     dirs = [_make(tasks, f"s{i}", "search", f"q {i}?") for i in range(n)]
     seen = []
@@ -24,9 +26,14 @@ def _run(tmp_path, monkeypatch, note, n=1):
         seen.append(("prog", task.task_id))
         return SolveResult("infeasible", note=note)
 
+    async def reason_route(task, client):
+        seen.append(("reason", task.task_id))
+        return reason or SolveResult("unparsed")
+
     monkeypatch.setattr(scheduler, "_phase1_target", guess_target)
     monkeypatch.setattr(scheduler, "solve_group", grp)
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(scheduler, "solve_with_reason", reason_route)
     counts = scheduler.run(tasks, 100000, object())
     return counts, dirs, seen
 
@@ -50,8 +57,19 @@ def test_model_independent_verdict_ends_the_model_calls_on_the_task(tmp_path, mo
 
 
 def test_model_verdict_unchanged_guess_counts_solved(tmp_path, monkeypatch):
-    counts, (d,), _ = _run(tmp_path, monkeypatch, "program printed IMPOSSIBLE")
+    counts, (d,), seen = _run(tmp_path, monkeypatch, "program printed IMPOSSIBLE")
     assert (d / "answer.txt").read_text(encoding="utf-8").strip() == "42" and counts["solved"] == 1
+    assert ("reason", d.name) in seen  # the REASON pass still tries a soft verdict: the tracking above can see it
+
+
+def test_soft_then_proven_keeps_the_guess_and_ends_the_calls(tmp_path, monkeypatch):
+    """A model's IMPOSSIBLE first (the task stays a REASON-pass candidate), then a model-independent verdict there:
+    the guess stays on disk, the task is counted infeasible and leaves the soft set (no further calls)."""
+    counts, (d,), seen = _run(tmp_path, monkeypatch, "program printed IMPOSSIBLE",
+                              reason=SolveResult("infeasible", note="start entity not found: X"))
+    assert seen.count(("reason", d.name)) == 1 and seen[-1] == ("reason", d.name)
+    assert (d / "answer.txt").read_text(encoding="utf-8").strip() == "42"
+    assert counts["infeasible"] == 1 and counts["solved"] == 0
 
 
 def _task(root: Path, tid: str) -> Task:

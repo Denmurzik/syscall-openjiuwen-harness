@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import re
+import sys
 import tempfile
 import time
 from collections import defaultdict
@@ -96,8 +97,10 @@ class _ModelHealth:
     out: bool = False  # failed while the proxy answers: calls go elsewhere during the pause, one tries it after
 
 
-def _chain(exc: BaseException):
-    seen = set()
+def _chain(exc: BaseException, stop: BaseException | None = None):
+    """`exc` and its causes. `stop`: the exception being handled when `exc` was raised (a ping sent from inside the
+    handler of the failure that asked for it): neither it nor anything behind it belongs to `exc`."""
+    seen = set() if stop is None else {id(stop)}
     cur = exc
     while cur is not None and id(cur) not in seen:
         seen.add(id(cur))
@@ -112,13 +115,13 @@ def _valid_status(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and 100 <= v <= 599
 
 
-def _status_of(exc: BaseException) -> int | None:
+def _status_of(exc: BaseException, stop: BaseException | None = None) -> int | None:
     """HTTP status of a (possibly openjiuwen-wrapped) exception, if any.
 
     openjiuwen re-raises provider errors as ModelError `from e`, so the openai
     exception (with .status_code) sits on the __cause__ chain.
     """
-    for e in _chain(exc):
+    for e in _chain(exc, stop):
         for attr in ("status_code", "status"):
             v = getattr(e, attr, None)
             if _valid_status(v):
@@ -126,30 +129,42 @@ def _status_of(exc: BaseException) -> int | None:
         v = getattr(getattr(e, "response", None), "status_code", None)
         if _valid_status(v):
             return v
-    for e in _chain(exc):
+    for e in _chain(exc, stop):
         m = _STATUS_RE.search(str(e))
         if m:
             return int(m.group(1))
     return None
 
 
-def _names(exc: BaseException) -> set[str]:
-    return {type(e).__name__ for e in _chain(exc)}
+def _names(exc: BaseException, stop: BaseException | None = None) -> set[str]:
+    return {type(e).__name__ for e in _chain(exc, stop)}
 
 
-def _is_connect_error(exc: BaseException) -> bool:
+def _failed_input_tokens(messages) -> int:
+    """Input tokens charged for a request that reached the proxy and failed: no usage tells what it cost, so the
+    estimate errs high (chars / 3, dense code and escapes run near that), never below the success path's chars / 4."""
+    n = len(str(messages))
+    return max(math.ceil(n / 3), n // 4)
+
+
+def _went_out(status: int | None, exc: BaseException, stop: BaseException | None = None) -> bool:
+    """The request reached the proxy: anything but a connect error (never left) or a transport failure (charged flat)."""
+    return status is not None or not (_is_connect_error(exc, stop) or _is_transport_failure(exc, stop))
+
+
+def _is_connect_error(exc: BaseException, stop: BaseException | None = None) -> bool:
     """Request provably never reached the server (safe to retry)."""
-    return bool(_names(exc) & {"ConnectError", "ConnectTimeout"})
+    return bool(_names(exc, stop) & {"ConnectError", "ConnectTimeout"})
 
 
-def _is_transport_failure(exc: BaseException) -> bool:
+def _is_transport_failure(exc: BaseException, stop: BaseException | None = None) -> bool:
     """Timeout or connection broken after send: the request may have been billed."""
-    if any(isinstance(e, (asyncio.TimeoutError, TimeoutError)) for e in _chain(exc)):
+    if any(isinstance(e, (asyncio.TimeoutError, TimeoutError)) for e in _chain(exc, stop)):
         return True
     return any(n.endswith("Timeout") or n.endswith("TimeoutError")
                or n in {"APIConnectionError", "RemoteProtocolError", "ReadError", "WriteError",
                         "NetworkError", "TransportError"}
-               for n in _names(exc))
+               for n in _names(exc, stop))
 
 
 def _billed_tokens(u) -> tuple[int, int]:
@@ -325,6 +340,7 @@ class LLMClient:
     async def _ping(self, model: str) -> bool:
         """Does another model answer? Tells a failing model from a proxy outage without buying a dearer rung. It moves
         only this call on: the health of the pinged model and the dead clock stay, a ping is no proof of real work."""
+        outer = sys.exc_info()[1]  # pings are sent from the handler of a failure: it must not classify theirs
         for other in self.probe_models:
             if other == model or self._now() < self._health[other].pause_until:
                 continue
@@ -332,7 +348,10 @@ class LLMClient:
             try:
                 r = await asyncio.wait_for(self._model(other).invoke(_PING, max_tokens=1), self.timeout)
             except Exception as exc:
-                status = _status_of(exc)
+                status = _status_of(exc, outer)
+                if _went_out(status, exc, outer):  # its input is billed like any failed request; a ping that hung stays free
+                    p = _failed_input_tokens(_PING)
+                    record_call(other, p, 0, self.ledger.charge(p, 0), error=f"{type(exc).__name__}: {exc}"[:100])
                 if status in (402, 403):
                     self.ledger.mark_exhausted()
                     raise BudgetExhausted(f"HTTP {status}") from exc
@@ -427,9 +446,10 @@ class LLMClient:
                 transport = status is None and not connect and _is_transport_failure(exc)
                 if not connect and not transport:
                     # the request went out: the proxy bills its input whatever the answer (a connect error never
-                    # left, a transport failure has its own flat charge below). Inside this call's hold, so the
-                    # ledger never goes past what hold() allowed.
-                    record_call(model, prompt_tokens, 0, self.ledger.charge(prompt_tokens, 0), error=msg[:100])
+                    # left, a transport failure has its own flat charge below). The estimate errs high, but stays
+                    # inside this call's hold (prompt_cost + limit), so the ledger never goes past what hold() allowed
+                    p = min(_failed_input_tokens(messages), prompt_tokens + 10 * limit)
+                    record_call(model, p, 0, self.ledger.charge(p, 0), error=msg[:100])
                 if status in (402, 403):
                     self.ledger.mark_exhausted()
                     raise BudgetExhausted(f"HTTP {status}") from exc
