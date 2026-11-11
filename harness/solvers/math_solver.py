@@ -238,7 +238,7 @@ def execute(spec: dict) -> SolveResult:
 # a quantity named without a number: "for several days", "some deliveries", "an unknown number of boxes", "N boxes"
 _VAGUE = re.compile(
     r"\b(?:an? (?:unknown|unspecified|undisclosed|unstated|certain|undetermined) (?:number|amount|quantity) of"
-    r"|(?:unknown|unspecified) (?:number|amount|quantity) of|a (?:number|couple|handful|lot) of|lots of"
+    r"|(?:unknown|unspecified) (?:number|amount|quantity) of|a (?:number|handful|lot) of|lots of"
     r"|some|several|a few|few|many|multiple|various|numerous|unknown|unspecified|[xnk])\b(?! percent)", _FLAGS)
 
 
@@ -255,6 +255,11 @@ def missing_quantity(instruction: str) -> str | None:
             probe = _VAGUE.sub("7", sentence)
             kind = [k for rx, k in _RULES if rx.fullmatch(probe)] if probe != sentence else []
             if len(kind) != 1:
+                return None
+            # another number of the sentence is 0: the missing one does not change the result
+            hit = [rx.fullmatch(probe) for rx, k in _RULES if rx.fullmatch(probe)][0]
+            if any(g is not None and g.replace(",", "").isdigit() and int(g.replace(",", "")) == 0
+                   for g in hit.groups()):
                 return None
             vague = vague or sentence
         kinds.append(kind[0])

@@ -38,3 +38,25 @@ def test_vague_word_in_a_parsed_sentence_does_not_trigger():
     # nothing vague at all
     assert math_solver.missing_quantity(
         W + "1669 boxes. It ships 36 boxes per day for 3 days." + END) is None
+
+
+def test_a_couple_of_is_a_number_not_a_missing_one():
+    for phrase in ("a couple of deliveries of 87 boxes each", "a pair of deliveries of 87 boxes each"):
+        text = W + f"1669 boxes. It ships 36 boxes per day for 3 days. It receives {phrase}." + END
+        assert math_solver.solve(_math(text)).status != "infeasible", phrase
+    text = W + "1669 boxes. It ships 36 boxes per day for a dozen days. It receives 2 deliveries of 87 boxes each." + END
+    assert math_solver.solve(_math(text)).status != "infeasible"
+
+
+def test_a_given_value_of_the_name_is_not_judged():
+    base = "It ships 36 boxes per day for 3 days. It receives 2 deliveries of 87 boxes each."
+    for body in ("N percent of the boxes ship. " + base, base.replace("36 boxes", "N boxes") + " N is 2.",
+                 "1669 boxes. N percent of the stock ships, where N is 2."):
+        text = W + (body if body[0].isdigit() else "1669 boxes. " + body) + END
+        assert math_solver.solve(_math(text)).status != "infeasible", body
+
+
+def test_zero_multiplier_makes_the_missing_number_irrelevant():
+    for body in ("It receives some deliveries of 0 boxes each.", "It ships 0 boxes per day for several days."):
+        text = W + "1669 boxes. " + body + END
+        assert math_solver.missing_quantity(text) is None, body
