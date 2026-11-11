@@ -346,6 +346,7 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
         tentative: dict[str, SolveResult] = {}   # written but not final: phase 2 may improve it
         guesses: dict[str, SolveResult] = {}     # unanswered tasks with a stored best guess
         soft_infeasible: set[str] = set()        # a model IMPOSSIBLE: not proven, the final REASON pass may still try
+        proven_infeasible: set[str] = set()      # a model-independent verdict in phase 2: a guess on disk stays there
         written: set[str] = set()                # tasks whose answer.txt holds a guess of ours, not a final answer
 
         def put_guess(task: Task, res: SolveResult) -> None:
@@ -384,13 +385,10 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
                 soft_infeasible.add(task.task_id)
                 pass   # the model's IMPOSSIBLE is often wrong and a wrong answer costs nothing: the guess stays
             elif res.status == "infeasible" and phase >= 2:
-                guesses.pop(task.task_id, None)   # a model-independent verdict withdraws the stored guess
-                if task.task_id in written:       # ... and the one on disk
-                    written.discard(task.task_id)
-                    try:
-                        (task.dir / "answer.txt").unlink()
-                    except OSError:
-                        log.exception("cannot remove withdrawn guess of %s", task.task_id)
+                # a model-independent verdict: no more model calls on the task, but the stored guess and its
+                # answer.txt stay. An answer to an infeasible task is not counted; if the verdict is wrong, it may score
+                proven_infeasible.add(task.task_id)
+                soft_infeasible.discard(task.task_id)
             elif (res.extra or {}).get("best_guess") is not None:
                 # a value that failed the shape check only fills an empty slot: it never replaces a stored guess
                 if task.task_id not in guesses or not (res.extra or {}).get("shape_mismatch"):
@@ -414,7 +412,7 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
             _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative,
                     [t.reward for t in tasks], soft_infeasible=soft_infeasible,
                     **({"audit_tasks": audit_tasks} if audit_tasks else {}))
-        _write_guesses(by_id, guesses, tentative, status, written)
+        _write_guesses(by_id, guesses, tentative, status, written, proven_infeasible)
     except Exception:
         log.exception("scheduler failed")
     finally:
@@ -433,19 +431,21 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
     return counts
 
 
-def _write_guesses(by_id: dict, guesses: dict, tentative: dict, status: dict, written=()) -> None:
+def _write_guesses(by_id: dict, guesses: dict, tentative: dict, status: dict, written=(), proven=()) -> None:
     """Last pass: a stored best guess becomes the answer of a task that has none yet (most are on disk
-    already: they only count as solved). Never touches a task that already has an answer file."""
+    already: they only count as solved). Never touches a task that already has an answer file. A task in `proven`
+    (a model-independent infeasible verdict) keeps its guess on disk but is still counted infeasible."""
     for tid, res in guesses.items():
         task = by_id.get(tid)
+        settled = "infeasible" if tid in proven and status.get(tid) == "infeasible" else "solved"
         try:
             if tid in written:
-                status[tid] = "solved"
+                status[tid] = settled
                 continue
             if task is None or (task.dir / "answer.txt").exists():
                 continue
             write_answer(task, str(res.extra["best_guess"]))
-            status[tid] = "solved"
+            status[tid] = settled
         except Exception:
             log.exception("cannot write best guess for %s", tid)
 

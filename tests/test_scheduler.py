@@ -540,7 +540,9 @@ def test_phase2_model_infeasible_keeps_best_guess(tmp_path, monkeypatch):
     assert (d / "answer.txt").exists() and counts["solved"] == 1
 
 
-def test_phase2_model_independent_infeasible_withdraws_best_guess(tmp_path, monkeypatch):
+def test_phase2_model_independent_infeasible_keeps_best_guess(tmp_path, monkeypatch):
+    """Round 15, task 74: the guess stays on disk (an answer to an infeasible task is not counted), the count says
+    infeasible."""
     tasks = tmp_path / "tasks"
     d = _make(tasks, "s1", "search", "q one?")
 
@@ -554,7 +556,7 @@ def test_phase2_model_independent_infeasible_withdraws_best_guess(tmp_path, monk
     monkeypatch.setattr(scheduler, "solve_group", grp)
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     counts = scheduler.run(tasks, 100000, object())
-    assert not (d / "answer.txt").exists() and counts["infeasible"] == 1
+    assert (d / "answer.txt").read_text(encoding="utf-8").strip() == "42" and counts["infeasible"] == 1
 
 
 def test_arbitration_estimate_covers_every_arbitration_model(tmp_path, monkeypatch):
