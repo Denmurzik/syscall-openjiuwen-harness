@@ -6,7 +6,9 @@ is evaluated in a temporary copy of the workspace, never in the real one.
 import ast
 import copy
 import os
+import re
 import shutil
+import sys
 import tempfile
 import textwrap
 import time
@@ -550,12 +552,52 @@ def _renames_mylib_name(tree: ast.AST) -> bool:
 
 
 def provable_contradiction(test_src: str, mylib_src: str, failing: Iterable[str] | None = None) -> bool:
+    """`_contradiction` on the test file as it is, then with each bare `self.fail(<constant>)` standing directly in
+    a test method written as `self.assertTrue(False)` (expert 7): the same verdict for every test, in the only
+    statement form the strict file shape admits. The second pass then proves it only for a test red now."""
+    failing = list(failing) if failing is not None else None
+    if _contradiction(test_src, mylib_src, failing):
+        return True
+    other = _fail_as_assert(test_src)
+    return other is not None and _contradiction(other, mylib_src, failing)
+
+
+def _fail_as_assert(test_src: str) -> str | None:
+    """The test file with every bare `self.fail(<constant>)` that stands directly in a `test*` method of a class
+    written `self.assertTrue(False)`; None when there is none or the file does not parse."""
+    try:
+        tree = ast.parse(test_src)
+    except (SyntaxError, ValueError):
+        return None
+    changed = False
+    for cls in tree.body:
+        if not isinstance(cls, ast.ClassDef):
+            continue
+        for fn in cls.body:
+            if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("test")):
+                continue
+            for st in fn.body:
+                if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and _bare_fail(st.value):
+                    st.value = ast.Call(func=ast.Attribute(value=ast.Name(id="self", ctx=ast.Load()),
+                                                           attr="assertTrue", ctx=ast.Load()),
+                                        args=[ast.Constant(False)], keywords=[])
+                    changed = True
+    if not changed:
+        return None
+    try:
+        return ast.unparse(ast.fix_missing_locations(tree))
+    except Exception:
+        return None
+
+
+def _contradiction(test_src: str, mylib_src: str, failing: Iterable[str] | None = None) -> bool:
     """Strict proof for an early `infeasible`; any doubt -> False. Needs two plain top-level
     `self.assertEqual(<mylib call with literal args>, <literal>)` statements of one test method,
     the same call, expected literals unequal under Python ==, and a stateless callee; or, in the same
     file shape, one plain assertion (eight kinds, see `_FALSIFIABLE`) of literals and such calls pinned
     to plain values (`_plain_value`) that is false at those values, when it or a test pinning its calls
-    is in `failing` (red on `mylib_src`)."""
+    is in `failing` (red on `mylib_src`). Expert 7, same file shape and method filters: `self.assertTrue(c)` and
+    `self.assertFalse(c)` of one call `c` (literal arguments, pure callee) anywhere in the file."""
     try:
         tree = ast.parse(test_src)
         lib = ast.parse(mylib_src)
@@ -615,6 +657,7 @@ def provable_contradiction(test_src: str, mylib_src: str, failing: Iterable[str]
 
     seen: dict[tuple, object] = {}   # file-wide: methods and classes run independently
     pinned_in: dict[tuple, set[str]] = {}   # call -> the tests whose assertEqual pins it
+    truths: dict[tuple, set[str]] = {}   # call -> assertTrue / assertFalse demanded of it (never a pin)
     cls_count: dict[str, int] = {}
     meth_count: dict[str, int] = {}   # test names are the harness's handle: keep them unique
     for n in tree.body:
@@ -644,6 +687,13 @@ def provable_contradiction(test_src: str, mylib_src: str, failing: Iterable[str]
                     continue
                 node = st.value
                 f = node.func
+                truth = _truth_assert(node, callee)
+                if truth is not None:   # expert 7: assertTrue and assertFalse of one call, anywhere in the file
+                    key, attr = truth
+                    truths.setdefault(key, set()).add(attr)
+                    if len(truths[key]) == 2 and _callee_is_pure(lib, key[0]):
+                        return True
+                    continue
                 if not (isinstance(f, ast.Attribute) and f.attr == "assertEqual"
                         and isinstance(f.value, ast.Name) and f.value.id == "self"
                         and len(node.args) == 2 and not node.keywords):
@@ -726,6 +776,107 @@ def provable_contradiction(test_src: str, mylib_src: str, failing: Iterable[str]
                     except Exception:
                         pass   # e.g. 1 < 'a': no verdict
     return False
+
+
+# popular third-party distributions a jury machine may have although ours does not: never called missing
+_COMMON_PACKAGES = frozenset({
+    "numpy", "pandas", "scipy", "sympy", "matplotlib", "sklearn", "pytest", "hypothesis", "requests", "yaml",
+    "attr", "attrs", "six", "mock", "dateutil", "pytz", "typing_extensions", "nose", "parameterized", "freezegun",
+    "toolz", "more_itertools", "numba", "networkx", "pydantic", "click", "tqdm", "regex", "bs4", "lxml", "PIL",
+    "jsonschema", "simplejson", "ujson", "orjson", "deepdiff", "faker", "pytest_mock", "responses", "httpx",
+})
+
+
+def missing_test_import(test_src: str, ws: Path, output: str, instruction: str = "") -> str | None:
+    """The module that the test file imports at its top level BEFORE mylib and that does not exist: the run's
+    output says `No module named '<it>'`, no file or directory of the workspace provides it, nor does the standard
+    library or a popular third-party package (a jury machine may have one we lack). The tests may not be edited
+    and stop loading before mylib is even imported, so nothing done to mylib.py turns them green. Only for the
+    organizers' wording "fix the bug(s) in mylib.py" that never names the module, and no other file of the workspace
+    mentions it (the task might ask to create it). An import after mylib's is left alone: mylib could provide it
+    (round 11). Any doubt -> None."""
+    if not re.search(r"\bfix the bugs? in mylib\.py\b", instruction or "", re.I):
+        return None
+    try:
+        tree = ast.parse(test_src)
+    except (SyntaxError, ValueError):
+        return None
+    tops: list[str] = []
+    found_mylib = False
+    for st in tree.body:   # top-level statements in order, up to the import of mylib
+        if isinstance(st, ast.Import):
+            names = [a.name.split(".")[0] for a in st.names]
+        elif isinstance(st, ast.ImportFrom) and st.module and not st.level:
+            names = [st.module.split(".")[0]]
+        elif isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant):
+            continue   # a docstring
+        else:
+            break      # any other statement could plant a module
+        if "mylib" in names:
+            tops += names[:names.index("mylib")]
+            found_mylib = True
+            break
+        tops += names
+    if not found_mylib:
+        return None
+    for name in tops:
+        if name in ("mylib", "unittest") or name in sys.stdlib_module_names or name in _COMMON_PACKAGES:
+            continue
+        if not re.fullmatch(r"[A-Za-z_]\w*", name) \
+                or not re.search(rf"ModuleNotFoundError: No module named '{re.escape(name)}'", output or ""):
+            continue
+        if re.search(rf"\b{re.escape(name)}\b", instruction, re.I) or _workspace_mentions(ws, name):
+            continue
+        return name
+    return None
+
+
+def _workspace_mentions(ws: Path, name: str) -> bool:
+    """Some entry of the workspace other than the test file provides or names `name` (a file or directory called
+    so in any case, a word in a file's text). Unreadable -> True."""
+    word = re.compile(rf"\b{re.escape(name)}\b", re.I)
+    try:
+        for p in Path(ws).rglob("*"):
+            if "__pycache__" in p.parts:
+                continue
+            if p.name.split(".")[0].casefold() == name.casefold():
+                return True
+            if p.is_file() and not p.name.startswith("test_") and p.stat().st_size < 2_000_000:
+                if word.search(p.read_bytes().decode("utf-8", errors="ignore")):
+                    return True
+    except OSError:
+        return True
+    return False
+
+
+def _truth_assert(node: ast.Call, callee) -> tuple[tuple, str] | None:
+    """`self.assertTrue(c)` / `self.assertFalse(c)` of a mylib call `c` with literal arguments: (the call's key, as
+    the first pass of `provable_contradiction` keys assertEqual, and the assertion's name). Kept apart from the
+    assertEqual pins: truthiness pins no value, so nothing else may be compared with it."""
+    f = node.func
+    if not (isinstance(f, ast.Attribute) and f.attr in ("assertTrue", "assertFalse")
+            and isinstance(f.value, ast.Name) and f.value.id == "self" and len(node.args) == 1 and not node.keywords):
+        return None
+    call = node.args[0]
+    name = callee(call)
+    if name is None:
+        return None
+    try:
+        args = [ast.literal_eval(x) for x in call.args]
+        kws = [(k.arg, ast.literal_eval(k.value)) for k in call.keywords]
+    except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
+        return None
+    if any(k is None for k, _ in kws) or not all(_simple_literal(x) for x in args + [v for _, v in kws]):
+        return None
+    return (name, repr(args), repr(kws)), f.attr
+
+
+def _bare_fail(node: ast.Call) -> bool:
+    """`self.fail()` or `self.fail(<constant message>)`: raises whatever mylib does."""
+    f = node.func
+    return (isinstance(f, ast.Attribute) and f.attr == "fail" and isinstance(f.value, ast.Name)
+            and f.value.id == "self" and not node.keywords and len(node.args) <= 1
+            and all(isinstance(a, ast.Constant) for a in node.args))
 
 
 def _plain_value(v) -> bool:
@@ -1491,6 +1642,9 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                 shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                 return SolveResult("solved", answer="DONE", note=f"tests already pass, known texts restored: {names}")
             return SolveResult("solved", answer="DONE", note="tests already pass")
+        missing = missing_test_import(test_src, ws, report.output, task.instruction)
+        if missing is not None:   # the tests cannot even load: no repair search, no model calls
+            return SolveResult("infeasible", note=f"the tests import a module that does not exist: {missing}")
         if any(f.startswith("<") for f in report.failed):
             return SolveResult("unparsed", note=f"cannot localize failures: {report.failed}")
         initially_failing = list(report.failed)

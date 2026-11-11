@@ -50,10 +50,17 @@ _METRICS = [
 # ", rounded to N decimal places" (only for averages and revenue); N=2 is the default.
 _ROUND = re.compile(
     r",?\s+rounded to (?:(\d+) decimal places?|the nearest (?:integer|whole number))(?=\s*(?:\?|$))", _FLAGS)
-# "What is the total discount given?": a quantity no sales column can provide.
+# "What is the total discount given?": a quantity no sales column can provide. Expert 7: any aggregate of it, with
+# a filter the parser did not take ("... given on product 'gadget'?", "average discount of region 'west'?")
 _ABSENT = re.compile(
-    r"what (?:is|was) the total (discount|tax|shipping|profit|margin|commission|rebate|refund|tip)s?"
-    r"(?: given| charged| paid| applied| collected| amount)?\?", _FLAGS)
+    r"what (?:is|was) the (?:total|average|mean|overall|combined|maximum|minimum|highest|lowest|largest|smallest) "
+    r"(discount|tax|shipping|profit|margin|commission|rebate|refund|tip)s?"
+    r"(?: given| charged| paid| applied| collected| amount| rate)?"
+    r"(?: (?:on|in|from|by|across|per|of|for) (?:(?:the )?(?:product|region) )?'?\w+'?(?: (?:product|region))?)?\?",
+    _FLAGS)
+# the columns from which none of those quantities can be derived (no cost, list price, revenue or amount paid)
+_UNDERIVING = {"order_id", "id", "region", "product", "month", "units", "price", "unit_price", "quantity", "qty",
+               "date", "year", "quarter", "day", "customer", "customer_id", "category"}
 # every product and region of the organizers' example files
 _KNOWN_VALUES = {"widget", "gadget", "gizmo", "sprocket", "north", "south", "east", "west"}
 _ROUNDABLE = {"sum_revenue", "avg_price", "avg_units"}
@@ -206,8 +213,9 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
         absent = _ABSENT.fullmatch(text)
         if absent is not None and workspace is not None:
             cols = _csv_header_and_values(Path(workspace) / file)
-            if cols is not None and absent.group(1).casefold() not in cols[0]:
-                return SolveResult("infeasible", note=f"the file has no {absent.group(1).casefold()} column")
+            word = absent.group(1).casefold()
+            if cols is not None and word not in cols[0] and _nowhere(word, Path(workspace), cols[0]):
+                return SolveResult("infeasible", note=f"the file has no {word} column")
         return _unparsed("month outside 1..12" if bad_month else f"unrecognized question: {sentences[1]!r}")
     if bad_month:   # the question itself is one we read in full: no such month exists in any file
         return SolveResult("infeasible", note="month outside 1..12")
@@ -254,6 +262,26 @@ _REVENUE_DEF = re.compile(
 _WORD = re.compile(r"[a-z0-9]+")
 _MAX_WORDS = {"largest", "biggest", "maximum", "max", "highest"}
 _MIN_WORDS = {"smallest", "lowest", "minimum", "min"}
+
+
+def _nowhere(word: str, workspace: Path, header: list[str]) -> bool:
+    """`word` (discount, tax ...) cannot come from the data: every column of the header is one that derives none of
+    those quantities, and no file of the workspace names it in its name or text, in any case or form (discounts,
+    discount_pct). Any doubt -> False."""
+    if not header or not all(c in _UNDERIVING for c in header):
+        return False
+    try:
+        for p in workspace.rglob("*"):
+            if word in p.name.casefold():
+                return False
+            if p.is_file():
+                if p.stat().st_size > 50_000_000:
+                    return False
+                if word in p.read_bytes().decode("utf-8", errors="ignore").casefold():
+                    return False
+    except OSError:
+        return False
+    return True
 
 
 def _csv_header_and_values(path: Path) -> tuple[list[str], dict[str, set[str]]] | None:

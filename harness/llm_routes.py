@@ -16,7 +16,7 @@ from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
 from harness.shape import DESCRIBE, NAME, expected_shape, mismatch
 from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic writer reused
-from harness.solvers.coding_solver import provable_contradiction
+from harness.solvers.coding_solver import missing_test_import, provable_contradiction
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
 
@@ -811,6 +811,9 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         return SolveResult("solved", answer="DONE", note="tests already pass")
     if provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
         return SolveResult("infeasible", note="tests contradict each other")
+    missing = missing_test_import(tests, ws, base_report.output, task.instruction)
+    if missing is not None:   # the tests cannot even load: nothing done to mylib.py turns them green
+        return SolveResult("infeasible", note=f"the tests import a module that does not exist: {missing}")
     output = base_report.output
     restart = restart or resume.get("restart")
     restarted = bool(resume.get("restarted"))   # the restart call has answered already: never bought twice
