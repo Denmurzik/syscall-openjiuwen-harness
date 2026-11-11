@@ -56,6 +56,7 @@ KB_PREAMBLE = (
     "    def __missing__(self, key):\n"
     "        raise KbFieldMissing(key)\n"
     "kb = _KbDict()\n"
+    "pages = _KbDict()\n"
     "for _f in (sorted(os.listdir('kb')) if os.path.isdir('kb') else []):\n"
     "    _name, _d = None, _KbPage()\n"
     "    try:\n"
@@ -69,7 +70,8 @@ KB_PREAMBLE = (
     "            _k, _v = _ln.split(':', 1)\n"
     "            _d[_k.strip()] = _v.strip()\n"
     "    if _name:\n"
-    "        kb[_name] = _d\n")
+    "        kb[_name] = _d\n"
+    "        pages[_name] = _text\n")
 
 
 def kb_program(code: str) -> str:
@@ -349,6 +351,84 @@ def _is_kb_task(task: Task) -> bool:
     return task.task_type == "search" and (task.workspace / "kb").is_dir() and _kb_is_plain(task.workspace)
 
 
+PROSE_SYSTEM = ("Answer a question from a knowledge base of short text pages (biographies, profiles). Reply with a "
+                "short Python 3 program that prints only the final answer to stdout. "
+                "Every page is ALREADY loaded into the dict `pages` (page title -> full text of the page): do not open "
+                "files. The pages that matter most are shown below. "
+                "A fact that a shown page states may be printed directly: copy the value exactly as the page writes it "
+                "(a name, a year, a city), nothing else. A count, a comparison or anything over many pages is computed "
+                "in code over pages.items() with `in`, str methods or re, using the wording you see in the shown pages. "
+                "Follow chains yourself: when the answer needs a second page, read that page below. "
+                "If the pages do not state the fact the question needs, print IMPOSSIBLE. "
+                "Never write answer.txt or any file: the answer is read from the program's output. "
+                "Output only code, no comments, no markdown.")
+PROSE_CONTEXT_CHARS = 6000   # page text shown to the model (about 200 units of input)
+PROSE_PAGE_CHARS = 1500      # of one page
+_FIELD_LINE = re.compile(r"^[A-Za-z][\w /()-]{0,30}:[ \t]+\S")
+
+
+def _kb_pages(ws: Path) -> dict[str, str]:
+    """title -> full text of every page the preamble loads."""
+    out: dict[str, str] = {}
+    kb_dir = ws / "kb"
+    try:
+        files = sorted(p for p in kb_dir.iterdir() if p.is_file()) if kb_dir.is_dir() else []
+    except OSError:
+        files = []
+    for f in files:
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        title = next((ln.lstrip("#").strip() for ln in text.splitlines() if ln.startswith("#")), None)
+        if title:
+            out[title] = text
+    return out
+
+
+def _has_fields(text: str) -> bool:
+    """The page holds at least one short `Key: value` line (the shape the `kb` dict is built from)."""
+    return any(_FIELD_LINE.match(ln) and len(ln.split()) <= 12 for ln in text.splitlines() if not ln.startswith("#"))
+
+
+def _kb_is_prose(ws: Path) -> bool:
+    """Most pages are running text with no `Key: value` line: the `kb` dict of fields is empty for them, and a model
+    shown only that dict answers IMPOSSIBLE (or 0 for a count). Such a base is read as text."""
+    pages = _kb_pages(ws)
+    return bool(pages) and sum(1 for t in pages.values() if _has_fields(t)) * 2 < len(pages)
+
+
+def _prose_context(ws: Path, question: str) -> tuple[str, int]:
+    """The page texts for the prompt, within PROSE_CONTEXT_CHARS: the pages the question names, then the pages those
+    name and the pages naming them, then the rest in file order. Returns (text, number of pages in the base)."""
+    pages = _kb_pages(ws)
+    low = {t: t.casefold() for t in pages}
+    q = question.casefold()
+    first = [t for t in pages if low[t] in q]
+    linked = [t for t in pages if t not in first and any(low[t] in pages[f].casefold() for f in first)]
+    back = [t for t in pages if t not in first and t not in linked and any(low[f] in pages[t].casefold() for f in first)]
+    seen = set(first) | set(linked) | set(back)
+    parts, used = [], 0
+    for t in first + linked + back + [t for t in pages if t not in seen]:
+        body = pages[t].strip()[:PROSE_PAGE_CHARS]
+        if used + len(body) > PROSE_CONTEXT_CHARS and parts:
+            break
+        parts.append(body)
+        used += len(body) + 2
+    return "\n\n".join(parts), len(pages)
+
+
+def _quoted_from_kb(ws: Path, answer: str) -> bool:
+    """The printed constant stands word for word on a page: a fact read from the text, not a number worked out
+    in the head."""
+    a = " ".join(answer.split()).casefold()
+    return len(a) >= 2 and any(a in " ".join(t.split()).casefold() for t in _kb_pages(ws).values())
+
+
+def _is_prose_task(task: Task) -> bool:
+    return _is_kb_task(task) and _kb_is_prose(task.workspace)
+
+
 MIXED_KB_HINT = (" The answer may be in any file listed below, of any format, also in subdirectories and "
                  "hidden files: read the files that matter with open() / os.walk('kb').")
 FREE_OUTPUT_HINT = " The program's whole stdout is the answer: print exactly what the task asks, nothing else."
@@ -372,6 +452,11 @@ def is_free_coding(task: Task) -> bool:
 
 
 def _program_messages(task: Task) -> list[dict]:
+    if _is_prose_task(task):
+        question = strip_boilerplate(task.instruction)
+        shown, n = _prose_context(task.workspace, question)
+        user = f"{question}\n\n`pages` has {n} pages. Pages (the most relevant first):\n\n{shown}"
+        return [{"role": "system", "content": PROSE_SYSTEM}, {"role": "user", "content": user}]
     if _is_kb_task(task):
         ex, n = _kb_examples(task.workspace)
         user = (f"{strip_boilerplate(task.instruction)}\n\nkb has {n} pages, for example:\n" + "\n".join(ex))
@@ -446,6 +531,7 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
     A confirmation vote (scheduler) passes the same model twice: the vote is then one model's program."""
     messages = _program_messages(task)
     use_kb = _is_kb_task(task)
+    prose = use_kb and _kb_is_prose(task.workspace)
     # a search answer is one value on any route: None / unknown / a whole dict is never it, nor a best guess
     guard = use_kb or task.task_type == "search"
     free_text = task.check != "exact_int" and is_free_coding(task)  # the whole output, not its last line
@@ -464,7 +550,12 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             note = "program cut by the budget limit"
             break
         code = extract_code(r.text, join_all=False)
-        if not literal_retried and is_bare_literal(code):  # a number worked out in the head: one more try, no run
+        quoted = False
+        if prose and is_bare_literal(code):   # a fact copied from a shown page: taken when a page really holds it
+            probe = await asyncio.to_thread(run_program, kb_program(code), task.workspace)
+            said = normalize_answer(probe.stdout, task.check, task.instruction) if probe.returncode == 0 else None
+            quoted = said is not None and _quoted_from_kb(task.workspace, said)
+        if not literal_retried and not quoted and is_bare_literal(code):  # a number worked out in the head: one more try, no run
             literal_retried, attempts = True, attempts + 1
             note = "program printed a hard-coded literal"
             messages = messages + [{"role": "assistant", "content": r.text}, {"role": "user", "content":
