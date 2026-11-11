@@ -300,19 +300,48 @@ def _kb_examples(ws: Path) -> tuple[list[str], int]:
     return out, len(pages)
 
 
-_OS_JUNK = {".DS_Store", "Thumbs.db", "desktop.ini"}  # the organizers' archive was packed on a Mac
+# the organizers' archive was packed on a Mac
+_OS_JUNK = {".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep", ".keep", ".gitignore"}
+_PAGE_SUFFIXES = {".md", ".markdown", ".txt", ""}
+
+
+def _kb_junk(p: Path) -> bool:
+    """An entry that says nothing about the base: OS and VCS litter, an empty dot-file, a README or an index."""
+    n = p.name
+    if n in _OS_JUNK or n.startswith("._") or n.upper().startswith("README") or n.lower().startswith("index."):
+        return True
+    try:
+        return n.startswith(".") and p.stat().st_size == 0
+    except OSError:
+        return False
+
+
+def _is_page(p: Path) -> bool:
+    """A text file of a page kind whose first non-blank line is a `# Title`: what the preamble loads into `kb`.
+    A hidden file is never a page (`.env`, `.secret`: the foreign bases hide data in them)."""
+    if p.name.startswith(".") or not p.is_file() or p.suffix.lower() not in _PAGE_SUFFIXES:
+        return False
+    try:
+        with open(p, "rb") as f:
+            raw = f.read(PREVIEW_FILE * 4)
+    except OSError:
+        return False
+    if b"\0" in raw:  # gz, sqlite: binary. Stray non-UTF-8 bytes in a page are read as the preamble reads them
+        return False
+    first = next((ln for ln in raw.decode("utf-8", errors="replace").lstrip("\ufeff").splitlines() if ln.strip()), "")
+    return first.lstrip().startswith("#")
 
 
 def _kb_is_plain(ws: Path) -> bool:
-    """True when kb/ holds only what the preamble loads: markdown files right inside kb/. A subdirectory or a
-    file of another kind (csv, json, log, a dot-file) is invisible to `kb`, and the model, shown only `kb`,
-    answers IMPOSSIBLE; such a base goes to the generic program route with the file tree instead."""
+    """True when kb/ holds only pages the preamble loads: `# Title` text files (.md, .markdown, .txt or no suffix)
+    right inside kb/, besides junk (`_kb_junk`). A subdirectory or a file of another kind (csv, json, log, gz,
+    sqlite, a dot-file with data) is invisible to `kb`, and the model, shown only `kb`, answers IMPOSSIBLE; such a
+    base goes to the generic program route with the file tree instead."""
     try:
         entries = list((ws / "kb").iterdir())
     except OSError:
         return True
-    return all(p.is_file() and (p.suffix.lower() == ".md" or p.name in _OS_JUNK or p.name.startswith("._"))
-               for p in entries)
+    return all((p.is_file() and _kb_junk(p)) or _is_page(p) for p in entries)
 
 
 def _is_kb_task(task: Task) -> bool:
@@ -416,6 +445,8 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
     A confirmation vote (scheduler) passes the same model twice: the vote is then one model's program."""
     messages = _program_messages(task)
     use_kb = _is_kb_task(task)
+    # a search answer is one value on any route: None / unknown / a whole dict is never it, nor a best guess
+    guard = use_kb or task.task_type == "search"
     free_text = task.check != "exact_int" and is_free_coding(task)  # the whole output, not its last line
     note = ""
     attempt, attempts, shape_retried = 0, 2, False
@@ -467,10 +498,11 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
         answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
         if answer is not None and free_text and len(lines) > 1:  # a list or a table: every line is the answer
             answer = "\n".join(ln.rstrip() for ln in res.stdout.strip().splitlines())
-        ph = _kb_placeholder(res, answer) if use_kb else None
+        ph = _kb_placeholder(res, answer) if guard else None
         if ph == "clean":  # same as KbMissing, also when the shape check would only guess
-            return SolveResult("unparsed", note="kb page or field not found")
-        container = use_kb and (ph == "mixed" or (answer is not None and _is_container_repr(answer)))
+            return SolveResult("unparsed", note="kb page or field not found" if use_kb
+                               else "program printed a placeholder")
+        container = guard and (ph == "mixed" or (answer is not None and _is_container_repr(answer)))
         if container:
             answer = None  # a whole page or a trailing None is never the answer and never a best guess
         if answer is not None:
@@ -574,12 +606,14 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
     if res.returncode == 0 and not res.timed_out and lines and lines[-1] == "IMPOSSIBLE":
         return SolveResult("infeasible", note="reason program printed IMPOSSIBLE")
     answer = None if res.returncode != 0 or res.timed_out else normalize_answer(res.stdout, task.check, task.instruction)
-    ph = _kb_placeholder(res, answer) if use_kb else None
+    guard = use_kb or task.task_type == "search"
+    ph = _kb_placeholder(res, answer) if guard else None
     if ph == "clean":
-        return SolveResult("unparsed", note="kb page or field not found")
+        return SolveResult("unparsed", note="kb page or field not found" if use_kb
+                           else "reason program printed a placeholder")
     if ph == "mixed":
         return SolveResult("unparsed", note="reason program printed a placeholder after other output")
-    if answer is not None and use_kb and _is_container_repr(answer):
+    if answer is not None and guard and _is_container_repr(answer):
         return SolveResult("unparsed", note="reason program printed a whole page or list")
     if answer is None:
         return SolveResult("unparsed", note="reason program gave no usable answer")
@@ -624,8 +658,8 @@ _TOP_DEF = re.compile(r"(?:async[ \t]+)?def[ \t]+(\w+)")
 
 def _locate_text(src: str) -> dict[str, tuple[int, int, int]]:
     """Top-level functions of a file that does not parse (a missing colon, a bad indent): by text. A function
-    runs from its `def` line to the next line that starts at column 0 (blank lines and comments before it
-    stay outside). A wrong span cannot be written: the patched file must parse (apply_patch) and pass the visible
+    runs from its `def` line, or from the `@` decorator lines right above it (as in `_locate`), to the next line
+    that starts at column 0 (blank lines and comments before it stay outside). A wrong span cannot be written: the patched file must parse (apply_patch) and pass the visible
     tests (fix_coding)."""
     lines = src.split("\n")
     tops = [i for i, ln in enumerate(lines) if ln[:1] not in ("", " ", "\t", "#", ")", "]", "}")]
@@ -637,7 +671,10 @@ def _locate_text(src: str) -> dict[str, tuple[int, int, int]]:
         stop = tops[n + 1] if n + 1 < len(tops) else len(lines)
         while stop > i + 1 and (not lines[stop - 1].strip() or lines[stop - 1].startswith("#")):
             stop -= 1
-        out.setdefault(m.group(1), (i, stop, 0))
+        first = n
+        while first > 0 and lines[tops[first - 1]].startswith("@"):  # a reply repeating them replaces them
+            first -= 1
+        out.setdefault(m.group(1), (tops[first], stop, 0))
     return out
 
 

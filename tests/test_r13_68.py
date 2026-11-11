@@ -184,3 +184,80 @@ def test_unparsable_test_file_stays_infeasible_in_phase_1(tmp_path):
             {"mylib.py": _BROKEN, "test_mylib.py": "def broken(:" + chr(10)})
     r = coding_solver.solve(t, time_limit=30)
     assert r.status == "infeasible" and "does not parse" in r.note
+
+
+# ---- fix round 1
+
+def _plain(tmp_path, files):
+    t = _mk(tmp_path, "search", "In which year was Ann Lee born?", "exact_str", files)
+    return _kb_is_plain(t.workspace)
+
+
+def test_plain_pages_of_any_page_suffix_keep_the_kb_route(tmp_path):
+    bom = chr(0xfeff)
+    assert _plain(tmp_path / "a", {"kb/person_ann.txt": PAGE, "kb/person_bob.markdown": PAGE, "kb/person_cy": PAGE})
+    assert _plain(tmp_path / "b", {"kb/a.md": chr(10) + "  " + chr(10) + PAGE, "kb/b.MD": bom + PAGE})
+    assert _plain(tmp_path / "c", {"kb/a.md": PAGE, "kb/.gitkeep": "", "kb/.DS_Store": "x", "kb/README.txt": "about",
+                                   "kb/index.json": "{}", "kb/._a.md": "x", "kb/.empty": ""})
+
+
+def test_other_files_make_the_base_mixed(tmp_path):
+    assert not _plain(tmp_path / "a", {"kb/a.md": PAGE, "kb/data.csv": "# id,price" + chr(10) + "1,2" + chr(10)})
+    assert not _plain(tmp_path / "b", {"kb/a.md": PAGE, "kb/sub/b.md": PAGE})
+    assert not _plain(tmp_path / "c", {"kb/a.md": PAGE, "kb/notes.txt": "TOKEN: x1" + chr(10)})
+    assert not _plain(tmp_path / "d", {"kb/a.md": PAGE, "kb/.env": "# secrets" + chr(10) + "TOKEN=x1"})
+    d = tmp_path / "e" / "t" / "workspace" / "kb"
+    d.mkdir(parents=True)
+    (d / "a.md").write_text(PAGE, encoding="utf-8")
+    (d / "b.md").write_bytes(b"\x1f\x8b\x08\x00binary\x00")
+    assert not _kb_is_plain(d.parent)
+
+
+def _mixed(tmp_path, q="Who leads project Harbor?"):
+    return _mk(tmp_path, "search", q, "exact_str",
+               {"kb/person_ann_lee.md": PAGE, "kb/data/projects.csv": "name,lead" + chr(10) + "Harbor,Ann Lee" + chr(10)})
+
+
+def test_general_search_route_takes_a_placeholder_as_no_answer(tmp_path):
+    t = _mixed(tmp_path)
+    c = FakeClient(["import csv" + chr(10) + "print({}.get('x'))"])
+    r = asyncio.run(solve_with_program(t, c))
+    assert r.status == "unparsed" and r.answer is None and not r.extra and len(c.calls) == 1
+
+
+def test_general_search_route_retries_a_container(tmp_path):
+    t = _mixed(tmp_path)
+    rows = "import csv" + chr(10) + "rows = list(csv.DictReader(open('kb/data/projects.csv')))" + chr(10)
+    c = FakeClient([rows + "print(rows[0])", rows + "print(rows[0]['lead'])"])
+    r = asyncio.run(solve_with_program(t, c))
+    assert (r.status, r.answer) == ("solved", "Ann Lee") and len(c.calls) == 2
+    c = FakeClient([rows + "print(rows[0])", rows + "print(rows)"])
+    r = asyncio.run(solve_with_program(t, c))
+    assert r.status == "unparsed" and r.answer is None and not (r.extra or {}).get("best_guess")
+
+
+def test_reason_route_on_a_mixed_base_refuses_a_placeholder(tmp_path):
+    from harness.llm_routes import solve_with_reason
+    t = _mixed(tmp_path)
+    r = asyncio.run(solve_with_reason(t, FakeClient(["```python" + chr(10) + "x = {}" + chr(10) + "print(x.get('a'))"
+                                                       + chr(10) + "```"])))
+    assert r.status == "unparsed" and "placeholder" in r.note
+
+
+def test_text_locate_takes_the_decorators_with_the_function():
+    from harness.llm_routes import apply_patch, _locate
+    nl = chr(10)
+    src = ("import functools" + nl + nl + "@functools.lru_cache(" + nl + "    maxsize=None)" + nl + "@staticmethod" + nl
+           + "def f(a)" + nl + "    return a" + nl + nl + "def g(a):" + nl + "    return a" + nl)
+    assert _locate(src)["f"] == (2, 7, 0)
+    out = apply_patch(src, "FUNC f" + nl + "@functools.lru_cache(maxsize=None)" + nl + "def f(a):" + nl + "    return a + 1" + nl)
+    assert out is not None and out.count("lru_cache") == 1 and "@staticmethod" not in out
+    assert out.endswith("def g(a):" + nl + "    return a" + nl)
+
+
+def test_a_page_with_stray_non_utf8_bytes_stays_plain(tmp_path):
+    d = tmp_path / "t" / "workspace" / "kb"
+    d.mkdir(parents=True)
+    (d / "a.md").write_text(PAGE, encoding="utf-8")
+    (d / "b.md").write_bytes(b"# Arktika Labs\n\nFounded: 1993\n\nCaf\xe9 \xc6\xff\xfe\x80")
+    assert _kb_is_plain(d.parent)
