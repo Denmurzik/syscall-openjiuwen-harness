@@ -113,7 +113,14 @@ def main(argv=None) -> None:
                 client = LLMClient(base, key, ledger)
             except Exception as e:
                 print(f"LLM client unavailable: {e!r}", file=sys.stderr)
-        summary = scheduler.run(tasks_dir, budget, client)
+        summary = None
+        try:  # the harness runs as an openJiuwen agent (harness/oj_agent.py); None: the layer is off or absent
+            from harness import oj_agent
+            summary = oj_agent.run(tasks_dir, budget, client)
+        except Exception as e:
+            print(f"agent layer failed before the run: {e!r}", file=sys.stderr)
+        if summary is None:
+            summary = scheduler.run(tasks_dir, budget, client)
     except BaseException as e:  # never crash
         print(f"run failed: {e!r}", file=sys.stderr)
     try:

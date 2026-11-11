@@ -11,6 +11,7 @@ from pathlib import Path
 
 from harness.llm import (LLMUnavailable, ModelFailing, ProxyDown,  # BudgetExhausted is deliberately not caught here
                          chat_or_alt)
+from harness.oj_agent import call_tool
 from harness.result import SolveResult
 from harness.sandbox import run_program
 from harness.solvers.common import split_sentences, strip_boilerplate
@@ -565,7 +566,7 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             attempt += 1
             continue
         # subprocess + copytree block for up to 20 s: keep them off the event loop
-        res = await asyncio.to_thread(run_program, kb_program(code) if use_kb else code, task.workspace)
+        res = await call_tool("run_program", run_program, kb_program(code) if use_kb else code, task.workspace)
         field = _kb_field_missing(res.stderr) if use_kb and res.returncode != 0 and not res.timed_out else None
         if field is not None and not field_retried:
             # the page is there, the field is not: an invented field ("Mentee") or a field of the other kind of
@@ -691,7 +692,7 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
         return SolveResult("solved", answer=bare, note="model reason answer")
     use_kb = _is_kb_task(task)
     code = extract_code(r.text, join_all=False)
-    res = await asyncio.to_thread(run_program, kb_program(code) if use_kb else code, task.workspace)
+    res = await call_tool("run_program", run_program, kb_program(code) if use_kb else code, task.workspace)
     if use_kb and res.returncode != 0 and not res.timed_out and _kb_key_error(res.stderr):
         return SolveResult("unparsed", note="kb page or field not found")
     lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
@@ -942,7 +943,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         if is_free_coding(task):  # nothing to repair: the text asks for a program's output
             return await solve_with_program(task, client)
         return SolveResult("unparsed", note=f"cannot read workspace: {e}")
-    base_report = await asyncio.to_thread(_run_candidate, ws, base, *targs)
+    base_report = await call_tool("run_tests", _run_candidate, ws, base, *targs)
     if base_report.ok:
         return SolveResult("solved", answer="DONE", note="tests already pass")
     if provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
@@ -957,12 +958,12 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         # phase 1 left a partial repair: mutations no one checked. One MODEL_FAST call for the whole repair from
         # the file before them; a green result is taken, anything else leaves the ladder below as it was
         try:
-            first = await asyncio.to_thread(_run_candidate, ws, restart, *targs)
+            first = await call_tool("run_tests", _run_candidate, ws, restart, *targs)
             if not first.ok and not any(f.startswith("<") for f in first.failed):
                 r = await client.chat(MODEL_FAST, _patch_messages(restart, tests, _shown_output(first), target, test_name), 400)
                 restarted = True
                 fixed = apply_patch(restart, r.text)
-                if fixed is not None and (await asyncio.to_thread(_run_candidate, ws, fixed, *targs)).ok:
+                if fixed is not None and (await call_tool("run_tests", _run_candidate, ws, fixed, *targs)).ok:
                     write_mylib(mylib_path, fixed)
                     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                     return SolveResult("solved", answer="DONE",
@@ -1000,7 +1001,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
             if fixed is None:
                 note = f"{model}: patch did not apply"
                 continue
-            report = await asyncio.to_thread(_run_candidate, ws, fixed, *targs)
+            report = await call_tool("run_tests", _run_candidate, ws, fixed, *targs)
             if report.ok:
                 write_mylib(mylib_path, fixed)
                 shutil.rmtree(ws / "__pycache__", ignore_errors=True)
