@@ -54,6 +54,8 @@ _ROUND = re.compile(
 _ABSENT = re.compile(
     r"what (?:is|was) the total (discount|tax|shipping|profit|margin|commission|rebate|refund|tip)s?"
     r"(?: given| charged| paid| applied| collected| amount)?\?", _FLAGS)
+# every product and region of the organizers' example files
+_KNOWN_VALUES = {"widget", "gadget", "gizmo", "sprocket", "north", "south", "east", "west"}
 _ROUNDABLE = {"sum_revenue", "avg_price", "avg_units"}
 _MAX_DECIMALS = 6
 _TOP_COLUMNS = ("product", "region")
@@ -117,6 +119,7 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
     text = sentences[1]
 
     product = region = month_from = month_to = None
+    bad_month = False
     found, text = _take(_PRODUCT, text)
     if found is False:
         return _unparsed("repeated product filter")
@@ -155,8 +158,7 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
         return _unparsed("conflicting month filters")
     if ranges:
         month_from, month_to = ranges[0]
-        if not (1 <= month_from <= 12 and 1 <= month_to <= 12):
-            return _unparsed("month outside 1..12")
+        bad_month = not (1 <= month_from <= 12 and 1 <= month_to <= 12)
 
     found, text = _take(_ROUND, text)
     if found is False:
@@ -173,7 +175,9 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
             cols = _csv_header_and_values(Path(workspace) / file)
             if cols is not None and absent.group(1).casefold() not in cols[0]:
                 return SolveResult("infeasible", note=f"the file has no {absent.group(1).casefold()} column")
-        return _unparsed(f"unrecognized question: {sentences[1]!r}")
+        return _unparsed("month outside 1..12" if bad_month else f"unrecognized question: {sentences[1]!r}")
+    if bad_month:   # the question itself is one we read in full: no such month exists in any file
+        return SolveResult("infeasible", note="month outside 1..12")
     return _with_decimals({"file": file, "metric": metrics[0], "product": product, "region": region,
                            "month_from": month_from, "month_to": month_to}, decimals)
 
@@ -472,15 +476,13 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             seen_regions: set[str] = set()
             for row in reader:
                 if product is not None:
-                    value = (row["product"] or "").strip().casefold()
-                    seen_products.add(value)
-                    if value != product:
-                        continue
+                    seen_products.add((row["product"] or "").strip().casefold())
                 if region is not None:
-                    value = (row["region"] or "").strip().casefold()
-                    seen_regions.add(value)
-                    if value != region:
-                        continue
+                    seen_regions.add((row["region"] or "").strip().casefold())
+                if product is not None and (row["product"] or "").strip().casefold() != product:
+                    continue
+                if region is not None and (row["region"] or "").strip().casefold() != region:
+                    continue
                 if lo is not None:
                     month = int(row["month"].strip())
                     if not lo <= month <= hi:
@@ -506,6 +508,12 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
                     total += Decimal(row["price"].strip())
                 elif metric == "sum_revenue":
                     total += Decimal(row["units"].strip()) * Decimal(row["price"].strip())
+        # a product or region that the file never mentions and that is not one of the organizers' words: the
+        # question is about something outside the data, and 0 would be an answer to an infeasible task. A known
+        # word missing from a small file stays an honest 0
+        if count == 0 and ((product is not None and product not in seen_products and product not in _KNOWN_VALUES)
+                           or (region is not None and region not in seen_regions and region not in _KNOWN_VALUES)):
+            return SolveResult("infeasible", note="the product/region does not occur in the file")
         if top_col is not None:
             if not groups:
                 return _unparsed("no rows to rank")

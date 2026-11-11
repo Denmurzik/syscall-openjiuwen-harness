@@ -233,8 +233,7 @@ _da("d-range-hyphen", "How many units of product 'widget' were sold in months 3-
     lo=3, hi=7)
 _da("d-range-month-single", "How many units of product 'widget' were sold in month 7?", "units", product="widget",
     lo=7, hi=7)
-_da("d-range-month-13", "How many units of product 'widget' were sold in month 13?", "units", product="widget",
-    lo=13, hi=13)
+_d("d-range-month-13", "How many units of product 'widget' were sold in month 13?", {"infeasible", U}, U)
 _da("d-range-month-zero-pad", "How many units were sold in month 07?", "units", lo=7, hi=7)
 _d("d-range-reversed", "How many units were sold in months 7 through 3 inclusive?", {U, "0"}, U)
 _d("d-range-exclusive", "How many units were sold in months 3 through 7 exclusive?", {U}, U)
