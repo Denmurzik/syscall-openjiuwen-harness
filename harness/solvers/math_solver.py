@@ -235,10 +235,43 @@ def execute(spec: dict) -> SolveResult:
         return _unparsed(f"bad spec: {e!r}")
 
 
+# a quantity named without a number: "for several days", "some deliveries", "an unknown number of boxes", "N boxes"
+_VAGUE = re.compile(
+    r"\b(?:an? (?:unknown|unspecified|undisclosed|unstated|certain|undetermined) (?:number|amount|quantity) of"
+    r"|(?:unknown|unspecified) (?:number|amount|quantity) of|a (?:number|couple|handful|lot) of|lots of"
+    r"|some|several|a few|few|many|multiple|various|numerous|unknown|unspecified|[xnk])\b(?! percent)", _FLAGS)
+
+
+def missing_quantity(instruction: str) -> str | None:
+    """The sentence that makes the task unanswerable: every sentence is one this solver reads, except that one or
+    more of them name a quantity without a number (the sentence is read once a number stands there). Such a task
+    has no exact answer whatever a model assumes. None when anything else about the text is unfamiliar."""
+    vague = None
+    kinds = []
+    for sentence in split_sentences(strip_boilerplate(instruction)):
+        sentence = " ".join(sentence.split())
+        kind = [k for rx, k in _RULES if rx.fullmatch(sentence)]
+        if len(kind) != 1:
+            probe = _VAGUE.sub("7", sentence)
+            kind = [k for rx, k in _RULES if rx.fullmatch(probe)] if probe != sentence else []
+            if len(kind) != 1:
+                return None
+            vague = vague or sentence
+        kinds.append(kind[0])
+    if vague is None or kinds.count("start") != 1 or kinds[0] != "start" or kinds.count("question") != 1:
+        return None
+    if kinds[-1] != "question":
+        return None
+    return vague
+
+
 def solve(task: Task) -> SolveResult:
     try:
         spec = parse(task.instruction)
         if isinstance(spec, SolveResult):
+            vague = missing_quantity(task.instruction)
+            if vague is not None:
+                return SolveResult("infeasible", note=f"quantity not given: {vague!r}"[:120])
             return spec
         return execute(spec)
     except Exception as e:
