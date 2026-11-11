@@ -199,3 +199,44 @@ def test_testcase_files_keep_their_per_test_ids(tmp_path):
                  "class C(object):\n    def test_c(self):\n        pass\n", encoding="utf-8")
     assert _test_ids(p, ["test_a", "test_b"]) == ["test_mylib.A.test_a", "test_mylib.B.test_b"]
     assert _test_ids(p, ["test_a", "test_c"]) is None     # a pytest-style class: the whole file
+
+
+# ------------------------------------------------------------------ fix round 3: a local TestCase base keeps its ids
+LIB2 = "def top(xs, n):\n    return sorted(xs)[:n - 1]\n\n\ndef double(x):\n    return x + 2\n"
+BODY2 = ("    def test_top(self):\n        self.assertEqual(top([3, 1, 2], 2), [1, 2])\n\n"
+         "    def test_double(self):\n        self.assertEqual(double(3), 6)\n")
+
+
+def test_phase1_repairs_two_bugs_through_a_local_testcase_base(tmp_path):
+    """Reviewer's base3.py: `class Base(unittest.TestCase)` + `class TestM(Base)`, two bugs, repaired as on main."""
+    from harness.solvers import coding_solver
+    tests = ("import unittest\nfrom mylib import top, double\n\n\nclass Base(unittest.TestCase):\n    pass\n\n\n"
+             "class TestM(Base):\n" + BODY2)
+    ws = _ws(tmp_path, {"mylib.py": LIB2, "test_mylib.py": tests})
+    r = coding_solver.solve(Task("c", "coding", INS, 2.0, "unittest", ws.parent, ws))
+    assert r.status == "solved" and "repaired by mutation" in r.note, r.note
+    assert run_tests(ws).ok
+
+
+def test_which_classes_keep_per_test_ids(tmp_path):
+    from harness.solvers.testrun import _test_ids
+    p = tmp_path / "test_mylib.py"
+    body = "    def test_a(self):\n        pass\n"
+    src = {
+        "local_testcase": "import unittest\nclass Base(unittest.TestCase):\n    pass\nclass Mid(Base):\n    pass\n"
+                          "class T(Mid):\n" + body,
+        "imported": "from helpers import BaseTest\nclass T(BaseTest):\n" + body,
+        "mixin": "import unittest\nclass H:\n    pass\nclass T(H, unittest.TestCase):\n" + body,
+        "cycle": "class A(T):\n    pass\nclass T(A):\n" + body,
+        "local_pytest": "class H(object):\n    pass\nclass M(H):\n    pass\nclass T(M):\n" + body,
+        "object": "class T(object):\n" + body,
+        "no_base": "class T:\n" + body,
+    }
+    out = {}
+    for k, v in src.items():
+        p.write_text(v, encoding="utf-8")
+        out[k] = _test_ids(p, ["test_a"])
+    for k in ("local_testcase", "imported", "mixin", "cycle"):
+        assert out[k] == ["test_mylib.T.test_a"], k
+    for k in ("local_pytest", "object", "no_base"):
+        assert out[k] is None, k

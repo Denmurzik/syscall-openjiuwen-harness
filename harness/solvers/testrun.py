@@ -106,25 +106,34 @@ class TestReport:
     output: str = ""
 
 
-def _is_testcase_base(base: ast.expr) -> bool:
-    """`TestCase`, `unittest.TestCase`, `MyTestCase`: a base whose name ends in TestCase."""
-    name = base.id if isinstance(base, ast.Name) else base.attr if isinstance(base, ast.Attribute) else ""
-    return name.endswith("TestCase")
+def _pytest_style(cls: ast.ClassDef, local: dict, seen: frozenset = frozenset()) -> bool:
+    """A class unittest cannot load by id: no base, or only `object` and local classes that are pytest-style
+    themselves (followed through the file, a cycle counts as not pytest-style). Any other base (`unittest.TestCase`,
+    an imported or unknown name, a local class that reaches TestCase) keeps the per-test ids."""
+    if cls.name in seen:
+        return False
+    for b in cls.bases:
+        if isinstance(b, ast.Name) and b.id == "object":
+            continue
+        if isinstance(b, ast.Name) and b.id in local and _pytest_style(local[b.id], local, seen | {cls.name}):
+            continue
+        return False
+    return True
 
 
 def _test_ids(test_path: Path, names: list[str]) -> list[str] | None:
-    """Resolve method names to unittest ids; None when any name is unknown or sits in a class with no `...TestCase`
-    base (a pytest-style class, `class TestX:` or `class TestX(object):`, which unittest cannot load by id: the
-    whole file is run instead)."""
+    """Resolve method names to unittest ids; None when any name is unknown or sits in a pytest-style class
+    (`class TestX:`, `class TestX(object):`), which unittest cannot load by id: the whole file is run instead."""
     try:
         tree = ast.parse(test_path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeDecodeError):
         return None
+    local = {c.name: c for c in tree.body if isinstance(c, ast.ClassDef)}
     ids = []
     for name in names:
         hits = [c for c in tree.body if isinstance(c, ast.ClassDef)
                 for f in c.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == name]
-        if not hits or not all(any(_is_testcase_base(b) for b in c.bases) for c in hits):
+        if not hits or any(_pytest_style(c, local) for c in hits):
             return None
         found = [f"{test_path.stem}.{c.name}.{name}" for c in hits]
         ids += found
