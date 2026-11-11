@@ -778,6 +778,10 @@ def _contradiction(test_src: str, mylib_src: str, failing: Iterable[str] | None 
     return False
 
 
+# The missing-import proof below is off: the hidden tests replace the visible file and may not import the module,
+# so a feasible task could be lost, and the proof saves only ~670 units a task. True brings it back.
+MISSING_IMPORT_PROOF = False
+
 # popular third-party distributions a jury machine may have although ours does not: never called missing
 _COMMON_PACKAGES = frozenset({
     "numpy", "pandas", "scipy", "sympy", "matplotlib", "sklearn", "pytest", "hypothesis", "requests", "yaml",
@@ -801,7 +805,9 @@ def missing_test_import(test_src: str, ws: Path, output: str, instruction: str =
     and stop loading before mylib is even imported, so nothing done to mylib.py turns them green. Only for the
     organizers' wording "fix the bug(s) in mylib.py" that never names the module, and no other file of the workspace
     mentions it (the task might ask to create it). An import after mylib's is left alone: mylib could provide it
-    (round 11). Any doubt -> None."""
+    (round 11). Any doubt -> None. Always None while `MISSING_IMPORT_PROOF` is off."""
+    if not MISSING_IMPORT_PROOF:
+        return None
     if not re.search(r"\bfix the bugs? in mylib\.py\b", instruction or "", re.I):
         return None
     try:

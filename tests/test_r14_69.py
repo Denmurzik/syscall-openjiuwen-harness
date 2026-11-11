@@ -2,6 +2,8 @@
 import asyncio
 import csv
 
+import pytest
+
 from harness import llm_routes as L
 from harness.solvers import coding_solver as cs
 from harness.solvers import data_solver
@@ -140,36 +142,65 @@ def _head(module: str) -> str:
     return HEAD.replace("import mylib as m", f"import {module}\nimport mylib as m")
 
 
-def test_missing_module_in_the_tests(tmp_path):
+@pytest.fixture
+def proof_on(monkeypatch):
+    monkeypatch.setattr(cs, "MISSING_IMPORT_PROOF", True)
+
+
+def test_the_missing_module_proof_is_off_by_default(tmp_path):
+    assert cs.MISSING_IMPORT_PROOF is False
+    src, out = _file("", _head("helpers")), "ModuleNotFoundError: No module named 'helpers'"
+    assert cs.missing_test_import(src, tmp_path, out, INS) is None
+    res = cs.solve(_task(tmp_path, _file("", _head("quantum_flux_sdk"))))
+    assert res.status != "infeasible"   # the normal path: phase 1 cannot localize, the ladder takes it
+
+
+def test_the_ladder_takes_a_missing_module_while_the_proof_is_off(tmp_path):
+    task = _task(tmp_path, _file("", _head("quantum_flux_sdk")))
+    calls = []
+
+    class Recorder:
+        async def chat(self, *a, **k):
+            calls.append(a)
+            raise RuntimeError("no model in this test")
+
+    try:
+        res = asyncio.run(L.fix_coding(task, Recorder()))
+    except RuntimeError:
+        res = None
+    assert calls and (res is None or res.status != "infeasible")
+
+
+def test_missing_module_in_the_tests(tmp_path, proof_on):
     res = cs.solve(_task(tmp_path, _file("", _head("quantum_flux_sdk"))))
     assert res.status == "infeasible" and "quantum_flux_sdk" in res.note
 
 
-def test_module_that_stands_in_the_workspace_is_not_missing(tmp_path):
+def test_module_that_stands_in_the_workspace_is_not_missing(tmp_path, proof_on):
     task = _task(tmp_path, _file("", _head("helper")))
     (task.workspace / "helper.py").write_text("X = 1\n", encoding="utf-8")
     assert cs.solve(task).status == "solved"
 
 
-def test_missing_import_needs_the_error_in_the_output(tmp_path):
+def test_missing_import_needs_the_error_in_the_output(tmp_path, proof_on):
     src = _file("", _head("json"))
     assert cs.missing_test_import(src, tmp_path, "FAIL: test_total", INS) is None
     assert cs.missing_test_import(src, tmp_path, "ModuleNotFoundError: No module named 'other'", INS) is None
 
 
-def test_missing_import_after_mylib_is_not_a_proof(tmp_path):
+def test_missing_import_after_mylib_is_not_a_proof(tmp_path, proof_on):
     src = _file("", HEAD.replace("import mylib as m", "import mylib as m\nimport quantum_flux_sdk"))
     out = "ModuleNotFoundError: No module named 'quantum_flux_sdk'"
     assert cs.missing_test_import(src, tmp_path, out, INS) is None
 
 
-def test_stdlib_and_popular_packages_are_never_missing(tmp_path):
+def test_stdlib_and_popular_packages_are_never_missing(tmp_path, proof_on):
     for name in ("tkinter", "numpy", "pytest", "hypothesis", "sortedcontainers", "torch", "tabulate", "tomllib"):
         out = f"ModuleNotFoundError: No module named '{name}'"
         assert cs.missing_test_import(_file("", _head(name)), tmp_path, out, INS) is None, name
 
 
-def test_a_module_the_task_names_is_not_missing(tmp_path):
+def test_a_module_the_task_names_is_not_missing(tmp_path, proof_on):
     src, out = _file("", _head("helpers")), "ModuleNotFoundError: No module named 'helpers'"
     assert cs.missing_test_import(src, tmp_path, out, INS) == "helpers"
     assert cs.missing_test_import(src, tmp_path, out, INS + " The helpers module must be written too.") is None
@@ -178,14 +209,14 @@ def test_a_module_the_task_names_is_not_missing(tmp_path):
     assert cs.missing_test_import(src, tmp_path, out, INS) is None
 
 
-def test_a_statement_before_the_imports_keeps_it_silent(tmp_path):
+def test_a_statement_before_the_imports_keeps_it_silent(tmp_path, proof_on):
     src = _file("", HEAD.replace("import mylib as m",
                                  "try:\n    import quantum_flux_sdk\nexcept ImportError:\n    pass\nimport mylib as m"))
     out = "ModuleNotFoundError: No module named 'quantum_flux_sdk'"
     assert cs.missing_test_import(src, tmp_path, out, INS) is None
 
 
-def test_the_ladder_spends_nothing_on_a_missing_module(tmp_path):
+def test_the_ladder_spends_nothing_on_a_missing_module(tmp_path, proof_on):
     task = _task(tmp_path, _file("", _head("quantum_flux_sdk")))
 
     class NoCalls:
