@@ -319,3 +319,18 @@ def test_price_and_unit_price_can_give_a_discount(tmp_path):
     rows = ((1, "west", "widget", 5, 5, 35, 33), (2, "north", "gadget", 6, 28, 30, 28))
     res = data_solver.solve(_data_task(tmp_path, "What is the total discount given?", header, rows))
     assert res.status != "infeasible"
+
+
+def test_only_the_organizers_boilerplate_may_surround_the_question(tmp_path):
+    # final review m2: a definition without the quantity's word, in or after the boilerplate
+    done = "(for example with bash: echo 42 > answer.txt)."
+    for i, (q, old, new) in enumerate((
+            ("What is the total profit?", "Use bash with python3 to compute it.",
+             "Use bash with python3 to compute it; each unit costs 3 dollars to make."),
+            ("What is the total profit?", done, done + " Note: every unit costs 3 dollars to make."),
+            ("What is the total commission paid?", done, done + " Note: reps earn 5 percent of revenue."))):
+        task = _data_task(tmp_path / str(i), q)
+        assert data_solver.solve(task).status == "infeasible", q   # control: the organizers' bare template
+        other = _with_instruction(task, task.instruction.replace(old, new))
+        assert other.instruction != task.instruction
+        assert data_solver.solve(other).status != "infeasible", new

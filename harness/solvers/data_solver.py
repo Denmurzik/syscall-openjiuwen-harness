@@ -264,15 +264,39 @@ _MAX_WORDS = {"largest", "biggest", "maximum", "max", "highest"}
 _MIN_WORDS = {"smallest", "lowest", "minimum", "min"}
 
 
+# the organizers' boilerplate sentences (tests/fixtures/examples, the published task-dir), whitespace normalized
+_BOILERPLATE = frozenset({
+    "Use bash with python3 to compute it.",
+    "Compute it with the bash tool (python3 -c).",
+    "Use the file tools or bash (ls, grep, cat) to find it.",
+    "Work only inside the current directory.",
+    "When you are done, write ONLY the final answer to the file answer.txt in the current directory "
+    "(for example with bash: echo 42 > answer.txt).",
+    # the same sentence cut short (round 11 tests): it adds nothing either
+    "When you are done, write ONLY the final answer to the file answer.txt in the current directory.",
+    "When you are done, write ONLY the final answer to the file answer.txt.",
+})
+
+
+def _bare_template(instruction: str) -> bool:
+    """The raw instruction is the file sentence, the question, and nothing but the organizers' boilerplate sentences
+    word for word: no "Note: ...", no "each unit costs 3 dollars", no definition hidden in a "Use bash ..." sentence
+    or after "When you are done" (which `strip_boilerplate` would drop unseen)."""
+    raw = [" ".join(x.split()) for x in split_sentences(instruction)]
+    kept = [" ".join(x.split()) for x in split_sentences(strip_boilerplate(instruction))]
+    return len(kept) == 2 and raw[:2] == kept and all(x in _BOILERPLATE for x in raw[2:])
+
+
 def _nowhere(word: str, workspace: Path, header: list[str], file: str, instruction: str) -> bool:
     """`word` (discount, tax ...) cannot come from the data: every column of the header is one that derives none of
     those quantities; the workspace holds the named CSV and nothing else (costs.csv or promos.csv could give it under
-    another name); the raw instruction says the word only once, in the question (a "Note: ..." after the
-    boilerplate could define it); and the CSV names it nowhere, in any case or form (discounts, discount_pct).
+    another name); the raw instruction says the word only once, in the question, and holds nothing but the file
+    sentence, the question and the organizers' boilerplate (`_bare_template`: a "Note: ..." after the boilerplate
+    could define it under other words); and the CSV names it nowhere, in any case or form (discounts, discount_pct).
     Any doubt -> False."""
     if not header or not all(c in _UNDERIVING for c in header):
         return False
-    if instruction.casefold().count(word) != 1:
+    if instruction.casefold().count(word) != 1 or not _bare_template(instruction):
         return False
     try:
         csv_path = (workspace / file).resolve()
