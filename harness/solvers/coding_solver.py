@@ -1253,6 +1253,41 @@ def _canonical_substitute(src: str, names: set[str]) -> str | None:
     return out
 
 
+def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[str, set[str]]) -> bool:
+    """A red test (of `failed`, red on `src`) that uses nothing of mylib but functions standing in `src` in their
+    known correct text (the examples' text, or one mined from the task set): the tests are written against that
+    text, so this one cannot pass whatever is done to mylib. Only a known text that is the whole behaviour of its
+    function counts: defined once, undecorated, reading no other top-level name of the file. Strict file shape as
+    in `provable_contradiction`: a plain test file, mylib nothing but definitions. Any doubt -> False."""
+    try:
+        failed = [f for f in failed if not f.startswith("<")]
+        if not failed:
+            return False
+        tree, lib = ast.parse(test_src), ast.parse(src)
+        aliases, names = _mylib_names(tree)
+        if not (aliases or names) or not _plain_test_file(tree, aliases | names) or _renames_mylib_name(tree):
+            return False
+        if _reflective(tree) or _reflective(lib) or _mentions_unittest(lib):
+            return False
+        if any(isinstance(n, (ast.Name, ast.Attribute)) and (n.id if isinstance(n, ast.Name) else n.attr)
+               in _PATCHY | _REFLECT for n in ast.walk(tree)):
+            return False
+        bound: dict[str, int] = {}   # top-level names of mylib and how many statements bind each
+        for st in lib.body:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound[st.name] = bound.get(st.name, 0) + 1
+            elif not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant)):
+                return False   # imports, assignments, code at module level: the known text may not be what runs
+        known = {st.name for st in lib.body if type(st) is ast.FunctionDef and bound[st.name] == 1
+                 and not st.decorator_list and st.name in _CANON and _CANON[st.name] == ast.dump(st)
+                 and _self_contained(st, set(bound))}
+        methods = [fn.name for cls in tree.body if isinstance(cls, ast.ClassDef) for fn in cls.body
+                   if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        return any(methods.count(f) == 1 and refs.get(f) and refs[f] <= known for f in failed)
+    except Exception:
+        return False
+
+
 def _partial(ws: Path, mylib: Path, cur: str, report: TestReport, restart: str | None = None) -> SolveResult:
     _write_mylib(mylib, cur)
     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
@@ -1277,6 +1312,11 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             return SolveResult("unparsed", note="no test file")
         test_file = cands[0]
     original = mylib.read_text(encoding="utf-8")
+    try:
+        ast.parse((ws / test_file).read_bytes())   # bytes: a BOM or an encoding line parses as Python reads them
+    except SyntaxError:
+        # the tests may not be edited and do not even load: nothing done to mylib.py makes them pass
+        return SolveResult("infeasible", note="the test file does not parse")
     test_src = (ws / test_file).read_text(encoding="utf-8")
     refs = _test_refs(test_src)
     ast.parse(original)
@@ -1304,6 +1344,8 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             # function of that name written differently, the known text is tried first. Kept only when it turns
             # failing tests green and breaks none; the search below then goes on from it for whatever is left.
             # Inside this try: running out of time here still returns the partial repair accepted so far
+            if known_text_fails(test_src, cur, report.failed, refs):
+                return SolveResult("infeasible", note="a test fails on the known correct text")
             try:
                 used = set().union(*(refs.get(f, set()) for f in report.failed))
                 for name in sorted(used & set(_CANON)):   # one at a time: each must earn its place
@@ -1311,6 +1353,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                     if canon is None:
                         continue
                     rep = ctx.run(canon, None, BASE_TIMEOUT)
+                    if known_text_fails(test_src, canon, rep.failed, refs):
+                        # with the known text in place (the same shape, `_canonical_substitute`) a test that uses
+                        # only known texts is red, whether or not it was red before: it asks for what they are not
+                        return SolveResult("infeasible", note="a test fails on the known correct text")
                     if rep.ok or (not any(f.startswith("<") for f in rep.failed)
                                   and set(rep.failed) < set(report.failed)):
                         cur, report = canon, rep

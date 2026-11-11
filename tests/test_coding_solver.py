@@ -85,7 +85,8 @@ def test_unfixable_function_leaves_partial_tentative(tmp_path):
     tp.write_text(tp.read_text(encoding="utf-8").replace("m.total([1, 2, 3]), 6", "m.total([1, 2, 3]), 1000"),
                   encoding="utf-8")
     res = solve(t, time_limit=60)
-    assert res.status == "solved" and res.tentative and "partial" in res.note
+    # expert pass 4: total is the known correct text and its test asks for 1000: no partial answer, no ladder
+    assert res.status == "infeasible" and "known correct text" in res.note
 
 
 def test_no_pycache_left(tmp_path):
@@ -267,7 +268,7 @@ def test_partial_repair_leaves_tests_byte_identical(tmp_path):
                   encoding="utf-8")
     before = tp.read_bytes()
     res = solve(t, time_limit=60)
-    assert res.tentative and tp.read_bytes() == before
+    assert res.status == "infeasible" and tp.read_bytes() == before
 
 
 # ---------------------------------------------------------------- tie preference among green fixes

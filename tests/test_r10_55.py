@@ -86,7 +86,8 @@ def test_known_text_that_breaks_a_passing_test_is_not_kept(tmp_path):
     t = _task(tmp_path, lib, tests)
     assert _canonical_substitute(lib, {"total"}) == GOOD["total"]   # a candidate, so the rule is what refuses it
     res = solve(t)
-    assert res.status == "unparsed" and "canonical" not in res.note   # no single mutation fixes both either
+    # expert pass 4: with the known text test_shifted is red, so the test asks for what total is not
+    assert res.status == "infeasible" and "canonical" not in res.note
     assert (t.workspace / "mylib.py").read_text(encoding="utf-8") == lib   # the known text is not on disk
 
 
@@ -230,6 +231,5 @@ def test_known_text_changed_again_by_the_search_shows_the_real_original(tmp_path
                     "    def test_sum(self):\n        self.assertTrue(m.total([1, 1]) >= 2)\n") + TAIL
     t = _task(tmp_path, lib, tests)
     res = solve(t)
-    assert res.status == "solved" and res.note == "repaired by mutation, unchecked"
-    [item] = res.extra["verify"]
-    assert item["func"] == "total" and item["buggy"] == lib.rstrip("\n")
+    # expert pass 4: the known total fails test_seven: infeasible before the search changes the function again
+    assert res.status == "infeasible"
