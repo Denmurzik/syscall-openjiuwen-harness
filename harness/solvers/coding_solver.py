@@ -1134,8 +1134,8 @@ class _MineRun:
 
 
 def _on_its_own(name: str, test_refs: set, exact: set) -> bool:
-    """A test of `name` that uses nothing else of mylib but final known texts standing as they are: the tests that
-    `known_text_fails` would judge."""
+    """A test of `name` that uses nothing else of mylib but final known texts standing as they are: it covers
+    every test that `known_text_fails` would judge with `name` mined."""
     return name in test_refs and test_refs <= exact | {name}
 
 
@@ -1215,14 +1215,19 @@ def mine_known_texts(workspaces: Iterable[Path], budget_s: float = MINE_BUDGET_S
     may still be substituted, but the repair is checked like any other. Only top-level undecorated self-contained
     functions (`_self_contained`) defined once, names the examples do not show, tests that are not skipped. Each
     workspace is run once in a throw-away copy, at most `run_timeout` s each and `budget_s` s in all, cross-checks
-    included; workspaces with the same code and tests (AST) count once; any trouble with one workspace skips it."""
+    included; workspaces with the same code and tests (AST) count once; any trouble with one workspace skips it.
+    When time cut the loop, or cut the timeout of a run that then gave no evidence, no text is final: the
+    workspaces left out could hold the vote against."""
     votes: dict[str, dict[str, list]] = {}   # name -> AST dump -> [green votes, text]
     runs: list[_MineRun] = []
     seen: set[tuple[str, str]] = set()
     stop = time.monotonic() + budget_s
+    truncated = False   # some workspace got no full run: a text with no vote against may be wrong there
     for ws in workspaces:
+        cut = False
         left = stop - time.monotonic()
         if left < 0.5:
+            truncated = True
             break
         try:
             ws = Path(ws)
@@ -1232,10 +1237,13 @@ def mine_known_texts(workspaces: Iterable[Path], budget_s: float = MINE_BUDGET_S
             if key in seen:
                 continue
             seen.add(key)
+            cut = left < run_timeout   # the time left cuts this run's timeout
             run = _mine_run(ws, min(run_timeout, left))
         except Exception:
+            truncated = truncated or cut
             continue
         if run is None:
+            truncated = truncated or cut   # perhaps only the cut timeout kept its evidence out
             continue
         runs.append(run)
         for name, (dump, text) in run.green.items():
@@ -1253,7 +1261,7 @@ def mine_known_texts(workspaces: Iterable[Path], budget_s: float = MINE_BUDGET_S
         except Exception:
             continue
         texts[name] = best[1]
-        if best[0] >= MINE_FINAL_VOTES and against == 0:
+        if best[0] >= MINE_FINAL_VOTES and against == 0 and not truncated:
             final.add(name)
     return texts, final
 
@@ -1375,7 +1383,8 @@ def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[
     text, so this one cannot pass whatever is done to mylib. Only a known text that is the whole behaviour of its
     function counts: defined once, undecorated, reading no other top-level name of the file. Strict file shape as
     in `provable_contradiction`: a plain test file, mylib nothing but definitions, none of which rebinds names at
-    run time. `only`: just these functions may count as known. Any doubt -> False."""
+    run time. A test using a mined text is judged only when it uses no other function (the one shape mining
+    cross-checks). `only`: just these functions may count as known. Any doubt -> False."""
     try:
         failed = [f for f in failed if not f.startswith("<")]
         if not failed:
@@ -1403,7 +1412,10 @@ def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[
                  and _self_contained(st, set(bound)) and (only is None or st.name in only)}
         methods = [fn.name for cls in tree.body if isinstance(cls, ast.ClassDef) for fn in cls.body
                    if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        return any(methods.count(f) == 1 and refs.get(f) and refs[f] <= known for f in failed)
+        # a test mixing a mined text with another known one was never cross-checked in mining (`_on_its_own`):
+        # only tests on the examples' texts alone or on one function are judged
+        return any(methods.count(f) == 1 and refs.get(f) and refs[f] <= known
+                   and (refs[f] <= _EXAMPLE_NAMES or len(refs[f]) == 1) for f in failed)
     except Exception:
         return False
 
@@ -1411,9 +1423,9 @@ def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[
 def _partial(ws: Path, mylib: Path, cur: str, report: TestReport, restart: str | None = None) -> SolveResult:
     _write_mylib(mylib, cur)
     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
-    # `restart`: the file before any mutation (the original with the known texts in place). The mutations kept
-    # here were picked by one visible assert each and are checked by nobody: the ladder asks the model for the
-    # whole repair from `restart` first
+    # `restart`: the file before any mutation (the original with the final known texts, `_FINAL`, in place; weak
+    # mined texts are left out). The mutations kept here were picked by one visible assert each and are checked by
+    # nobody: the ladder asks the model for the whole repair from `restart` first
     return SolveResult("solved", answer="DONE", tentative=True,
                        note=f"partial repair, still failing: {report.failed}",
                        extra={"restart": restart} if restart is not None and restart != cur else None)
