@@ -59,7 +59,7 @@ _ABSENT = re.compile(
     r"(?: (?:on|in|from|by|across|per|of|for) (?:(?:the )?(?:product|region) )?'?\w+'?(?: (?:product|region))?)?\?",
     _FLAGS)
 # the columns from which none of those quantities can be derived (no cost, list price, revenue or amount paid)
-_UNDERIVING = {"order_id", "id", "region", "product", "month", "units", "price", "unit_price", "quantity", "qty",
+_UNDERIVING = {"order_id", "id", "region", "product", "month", "units", "price", "quantity", "qty",
                "date", "year", "quarter", "day", "customer", "customer_id", "category"}
 # every product and region of the organizers' example files
 _KNOWN_VALUES = {"widget", "gadget", "gizmo", "sprocket", "north", "south", "east", "west"}
@@ -214,7 +214,7 @@ def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult
         if absent is not None and workspace is not None:
             cols = _csv_header_and_values(Path(workspace) / file)
             word = absent.group(1).casefold()
-            if cols is not None and word not in cols[0] and _nowhere(word, Path(workspace), cols[0]):
+            if cols is not None and word not in cols[0] and _nowhere(word, Path(workspace), cols[0], file, instruction):
                 return SolveResult("infeasible", note=f"the file has no {word} column")
         return _unparsed("month outside 1..12" if bad_month else f"unrecognized question: {sentences[1]!r}")
     if bad_month:   # the question itself is one we read in full: no such month exists in any file
@@ -264,13 +264,22 @@ _MAX_WORDS = {"largest", "biggest", "maximum", "max", "highest"}
 _MIN_WORDS = {"smallest", "lowest", "minimum", "min"}
 
 
-def _nowhere(word: str, workspace: Path, header: list[str]) -> bool:
+def _nowhere(word: str, workspace: Path, header: list[str], file: str, instruction: str) -> bool:
     """`word` (discount, tax ...) cannot come from the data: every column of the header is one that derives none of
-    those quantities, and no file of the workspace names it in its name or text, in any case or form (discounts,
-    discount_pct). Any doubt -> False."""
+    those quantities; the workspace holds the named CSV and nothing else (costs.csv or promos.csv could give it under
+    another name); the raw instruction says the word only once, in the question (a "Note: ..." after the
+    boilerplate could define it); and the CSV names it nowhere, in any case or form (discounts, discount_pct).
+    Any doubt -> False."""
     if not header or not all(c in _UNDERIVING for c in header):
         return False
+    if instruction.casefold().count(word) != 1:
+        return False
     try:
+        csv_path = (workspace / file).resolve()
+        for p in workspace.rglob("*"):
+            r = p.resolve()
+            if r != csv_path and not (p.is_dir() and r in csv_path.parents):
+                return False   # another file, or a directory that does not lead to the CSV
         for p in workspace.rglob("*"):
             if word in p.name.casefold():
                 return False

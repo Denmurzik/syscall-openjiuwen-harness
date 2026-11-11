@@ -285,3 +285,37 @@ def test_another_file_with_the_quantity_is_not_absent(tmp_path):
     (task.workspace / "discounts.json").unlink()
     (task.workspace / "notes.txt").write_text("Each order got a Discount of 2 dollars.", encoding="utf-8")
     assert data_solver.solve(task).status != "infeasible"
+
+
+def _with_instruction(task: Task, ins: str) -> Task:
+    return Task(task.task_id, task.task_type, ins, task.reward, task.check, task.dir, task.workspace)
+
+
+def test_a_definition_outside_the_question_keeps_it_silent(tmp_path):
+    # review I1: strip_boilerplate drops "Use bash ..." and everything after "When you are done"; the raw text must
+    # name the quantity only once, in the question
+    q = "What is the average discount?"
+    task = _data_task(tmp_path, q)
+    assert data_solver.solve(task).status == "infeasible"   # control: the bare question is proved
+    note = task.instruction + " Note: every order received a discount of 2 dollars per unit."
+    assert data_solver.solve(_with_instruction(task, note)).status != "infeasible"
+    use = task.instruction.replace(q, q + " Use bash: the discount is 10% of units times price.")
+    assert data_solver.solve(_with_instruction(task, use)).status != "infeasible"
+
+
+def test_another_data_file_keeps_it_silent(tmp_path):
+    # review I2: costs.csv or promos.csv can give the quantity under another name
+    for i, (name, text, q) in enumerate((("costs.csv", "product,unit_cost\nwidget,3\n", "What is the total profit?"),
+                                         ("promos.csv", "product,pct_off\nwidget,5\n",
+                                          "What is the average discount of region 'west'?"))):
+        task = _data_task(tmp_path / str(i), q)
+        assert data_solver.solve(task).status == "infeasible", q   # control: a single csv
+        (task.workspace / name).write_text(text, encoding="utf-8")
+        assert data_solver.solve(task).status != "infeasible", name
+
+
+def test_price_and_unit_price_can_give_a_discount(tmp_path):
+    header = ("order_id", "region", "product", "month", "units", "unit_price", "price")
+    rows = ((1, "west", "widget", 5, 5, 35, 33), (2, "north", "gadget", 6, 28, 30, 28))
+    res = data_solver.solve(_data_task(tmp_path, "What is the total discount given?", header, rows))
+    assert res.status != "infeasible"

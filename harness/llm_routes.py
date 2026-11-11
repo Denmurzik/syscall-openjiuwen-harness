@@ -887,6 +887,8 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
             output = _shown_output(base_report if hung else report)
             if len(report.failed) < len(base_report.failed) and not any(f.startswith("<") for f in report.failed):
                 base, base_report = fixed, report  # keep partial progress for the next attempt
+            if "<timeout>" in base_report.failed and TIMEOUT_HINT not in output:
+                output += "\n" + TIMEOUT_HINT   # the base asked next still hangs, whatever the candidate printed
         if answered or not failing:
             break
         # no model of this ladder has answered yet: the task is not given up for a passing failure

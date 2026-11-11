@@ -79,3 +79,22 @@ def test_a_candidate_that_hangs_does_not_mislead_the_next_rung(tmp_path, monkeyp
     assert asyncio.run(L.fix_coding(task, client)).status == "solved"
     second = client.calls[1][1]["content"]
     assert "FAIL: test_fib base" in second and L.TIMEOUT_HINT not in second
+
+
+def test_later_rungs_still_hear_that_the_base_hangs(tmp_path, monkeypatch):
+    # review M4: the base times out, the first candidate fails plainly and is not kept (one failure is not fewer
+    # than the base's one '<timeout>'): the next rung patches the hanging base and must still be told so
+    task = _task(tmp_path)
+    plain = "FUNC fib\ndef fib(n):\n    return 0\n"
+
+    def fake_run(ws_, text):
+        if "fib(n - 1)" in text:
+            return TestReport(False, ["<timeout>"], "")
+        if "return 0" in text:
+            return TestReport(False, ["test_fib"], "FAIL: test_fib plain")
+        return TestReport(True, [], "OK")
+    monkeypatch.setattr(L, "_run_candidate", fake_run)
+    client = Fake([plain, FIX])
+    assert asyncio.run(L.fix_coding(task, client)).status == "solved"
+    second = client.calls[1][1]["content"]
+    assert "FAIL: test_fib plain" in second and second.count(L.TIMEOUT_HINT) == 1
