@@ -1481,9 +1481,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                         continue
                     rep = ctx.run(canon, None, BASE_TIMEOUT)
                     # judged only when the function is red on its own text (a test of it and of nothing but
-                    # known texts as they stand), not when a mixed red test with another buggy function brought it
+                    # known texts as they stand), not when a mixed red test with another buggy function brought it.
+                    # The current failures: a mixed test red only through a function substituted before is green
                     slip = name in _FINAL and _one_edit(cur, name) and any(
-                        name in refs.get(f, ()) and refs[f] <= provable | {name} for f in initially_failing)
+                        name in refs.get(f, ()) and refs[f] <= provable | {name} for f in report.failed)
                     if slip and known_text_fails(test_src, canon, rep.failed, refs, provable | {name}):
                         # with the known text in place of a one-edit slip a test that uses only known texts is
                         # red, whether or not it was red before: it asks for what they are not

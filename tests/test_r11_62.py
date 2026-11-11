@@ -178,6 +178,22 @@ def test_a_known_function_green_on_its_own_is_not_judged(tmp_path):
         assert lib in (t.workspace / "mylib.py").read_text(encoding="utf-8"), name   # the variant is untouched
 
 
+def test_a_mixed_test_red_only_through_a_function_fixed_before_proves_nothing(tmp_path):
+    # the reviewer's probe s6: the real bug is in maximum (its own test is red); the lawful total (s = 1) shares
+    # test_mix with it, which is green once maximum has its known text: total is not judged by test_mix
+    total1 = "def total(xs):\n    s = 1\n    for x in xs:\n        s += x\n    return s\n"
+    lib = MAXIMUM.replace("x > best", "x < best") + "\n\n" + total1 + "\n\ndef double(x):\n    return x + 2\n"
+    tests = (HEAD + "    def test_total(self):\n        self.assertEqual(m.total([1, 2]), 4)\n\n"
+             "    def test_mix(self):\n        self.assertEqual(m.maximum([3, 9, 2]) + m.total([1]), 11)\n\n"
+             "    def test_max(self):\n        self.assertEqual(m.maximum([1, 5]), 5)\n\n"
+             "    def test_double(self):\n        self.assertEqual(m.double(5), 10)\n" + MAIN)
+    t = _coding(tmp_path, lib, tests)
+    res = coding_solver.solve(t, time_limit=60)
+    assert res.status == "solved"
+    text = (t.workspace / "mylib.py").read_text(encoding="utf-8")
+    assert total1 in text and "x > best" in text and ("x * 2" in text or "x + x" in text)
+
+
 def test_one_edit_detection():
     assert coding_solver._one_edit(TOTAL.replace("+=", "-="), "total")
     assert coding_solver._one_edit(MAXIMUM.replace("x > best", "x < best"), "maximum")
