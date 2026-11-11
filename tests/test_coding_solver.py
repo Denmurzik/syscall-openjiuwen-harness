@@ -79,7 +79,25 @@ def test_unfixable_is_unparsed(tmp_path):
     assert (t.workspace / "mylib.py").read_bytes() == before
 
 
+def _with_weird(t: Task) -> Task:
+    """coding_0003 plus an unknown function whose test asks for what no single mutation gives."""
+    lib, tp = t.workspace / "mylib.py", t.workspace / "test_mylib.py"
+    lib.write_text(lib.read_text(encoding="utf-8") + "\n\ndef weird(x):\n    return x + 1\n", encoding="utf-8")
+    tp.write_text(tp.read_text(encoding="utf-8").replace(
+        "\n\nif __name__", "\n\n    def test_weird(self):\n        self.assertEqual(m.weird(1), 77123)\n\n\nif __name__"),
+        encoding="utf-8")
+    return t
+
+
 def test_unfixable_function_leaves_partial_tentative(tmp_path):
+    t = _with_weird(_fixture_task("coding_0003", tmp_path))
+    res = solve(t, time_limit=60)
+    assert res.status == "solved" and res.tentative and "partial" in res.note and "test_weird" in res.note
+    text = (t.workspace / "mylib.py").read_text(encoding="utf-8")
+    assert "reversed(s.split())" in text and "s += x" in text and "x + 1" in text   # known ones fixed, weird kept
+
+
+def test_known_function_asked_for_another_value_is_infeasible(tmp_path):
     t = _fixture_task("coding_0003", tmp_path)
     tp = t.workspace / "test_mylib.py"
     tp.write_text(tp.read_text(encoding="utf-8").replace("m.total([1, 2, 3]), 6", "m.total([1, 2, 3]), 1000"),
@@ -262,13 +280,11 @@ def test_partial_repair_is_tentative_and_written(tmp_path):
 
 
 def test_partial_repair_leaves_tests_byte_identical(tmp_path):
-    t = _fixture_task("coding_0003", tmp_path)
+    t = _with_weird(_fixture_task("coding_0003", tmp_path))
     tp = t.workspace / "test_mylib.py"
-    tp.write_text(tp.read_text(encoding="utf-8").replace("m.total([1, 2, 3]), 6", "m.total([1, 2, 3]), 1000"),
-                  encoding="utf-8")
     before = tp.read_bytes()
     res = solve(t, time_limit=60)
-    assert res.status == "infeasible" and tp.read_bytes() == before
+    assert res.tentative and "partial" in res.note and tp.read_bytes() == before
 
 
 # ---------------------------------------------------------------- tie preference among green fixes

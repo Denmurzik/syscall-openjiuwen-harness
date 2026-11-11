@@ -136,6 +136,48 @@ def test_without_the_mined_text_the_same_task_is_not_judged(tmp_path):
     assert coding_solver.solve(_coding(tmp_path, MIN_BUG, tests), time_limit=60).status != "infeasible"
 
 
+# ---------------------------------------------------------------- only a one-edit slip of the known text is judged
+def test_variants_with_a_meaning_of_their_own_are_not_judged(tmp_path):
+    # the reviewer's probes: the shape guard lets each through, but each is more than one slip of the known text
+    cases = {
+        "float_total": ("def total(xs):\n    s = 0.0\n    for x in xs:\n        s -= x\n    return s\n",
+                        "    def test_t(self):\n        self.assertEqual(m.total([1, 2]), 3)\n\n"
+                        "    def test_f(self):\n        self.assertIsInstance(m.total([1]), float)\n"),
+        "split_space": ("def reverse_words(s):\n    return ' '.join(sorted(s.split(' ')))\n",
+                        "    def test_rw(self):\n        self.assertEqual(m.reverse_words('c a b'), 'b a c')\n\n"
+                        "    def test_sp(self):\n        self.assertEqual(m.reverse_words('a  b'), 'b  a')\n"),
+        "clamped_n": ("def first_n(xs, n):\n    return xs[:max(n, 1)]\n",
+                      "    def test_neg(self):\n        self.assertEqual(m.first_n([1, 2], -1), [])\n\n"
+                      "    def test_zero(self):\n        self.assertEqual(m.first_n([1, 2], 0), [])\n\n"
+                      "    def test_two(self):\n        self.assertEqual(m.first_n([1, 2, 3], 2), [1, 2])\n"),
+    }
+    for name, (lib, tests) in cases.items():
+        res = coding_solver.solve(_coding(tmp_path / name, lib, HEAD + tests + MAIN), time_limit=60)
+        assert res.status != "infeasible", name
+
+
+def test_one_edit_detection():
+    assert coding_solver._one_edit(TOTAL.replace("+=", "-="), "total")
+    assert coding_solver._one_edit(MAXIMUM.replace("x > best", "x < best"), "maximum")
+    assert not coding_solver._one_edit(TOTAL.replace("+=", "-=").replace("s = 0", "s = 0.0"), "total")
+    assert not coding_solver._one_edit("def first_n(xs, n):\n    return xs[:max(n, 1)]\n", "first_n")
+    assert not coding_solver._one_edit("def reverse_words(s):\n    return ' '.join(sorted(s.split(' ')))\n",
+                                       "reverse_words")
+    assert not coding_solver._one_edit(TOTAL, "nosuch")
+
+
+def test_a_function_that_rebinds_the_known_one_proves_nothing(tmp_path):
+    lib = "def aa(x):\n    global total\n    total = lambda xs: 7\n    return x\n\n\n" + TOTAL
+    tests = (HEAD + "    def test_a(self):\n        self.assertEqual(m.aa(1), 2)\n\n"
+             "    def test_total(self):\n        self.assertEqual(m.total([1, 2, 3]), 6)\n" + MAIN)
+    assert coding_solver.solve(_coding(tmp_path, lib, tests), time_limit=60).status != "infeasible"
+    refs = coding_solver._test_refs(tests)
+    assert not coding_solver.known_text_fails(tests, lib, ["test_total"], refs)
+    for dyn in ("globals()['total'] = max", "exec('pass')", "eval('1')", "vars()"):
+        lib = "def aa(x):\n    " + dyn + "\n    return x\n\n\n" + TOTAL
+        assert not coding_solver.known_text_fails(tests, lib, ["test_total"], refs), dyn
+
+
 # ---------------------------------------------------------------- the test file does not parse
 def test_test_file_that_does_not_parse_is_infeasible(tmp_path):
     tests = HEAD + "    def test_total(self):\n        self.assertEqual(m.total([1, 2, 3]), 6\n" + MAIN

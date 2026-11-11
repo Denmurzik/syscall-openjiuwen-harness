@@ -1339,12 +1339,31 @@ def _canonical_substitute(src: str, names: set[str], table: dict | None = None) 
     return out
 
 
-def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[str, set[str]]) -> bool:
+def _one_edit(src: str, name: str) -> bool:
+    """The top-level function `name` of `src` is its known text but for one edit (`_diff_pairs` finds one pair)
+    and calls nothing the known text does not: a slip of that text, not a variant with a meaning of its own
+    (`s = 0.0`, `split(' ')`, `max(n, 0)`), which the shape guard lets through."""
+    try:
+        node = next(n for n in ast.parse(src).body if type(n) is ast.FunctionDef and n.name == name)
+        ref = _CANON_NODES[name]
+        pairs: list = []
+        _diff_pairs(node, ref, pairs)
+        return len(pairs) == 1 and _called(node) <= _called(ref)
+    except Exception:
+        return False
+
+
+_LIB_DYNAMIC = {"globals", "locals", "vars", "exec", "eval", "compile", "setattr", "delattr", "__import__"}
+
+
+def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[str, set[str]],
+                     only: set[str] | None = None) -> bool:
     """A red test (of `failed`, red on `src`) that uses nothing of mylib but functions standing in `src` in their
     known correct text (the examples' text, or one mined from the task set): the tests are written against that
     text, so this one cannot pass whatever is done to mylib. Only a known text that is the whole behaviour of its
     function counts: defined once, undecorated, reading no other top-level name of the file. Strict file shape as
-    in `provable_contradiction`: a plain test file, mylib nothing but definitions. Any doubt -> False."""
+    in `provable_contradiction`: a plain test file, mylib nothing but definitions, none of which rebinds names at
+    run time. `only`: just these functions may count as known. Any doubt -> False."""
     try:
         failed = [f for f in failed if not f.startswith("<")]
         if not failed:
@@ -1358,6 +1377,9 @@ def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[
         if any(isinstance(n, (ast.Name, ast.Attribute)) and (n.id if isinstance(n, ast.Name) else n.attr)
                in _PATCHY | _REFLECT for n in ast.walk(tree)):
             return False
+        if any(isinstance(n, (ast.Global, ast.Nonlocal)) or isinstance(n, ast.Name) and n.id in _LIB_DYNAMIC
+               for n in ast.walk(lib)):
+            return False   # another function may rebind the known one before its test runs
         bound: dict[str, int] = {}   # top-level names of mylib and how many statements bind each
         for st in lib.body:
             if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -1366,7 +1388,7 @@ def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[
                 return False   # imports, assignments, code at module level: the known text may not be what runs
         known = {st.name for st in lib.body if type(st) is ast.FunctionDef and bound[st.name] == 1
                  and not st.decorator_list and st.name in _FINAL and _CANON.get(st.name) == ast.dump(st)
-                 and _self_contained(st, set(bound))}
+                 and _self_contained(st, set(bound)) and (only is None or st.name in only)}
         methods = [fn.name for cls in tree.body if isinstance(cls, ast.ClassDef) for fn in cls.body
                    if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
         return any(methods.count(f) == 1 and refs.get(f) and refs[f] <= known for f in failed)
@@ -1432,6 +1454,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
             # Inside this try: running out of time here still returns the partial repair accepted so far
             if known_text_fails(test_src, cur, report.failed, refs):
                 return SolveResult("infeasible", note="a test fails on the known correct text")
+            # final known texts that may prove infeasibility below: those standing in the file as they are, and
+            # those put in place of a one-edit slip (`_one_edit`)
+            provable = {st.name for st in ast.parse(cur).body
+                        if type(st) is ast.FunctionDef and _CANON.get(st.name) == ast.dump(st)} & _FINAL
             try:
                 used = set().union(*(refs.get(f, set()) for f in report.failed))
                 # one at a time: each must earn its place. Final words first: a mined text with weak evidence
@@ -1442,15 +1468,18 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                     if canon is None:
                         continue
                     rep = ctx.run(canon, None, BASE_TIMEOUT)
-                    if known_text_fails(test_src, canon, rep.failed, refs):
-                        # with the known text in place (the same shape, `_canonical_substitute`) a test that uses
-                        # only known texts is red, whether or not it was red before: it asks for what they are not
+                    slip = name in _FINAL and _one_edit(cur, name)
+                    if slip and known_text_fails(test_src, canon, rep.failed, refs, provable | {name}):
+                        # with the known text in place of a one-edit slip a test that uses only known texts is
+                        # red, whether or not it was red before: it asks for what they are not
                         return SolveResult("infeasible", note="a test fails on the known correct text")
                     if rep.ok or (not any(f.startswith("<") for f in rep.failed)
                                   and set(rep.failed) < set(report.failed)):
                         cur, report = canon, rep
                         if name in _FINAL:
                             hint_base, hint_failing = canon, list(rep.failed)
+                        if slip:
+                            provable.add(name)
                         substituted.append(name)
                     if report.ok:
                         break

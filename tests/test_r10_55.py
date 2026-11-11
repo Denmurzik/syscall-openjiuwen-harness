@@ -91,6 +91,23 @@ def test_known_text_that_breaks_a_passing_test_is_not_kept(tmp_path):
     assert (t.workspace / "mylib.py").read_text(encoding="utf-8") == lib   # the known text is not on disk
 
 
+TWICE = "def twice(x):\n    return x * 2\n"
+T_TWICE = "    def test_twice(self):\n        self.assertEqual(m.twice(3), 6)\n"
+
+
+def test_known_text_that_breaks_a_passing_mixed_test_is_not_kept(tmp_path):
+    # the known text turns test_empty green but test_shifted red; test_shifted also needs twice (no known text),
+    # so it proves nothing: the refusal of round 10 stands, and the known text is not on disk
+    lib = "def total(xs):\n    s = 1\n    for x in xs:\n        s += x\n    return s\n\n\n" + TWICE
+    tests = (HEAD + "    def test_shifted(self):\n        self.assertEqual(m.total([1, 2, 3]) + m.twice(0), 7)\n\n"
+             "    def test_empty(self):\n        self.assertEqual(m.total([]), 0)\n\n" + T_TWICE + TAIL)
+    t = _task(tmp_path, lib, tests)
+    assert _canonical_substitute(lib, {"total"}).startswith(GOOD["total"])
+    res = solve(t)
+    assert res.status != "infeasible" and "canonical" not in (res.note or "")
+    assert GOOD["total"] not in (t.workspace / "mylib.py").read_text(encoding="utf-8")
+
+
 def test_substitute_needs_the_known_signature():
     assert _canonical_substitute("def total(xs, start):\n    return start\n", {"total"}) is None
     assert _canonical_substitute(GOOD["total"], {"total"}) is None            # already the known text
@@ -233,3 +250,17 @@ def test_known_text_changed_again_by_the_search_shows_the_real_original(tmp_path
     res = solve(t)
     # expert pass 4: the known total fails test_seven: infeasible before the search changes the function again
     assert res.status == "infeasible"
+
+
+def test_known_text_changed_again_by_the_search_shows_the_real_original_mixed(tmp_path, monkeypatch):
+    # the known total turns test_sum green; the search then changes it (s = 1) for test_seven, which also needs
+    # twice and so proves nothing: the check shows the model the original `s = x`, not the known text
+    monkeypatch.setenv("HARNESS_VERIFY_CODING", "1")
+    lib = GOOD["total"].replace("s += x", "s = x") + "\n\n" + TWICE
+    tests = HEAD + ("    def test_seven(self):\n        self.assertEqual(m.total([1, 2, 3]) + m.twice(0), 7)\n\n"
+                    "    def test_sum(self):\n        self.assertTrue(m.total([1, 1]) >= 2)\n\n" + T_TWICE) + TAIL
+    t = _task(tmp_path, lib, tests)
+    res = solve(t)
+    assert res.status == "solved" and res.note == "repaired by mutation, unchecked"
+    [item] = res.extra["verify"]
+    assert item["func"] == "total" and item["buggy"] == GOOD["total"].replace("s += x", "s = x").rstrip("\n")
