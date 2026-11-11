@@ -365,7 +365,13 @@ PROSE_SYSTEM = ("Answer a question from a knowledge base of short text pages (bi
                 "Output only code, no comments, no markdown.")
 PROSE_CONTEXT_CHARS = 6000   # page text shown to the model (about 200 units of input)
 PROSE_PAGE_CHARS = 1500      # of one page
-_FIELD_LINE = re.compile(r"^[A-Za-z][\w /()-]{0,30}:[ \t]+\S")
+_FIELD_LINE = re.compile(r"^[^\W\d_][\w /()-]{0,30}:[ \t]*\S")
+_MD_LEAD = re.compile(r"^\s*(?:[-*+][ \t]+|#+[ \t]*)")   # a list bullet or a heading mark before a field
+# a count or an aggregate over pages: computed in code, never a constant copied from a page
+_PROSE_AGGREGATE_ASK = re.compile(
+    r"\b(?:how (?:many|much)|number of|count|counts|total|sum|average|mean|median|most|least|fewest|more|fewer|less"
+    r"|oldest|youngest|older|younger|earliest|latest|earlier|later|compare|compared|largest|smallest|biggest"
+    r"|highest|lowest|greatest)\b", re.I)
 
 
 def _kb_pages(ws: Path) -> dict[str, str]:
@@ -388,8 +394,17 @@ def _kb_pages(ws: Path) -> dict[str, str]:
 
 
 def _has_fields(text: str) -> bool:
-    """The page holds at least one short `Key: value` line (the shape the `kb` dict is built from)."""
-    return any(_FIELD_LINE.match(ln) and len(ln.split()) <= 12 for ln in text.splitlines() if not ln.startswith("#"))
+    """The page holds at least one short `Key: value` line (the shape the `kb` dict is built from), also written
+    as markdown (`- Born: 1970`, `**Born:** 1970`, `## Born: 1970`) or with no space after the colon."""
+    lines = text.splitlines()
+    title = next((i for i, ln in enumerate(lines) if ln.startswith("#")), None)
+    for i, ln in enumerate(lines):
+        if i == title:
+            continue
+        s = _MD_LEAD.sub("", ln, count=1).replace("**", "").replace("__", "")
+        if _FIELD_LINE.match(s) and len(s.split()) <= 12:
+            return True
+    return False
 
 
 def _kb_is_prose(ws: Path) -> bool:
@@ -411,7 +426,11 @@ def _prose_context(ws: Path, question: str) -> tuple[str, int]:
     seen = set(first) | set(linked) | set(back)
     parts, used = [], 0
     for t in first + linked + back + [t for t in pages if t not in seen]:
-        body = pages[t].strip()[:PROSE_PAGE_CHARS]
+        full = pages[t].strip()
+        body = full[:PROSE_PAGE_CHARS]
+        if len(full) > len(body):   # a cut page that hides a fact must not read as a page without it
+            body += (f"\n[... {len(full) - len(body)} more characters of this page are cut here; the full text is "
+                     f"in pages[{t!r}]: read it in code before you print IMPOSSIBLE]")
         if used + len(body) > PROSE_CONTEXT_CHARS and parts:
             break
         parts.append(body)
@@ -421,9 +440,18 @@ def _prose_context(ws: Path, question: str) -> tuple[str, int]:
 
 def _quoted_from_kb(ws: Path, answer: str) -> bool:
     """The printed constant stands word for word on a page: a fact read from the text, not a number worked out
-    in the head."""
+    in the head. Whole words only: `19` inside `1950` or `Robotics` inside `Dune Robotics` is not a match."""
     a = " ".join(answer.split()).casefold()
-    return len(a) >= 2 and any(a in " ".join(t.split()).casefold() for t in _kb_pages(ws).values())
+    if len(a) < 2:
+        return False
+    rx = re.compile(r"(?<![\w.])" + re.escape(a) + r"(?!\w)")
+    return any(rx.search(" ".join(t.split()).casefold()) for t in _kb_pages(ws).values())
+
+
+def _asks_aggregate(question: str) -> bool:
+    """A count, a sum or a comparison over pages ("How many ...", "the oldest ..."): a constant printed for it was
+    counted in the head from the shown pages, never read from one."""
+    return bool(_PROSE_AGGREGATE_ASK.search(question))
 
 
 def _is_prose_task(task: Task) -> bool:
@@ -552,7 +580,8 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             break
         code = extract_code(r.text, join_all=False)
         quoted = False
-        if prose and is_bare_literal(code):   # a fact copied from a shown page: taken when a page really holds it
+        if prose and is_bare_literal(code) and not _asks_aggregate(strip_boilerplate(task.instruction)):
+            # a fact copied from a shown page: taken when a page really holds it
             probe = await asyncio.to_thread(run_program, kb_program(code), task.workspace)
             said = normalize_answer(probe.stdout, task.check, task.instruction) if probe.returncode == 0 else None
             quoted = said is not None and _quoted_from_kb(task.workspace, said)

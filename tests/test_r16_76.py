@@ -1,18 +1,11 @@
-"""Expert pass 8: task shapes far from the examples (plain test functions, another module name, `import *`, prose
-knowledge bases), the hop check of batched 2a specs, and the harness as an openJiuwen agent."""
+"""Round 16, task 76 (expert pass 8, patch b): search over a knowledge base written as prose."""
 import asyncio
-import json
 
-from harness import json_route, llm_routes as L
+import pytest
+
+from harness import llm_routes as L
 from harness.llm import ChatResult
-from harness.result import SolveResult
-from harness.solvers import probe
-from harness.solvers.testrun import run_tests
 from harness.tasks import Task
-
-INS = ("Run `python3 test_mylib.py` in the current directory; some tests fail. Fix the bugs in mylib.py (do not edit "
-       "the tests) until all tests pass. Work only inside the current directory. When you are done, write ONLY the "
-       "word DONE to the file answer.txt in the current directory (for example with bash: echo 42 > answer.txt).")
 
 
 class Fake:
@@ -97,3 +90,77 @@ def test_a_missing_prose_page_is_not_found(tmp_path):
     task = _search(tmp_path, BIO)
     res = asyncio.run(L.solve_with_program(task, Fake(["print(pages['Xavier Nobody'][:4])"])))
     assert res.status == "unparsed" and res.note == "kb page or field not found"
+
+
+# ------------------------------------------------------------------ fix round 1
+def _people(n=30):
+    return {f"kb/p{i:02d}.md": f"# Person {i:02d}\n\nPerson {i:02d} was born in {1950 + i} in Oslo. Person {i:02d} works "
+                               f"at {'Dune Robotics' if i % 3 else 'Kite Labs'}.\n" for i in range(n)}
+
+
+def test_a_count_printed_as_a_constant_is_never_taken(tmp_path):
+    # 20 of the 30 work at Dune Robotics; "19" stands inside "1950": no longer quoted, and a count is never quoted
+    q = Q.replace("Which college did Ann Lee graduate from?", "How many people work at Dune Robotics?")
+    task = _search(tmp_path, _people(), q, "exact_int")
+    client = Fake(["print(19)", "print(sum('Dune Robotics' in t for t in pages.values()))"])
+    res = asyncio.run(L.solve_with_program(task, client))
+    assert res.status == "solved" and res.answer == "20" and len(client.calls) == 2
+    assert "constant" in client.calls[1][-1]["content"]
+
+
+def test_a_right_count_printed_as_a_constant_is_retried_too(tmp_path):
+    q = Q.replace("Which college did Ann Lee graduate from?", "How many people work at Dune Robotics?")
+    task = _search(tmp_path, _people(), q, "exact_int")
+    client = Fake(["print(20)", "print(sum('Dune Robotics' in t for t in pages.values()))"])
+    res = asyncio.run(L.solve_with_program(task, client))
+    assert res.answer == "20" and len(client.calls) == 2
+
+
+def test_quoted_constants_match_whole_words_only(tmp_path):
+    ws = _ws(tmp_path, _people(10))   # Person 00..09, born 1950..1959
+    for a in ("19", "95", "950", "Robo", "Osl"):
+        assert not L._quoted_from_kb(ws, a), a
+    for a in ("1950", "Oslo", "Dune Robotics", "Kite Labs"):
+        assert L._quoted_from_kb(ws, a), a
+
+
+@pytest.mark.parametrize("q", ["How many people work at Dune Robotics?", "What is the number of people born in Oslo?",
+                               "Who is the oldest person at Kite Labs?", "Which company has more employees?",
+                               "What is the total of the founding years?", "Who was born earliest?",
+                               "Who joined their current employer earlier, Mina Garcia or Elena Olsen?"])
+def test_aggregate_questions(q):
+    assert L._asks_aggregate(q)
+
+
+@pytest.mark.parametrize("q", ["Which college did Ann Lee graduate from?", "In which year was Bo Park born?",
+                               "Where is the head office of the employer of Ann Lee?"])
+def test_single_fact_questions(q):
+    assert not L._asks_aggregate(q)
+
+
+@pytest.mark.parametrize("fmt", ["- Born: {b}\n- Employer: {e}", "* Born: {b}\n* Employer: {e}",
+                                 "**Born:** {b}\n**Employer:** {e}", "- **Born**: {b}\n- **Employer**: {e}",
+                                 "__Born__: {b}\n__Employer__: {e}", "## Born: {b}\n## Employer: {e}",
+                                 "Born:{b}\nEmployer:{e}"])
+def test_field_pages_in_markdown_stay_on_the_kb_route(tmp_path, fmt):
+    files = {f"kb/p{i}.md": f"# {t}\n\n" + fmt.format(b=b, e="Dune Robotics") + "\n"
+             for i, (t, b) in enumerate([("Ann Lee", 1970), ("Bo Park", 1984), ("Cy Moss", 1991)])}
+    task = _search(tmp_path, files)
+    assert L._is_kb_task(task) and not L._is_prose_task(task)
+
+
+def test_a_prose_title_line_is_not_a_field(tmp_path):
+    files = {f"kb/p{i}.md": f"# Note: {t}\n\n{t} was born in {b} and works at Dune Robotics.\n"
+             for i, (t, b) in enumerate([("Ann Lee", 1970), ("Bo Park", 1984), ("Cy Moss", 1991)])}
+    assert L._kb_is_prose(_ws(tmp_path, files))
+
+
+def test_a_cut_page_says_so_and_points_to_pages(tmp_path):
+    long_bio = "# Ann Lee\n\n" + "Ann Lee travelled a lot in her youth. " * 60 + "Ann Lee graduated from Tartu College.\n"
+    task = _search(tmp_path, {**BIO, "kb/ann_lee.md": long_bio})
+    shown, _ = L._prose_context(task.workspace, Q)
+    assert "Tartu College" not in shown
+    assert "more characters of this page are cut here" in shown and "pages['Ann Lee']" in shown
+    # a page that fits is shown whole, with no marker
+    shown, _ = L._prose_context(_search(tmp_path / "b", BIO).workspace, Q)
+    assert "cut here" not in shown
