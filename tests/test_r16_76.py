@@ -125,15 +125,26 @@ def test_quoted_constants_match_whole_words_only(tmp_path):
 
 
 @pytest.mark.parametrize("q", ["How many people work at Dune Robotics?", "What is the number of people born in Oslo?",
-                               "Who is the oldest person at Kite Labs?", "Which company has more employees?",
+                               "Who is the oldest person at Kite Labs?",
+                               "Which company has more employees, Arktika Labs or Bluefin Systems?",
                                "What is the total of the founding years?", "Who was born earliest?",
-                               "Who joined their current employer earlier, Mina Garcia or Elena Olsen?"])
+                               "Who joined their current employer earlier, Mina Garcia or Elena Olsen?",
+                               "Is Ann Lee older than Bo Park?", "Which person mentors the largest number of people?",
+                               "What is the average founding year of the companies?",
+                               "Who is the youngest employee of Dune Robotics?", "Which company has the most employees?"])
 def test_aggregate_questions(q):
     assert L._asks_aggregate(q)
 
 
 @pytest.mark.parametrize("q", ["Which college did Ann Lee graduate from?", "In which year was Bo Park born?",
-                               "Where is the head office of the employer of Ann Lee?"])
+                               "Where is the head office of the employer of Ann Lee?",
+                               # the reviewer's single-fact wordings (re-review 1, 76-M4)
+                               "Which company did Ann Lee join later in her career?",
+                               "Where did Bo Park move after he left Oslo?",
+                               "What is the name of the company where Ann Lee works most of the time?",
+                               "What did Ann Lee study before moving to Graz?",
+                               "Which college did Ann Lee attend at least once?",
+                               "Where did Ann Lee work first?", "Which company did Ann Lee's oldest friend found?"])
 def test_single_fact_questions(q):
     assert not L._asks_aggregate(q)
 
@@ -164,3 +175,15 @@ def test_a_cut_page_says_so_and_points_to_pages(tmp_path):
     # a page that fits is shown whole, with no marker
     shown, _ = L._prose_context(_search(tmp_path / "b", BIO).workspace, Q)
     assert "cut here" not in shown
+
+
+# ------------------------------------------------------------------ fix round 2: single-fact wordings keep the quote
+def test_a_single_fact_with_later_is_taken_as_quoted(tmp_path):
+    files = {"kb/ann.md": "# Ann Lee\n\nAnn Lee was born in Oslo in 1970. She first worked at Kite Labs and later joined "
+                          "Dune Robotics.\n",
+             "kb/bo.md": "# Bo Park\n\nBo Park was born in Lyon in 1984. Bo works at Dune Robotics.\n"}
+    q = Q.replace("Which college did Ann Lee graduate from?", "Which company did Ann Lee join later in her career?")
+    task = _search(tmp_path, files, q)
+    client = Fake(["print('Dune Robotics')", "print(pages['Ann Lee'].split('worked at ')[1].split(' and')[0])"])
+    res = asyncio.run(L.solve_with_program(task, client))
+    assert res.status == "solved" and res.answer == "Dune Robotics" and len(client.calls) == 1

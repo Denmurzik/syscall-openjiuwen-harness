@@ -367,11 +367,16 @@ PROSE_CONTEXT_CHARS = 6000   # page text shown to the model (about 200 units of 
 PROSE_PAGE_CHARS = 1500      # of one page
 _FIELD_LINE = re.compile(r"^[^\W\d_][\w /()-]{0,30}:[ \t]*\S")
 _MD_LEAD = re.compile(r"^\s*(?:[-*+][ \t]+|#+[ \t]*)")   # a list bullet or a heading mark before a field
-# a count or an aggregate over pages: computed in code, never a constant copied from a page
+# a count or an aggregate over pages: computed in code, never a constant copied from a page. Only clear wordings:
+# a count or a sum; a superlative that selects among entities ("the oldest person", "the most employees", "Who was
+# born earliest?"); a comparative between named choices ("more employees, A or B?", "older than"). A single fact
+# worded with the same words ("joined later in her career", "most of the time", "at least once") does not count
 _PROSE_AGGREGATE_ASK = re.compile(
-    r"\b(?:how (?:many|much)|number of|count|counts|total|sum|average|mean|median|most|least|fewest|more|fewer|less"
-    r"|oldest|youngest|older|younger|earliest|latest|earlier|later|compare|compared|largest|smallest|biggest"
-    r"|highest|lowest|greatest)\b", re.I)
+    r"\b(?:how many|number of|count|counts|total|sum|average|mean)\b"
+    r"|\bthe (?:oldest|youngest|earliest|most|fewest|least|largest|smallest|biggest|highest|lowest|greatest)\b"
+    r"|\b(?:oldest|youngest|earliest|latest|most|fewest|least)\s*\?"
+    r"|\b(?:older|younger|earlier|later|more|fewer|less|larger|smaller|bigger|higher|lower)\b[^?.]*\b(?:than|or)\b",
+    re.I)
 
 
 def _kb_pages(ws: Path) -> dict[str, str]:
