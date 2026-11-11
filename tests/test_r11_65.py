@@ -85,3 +85,10 @@ def test_plural_or_singular_of_a_value_in_the_file_goes_to_the_model(tmp_path):
     assert data_solver.solve(_data(tmp_path, q)).status == "unparsed"
     q = "How many units of product 'tesseracts' were sold in months 5 through 6 inclusive?"
     assert data_solver.solve(_data(tmp_path / "z", q)).status == "infeasible"
+
+
+def test_plural_of_a_known_word_is_not_an_absent_value(tmp_path):
+    for word in ("sprockets", "souths"):
+        q = f"How many units of product '{word}' were sold in months 5 through 6 inclusive?" if word == "sprockets" \
+            else "How many units were sold in region 'souths' in months 5 through 6 inclusive?"
+        assert _status(data_solver.solve(_data(tmp_path / word, q))) == ("solved", "0"), word

@@ -135,6 +135,11 @@ def _other_number(value: str, seen: set[str]) -> bool:
     return (value[:-1] in seen) if value.endswith("s") else ((value + "s") in seen)
 
 
+def _is_known(value: str) -> bool:
+    """One of the organizers' words, or its singular/plural counterpart (sprockets, souths)."""
+    return value in _KNOWN_VALUES or _other_number(value, _KNOWN_VALUES)
+
+
 def parse(instruction: str, workspace: Path | None = None) -> dict | SolveResult:
     sentences = [" ".join(s.split()) for s in split_sentences(strip_boilerplate(instruction))]
     if len(sentences) != 2:
@@ -544,7 +549,9 @@ def execute(spec: dict, workspace: Path, check: str | None) -> SolveResult:
             if ((product is not None and _other_number(product, seen_products))
                     or (region is not None and _other_number(region, seen_regions))):
                 return _unparsed("filter value is the singular/plural of a value in the file")
-            return SolveResult("infeasible", note="the product/region does not occur in the file")
+            if ((product is not None and product not in seen_products and not _is_known(product))
+                    or (region is not None and region not in seen_regions and not _is_known(region))):
+                return SolveResult("infeasible", note="the product/region does not occur in the file")
         if top_col is not None:
             if not groups:
                 return _unparsed("no rows to rank")
