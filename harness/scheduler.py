@@ -111,19 +111,50 @@ def _solver_for(task_type: str):
             "coding": coding_solver}.get(task_type)
 
 
-def _phase1_target(out_queue, task: Task, solver_name=None) -> None:
-    """Child process body: run one deterministic solver, send (task_id, SolveResult)."""
+def _phase1_target(out_queue, task: Task, solver_name=None, known_texts=None) -> None:
+    """Child process body: run one deterministic solver, send (task_id, SolveResult). `known_texts`: function
+    texts mined from the run's coding tasks (`_mine_texts`), added to the coding solver's known texts."""
     try:
         mod = _solver_for(task.task_type)
         if mod is None:
             res = SolveResult("unparsed", note="unknown task type")
         elif task.task_type == "coding":  # the solver's own limit stays inside the parent's kill timeout
+            if known_texts:
+                mod.install_known_texts(known_texts)
             res = mod.solve(task, time_limit=config.coding_time_limit())
         else:
             res = mod.solve(task)
     except BaseException as e:  # the child must always answer
         res = SolveResult("unparsed", note=f"solver crashed: {e!r}")
     out_queue.put((task.task_id, res))
+
+
+MINE_MIN_TASKS = 3            # fewer coding tasks than this cannot give two votes worth trusting
+MINE_DEADLINE_SHARE = 0.1     # mining takes at most this share of the time left (and MINE_BUDGET_S)
+
+
+def _mine_texts(tasks: list, t0: float | None = None, deadline_s: float | None = None) -> dict:
+    """Function texts that several coding tasks of this run hold with green tests (`coding_solver.mine_known_texts`),
+    for the phase-1 coding children. Off (HARNESS_MINE_TEXTS=0) or fewer than MINE_MIN_TASKS coding tasks: nothing
+    runs. Never fails the run: without them phase 1 is as in round 10."""
+    if not config.mine_texts():
+        return {}
+    try:
+        coding = [t.workspace for t in tasks if t.task_type == "coding" and t.workspace is not None]
+        if len(coding) < MINE_MIN_TASKS:
+            return {}
+        from harness.solvers import coding_solver
+        budget_s = coding_solver.MINE_BUDGET_S
+        if t0 is not None and deadline_s is not None:
+            budget_s = min(budget_s, MINE_DEADLINE_SHARE * max(0.0, deadline_s - (time.monotonic() - t0)))
+        start = time.monotonic()
+        texts = coding_solver.mine_known_texts(coding, budget_s=budget_s)
+        log.info("mined texts of %d functions from %d coding tasks in %.1f s: %s", len(texts), len(coding),
+                 time.monotonic() - start, sorted(texts))
+        return texts
+    except Exception:
+        log.exception("mining function texts failed; phase 1 goes on without them")
+        return {}
 
 
 def _kill(proc) -> None:
@@ -139,7 +170,7 @@ def _kill(proc) -> None:
         pass
 
 
-def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) -> None:
+def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result, known_texts=None) -> None:
     ctx = multiprocessing.get_context("spawn")
     out_queue = ctx.Queue()
     pending = list(tasks)
@@ -182,7 +213,10 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result) 
             while pending and len(running) < workers and not over:
                 task = pending.pop(0)
                 try:
-                    proc = ctx.Process(target=_phase1_target, args=(out_queue, task, None), daemon=True)
+                    args = (out_queue, task, None)
+                    if known_texts and task.task_type == "coding":
+                        args += (known_texts,)
+                    proc = ctx.Process(target=_phase1_target, args=args, daemon=True)
                     proc.start()
                     running[task.task_id] = (proc, time.monotonic(), task)
                 except Exception as e:
@@ -365,7 +399,9 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
             traj.record({"phase": phase, "task_id": task.task_id, "status": st, **_take_calls(),
                          "elapsed": round(elapsed, 3), "note": (res.note or "")[:200]})
 
-        _phase1(tasks, phase1_workers, t0, deadline_s, lambda t, r, e: settle(1, t, r, e))
+        mined = _mine_texts(tasks, t0, deadline_s)
+        _phase1(tasks, phase1_workers, t0, deadline_s, lambda t, r, e: settle(1, t, r, e),
+                **({"known_texts": mined} if mined else {}))
 
         left = sorted((by_id[i] for i, s in status.items() if s == "unparsed" or i in tentative),
                       key=lambda t: t.task_id)  # batch composition depends only on the task set

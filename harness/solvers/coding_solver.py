@@ -1061,6 +1061,127 @@ def _all_canonical(original: str, cur: str) -> bool:
 _CANON_NODES = {n.name: n for n in ast.parse(_CANON_SRC).body}
 _CANON_TEXT = {n.name: ast.get_source_segment(_CANON_SRC, n) for n in ast.parse(_CANON_SRC).body}
 _SHAPE_CALLS = {"sorted", "max", "min", "len", "sum", "reversed"}   # a slip may call these where the known text does not
+_EXAMPLE_NAMES = frozenset(_CANON)   # their texts come from the organizers' examples and are never replaced
+
+
+# ---------------------------------------------------------------- texts mined from the task set itself
+# The jury's set holds ~25 coding tasks cut from one pool of functions; a bug sits in one to three functions of a
+# file and the same function stands untouched, with green tests, in other tasks. A text that several tasks hold in
+# the same form while every test using it passes there is that function's correct text. It joins the known texts
+# above for names the examples do not show and is used only the way they are (`_canonical_substitute`: same shape;
+# kept only when red tests strictly decrease and no green one turns red). 0 tokens.
+MINE_MIN_VOTES = 2        # distinct tasks that must hold the same text with green tests
+MINE_RUN_TIMEOUT = 10.0   # one run of a task's tests
+MINE_BUDGET_S = 60.0      # all runs together
+
+
+def _module_names(tree: ast.Module) -> set[str]:
+    """Names bound at the top level of a module: definitions, assignment targets, imports."""
+    out: set[str] = set()
+    for st in tree.body:
+        if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(st.name)
+        elif isinstance(st, (ast.Import, ast.ImportFrom)):
+            out |= {(a.asname or a.name).split(".")[0] for a in st.names}
+        else:
+            out |= {n.id for n in ast.walk(st) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    return out
+
+
+def _self_contained(fn: ast.FunctionDef, module_names: set[str]) -> bool:
+    """`fn` reads no other top-level name of its module (function, class, constant, import) and no global: its
+    behaviour is its own text, so green here says the same of the same text elsewhere."""
+    if any(isinstance(n, (ast.Global, ast.Nonlocal)) for n in ast.walk(fn)):
+        return False
+    return not {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} & (module_names - {fn.name})
+
+
+def _mine_votes(ws: Path, timeout: float) -> tuple[dict, dict] | None:
+    """(green, red) of one workspace: name -> (AST dump, text) of the top-level self-contained functions whose
+    tests are all green, and of those red alone in some test (a red test that uses that function and nothing else
+    of mylib). None when the run proves nothing: unreadable files, a failure not laid on tests, a timeout."""
+    from collections import Counter
+    from harness.solvers.testrun import run_tests
+    test_file = "test_mylib.py" if (ws / "test_mylib.py").is_file() else sorted(
+        p.name for p in ws.glob("test_*.py"))[0]
+    src = (ws / "mylib.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    refs = _test_refs((ws / test_file).read_text(encoding="utf-8"))
+    rep = run_tests(ws, test_file, timeout=timeout)
+    if not rep.ok and (not rep.failed or any(f.startswith("<") or not refs.get(f) for f in rep.failed)):
+        return None   # the run failed, timed out, or a failure cannot be laid on functions: no evidence here
+    red = set().union(*(refs[f] for f in rep.failed)) if rep.failed else set()
+    red_alone = {next(iter(refs[f])) for f in rep.failed if len(refs[f]) == 1}
+    tested = set().union(*refs.values()) if refs else set()
+    defined = Counter(n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    names = _module_names(tree)
+    green, red_forms = {}, {}
+    for node in tree.body:
+        if type(node) is not ast.FunctionDef or node.decorator_list or defined[node.name] != 1                 or node.name in _EXAMPLE_NAMES or node.name not in tested or not _self_contained(node, names):
+            continue
+        text = ast.get_source_segment(src, node)
+        if not text:
+            continue
+        if node.name not in red:
+            green[node.name] = (ast.dump(node), text)
+        elif node.name in red_alone:
+            red_forms[node.name] = (ast.dump(node), text)
+    return green, red_forms
+
+
+def mine_known_texts(workspaces: Iterable[Path], budget_s: float = MINE_BUDGET_S,
+                     run_timeout: float = MINE_RUN_TIMEOUT) -> dict[str, str]:
+    """name -> text of the functions that at least MINE_MIN_VOTES distinct workspaces hold in one form (same AST)
+    with all the tests that use them green, when that form has at least twice the weight of everything against it:
+    the other green forms, and twice each workspace where the same form is red alone in a test (a red test on the
+    very text is the strongest evidence that the text is not the one the tests want). Only top-level undecorated
+    self-contained functions (`_self_contained`) defined once, names the examples do not show. Each workspace is run
+    once in a throw-away copy, at most `run_timeout` s each and `budget_s` s in all; identical workspaces count once;
+    any trouble with one workspace skips it."""
+    import hashlib
+    votes: dict[str, dict[str, list]] = {}   # name -> AST dump -> [green votes, red-alone votes, text]
+    seen: set[str] = set()
+    stop = time.monotonic() + budget_s
+    for ws in workspaces:
+        left = stop - time.monotonic()
+        if left < 0.5:
+            break
+        try:
+            ws = Path(ws)
+            key = hashlib.sha256(b"\0".join(p.read_bytes() for p in sorted(ws.glob("*.py")))).hexdigest()
+            if key in seen:
+                continue
+            seen.add(key)
+            got = _mine_votes(ws, min(run_timeout, left))
+        except Exception:
+            continue
+        if got is None:
+            continue
+        for col, forms in enumerate(got):
+            for name, (dump, text) in forms.items():
+                votes.setdefault(name, {}).setdefault(dump, [0, 0, text])[col] += 1
+    out: dict[str, str] = {}
+    for name, forms in votes.items():
+        best = max(forms.values(), key=lambda e: e[0])
+        against = sum(e[0] for e in forms.values() if e is not best) + 2 * best[1]
+        if best[0] >= MINE_MIN_VOTES and best[0] >= 2 * against:
+            out[name] = best[2]
+    return out
+
+
+def install_known_texts(texts: dict | None) -> list[str]:
+    """Add mined texts to the known ones; the example names keep their example texts. Returns the names added."""
+    added = []
+    for name, text in (texts or {}).items():
+        try:
+            body = ast.parse(text).body
+            if name in _EXAMPLE_NAMES or len(body) != 1 or type(body[0]) is not ast.FunctionDef                     or body[0].name != name or body[0].decorator_list:
+                continue
+            _CANON[name], _CANON_NODES[name], _CANON_TEXT[name] = ast.dump(body[0]), body[0], text
+            added.append(name)
+        except Exception:
+            continue
+    return added
 
 
 def _stmt_kinds(fn: ast.AST) -> list[type]:

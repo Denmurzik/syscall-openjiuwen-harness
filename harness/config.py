@@ -88,6 +88,16 @@ def batch_2a() -> bool:
     return _env_bool("HARNESS_BATCH_2A", BATCH_2A)
 
 
+MINE_TEXTS = True  # default of HARNESS_MINE_TEXTS
+
+
+def mine_texts() -> bool:
+    """Before phase 1 the coding tasks of the run are read for function texts that several of them hold with green
+    tests (`coding_solver.mine_known_texts`); those join the known texts of the phase-1 coding solver. Off: phase 1
+    as in round 10. Read at call time: HARNESS_MINE_TEXTS=1/0."""
+    return _env_bool("HARNESS_MINE_TEXTS", MINE_TEXTS)
+
+
 def verify_coding() -> bool:
     """A model checks green single coding fixes on its own. Read at call time: HARNESS_VERIFY_CODING=1/0."""
     return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)
