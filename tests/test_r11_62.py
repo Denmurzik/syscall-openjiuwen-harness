@@ -29,10 +29,13 @@ def _coding(tmp_path, lib, tests, reward=2.0, raw=None):
 def learned():
     tables = (coding_solver._CANON, coding_solver._CANON_NODES, coding_solver._CANON_TEXT)
     before = [dict(t) for t in tables]
+    final = set(coding_solver._FINAL)
     yield
     for table, old in zip(tables, before):
         table.clear()
         table.update(old)
+    coding_solver._FINAL.clear()
+    coding_solver._FINAL.update(final)
 
 
 # ---------------------------------------------------------------- red on the known text
@@ -114,11 +117,18 @@ def test_known_text_that_leans_on_another_function_proves_nothing(learned):
     assert not coding_solver.known_text_fails(tests, lib, ["test_average"], refs)
 
 
-def test_a_mined_text_counts_as_known(tmp_path, learned):
-    coding_solver.install_known_texts({"minimum": MIN_OK})
+def test_a_final_mined_text_counts_as_known(tmp_path, learned):
+    coding_solver.install_known_texts({"minimum": MIN_OK}, ["minimum"])
     tests = HEAD + "    def test_minimum(self):\n        self.assertEqual(m.minimum([3, 9, 2]), 3)\n" + MAIN
     res = coding_solver.solve(_coding(tmp_path, MIN_BUG, tests), time_limit=60)
     assert res.status == "infeasible" and "known correct text" in res.note
+
+
+def test_a_mined_text_with_weak_evidence_never_proves_infeasibility(tmp_path, learned):
+    coding_solver.install_known_texts({"minimum": MIN_OK})
+    tests = HEAD + "    def test_minimum(self):\n        self.assertEqual(m.minimum([3, 9, 2]), 3)\n" + MAIN
+    assert coding_solver.solve(_coding(tmp_path / "a", MIN_BUG, tests), time_limit=60).status != "infeasible"
+    assert coding_solver.solve(_coding(tmp_path / "b", MIN_OK, tests), time_limit=60).status != "infeasible"
 
 
 def test_without_the_mined_text_the_same_task_is_not_judged(tmp_path):

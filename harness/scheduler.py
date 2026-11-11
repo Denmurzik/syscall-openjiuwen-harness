@@ -113,14 +113,15 @@ def _solver_for(task_type: str):
 
 def _phase1_target(out_queue, task: Task, solver_name=None, known_texts=None) -> None:
     """Child process body: run one deterministic solver, send (task_id, SolveResult). `known_texts`: function
-    texts mined from the run's coding tasks (`_mine_texts`), added to the coding solver's known texts."""
+    texts mined from the run's coding tasks (`_mine_texts`: {"texts": {name: text}, "final": [names]}), added to
+    the coding solver's known texts."""
     try:
         mod = _solver_for(task.task_type)
         if mod is None:
             res = SolveResult("unparsed", note="unknown task type")
         elif task.task_type == "coding":  # the solver's own limit stays inside the parent's kill timeout
             if known_texts:
-                mod.install_known_texts(known_texts)
+                mod.install_known_texts(known_texts.get("texts"), known_texts.get("final", ()))
             res = mod.solve(task, time_limit=config.coding_time_limit())
         else:
             res = mod.solve(task)
@@ -135,8 +136,9 @@ MINE_DEADLINE_SHARE = 0.1     # mining takes at most this share of the time left
 
 def _mine_texts(tasks: list, t0: float | None = None, deadline_s: float | None = None) -> dict:
     """Function texts that several coding tasks of this run hold with green tests (`coding_solver.mine_known_texts`),
-    for the phase-1 coding children. Off (HARNESS_MINE_TEXTS=0) or fewer than MINE_MIN_TASKS coding tasks: nothing
-    runs. Never fails the run: without them phase 1 is as in round 10."""
+    for the phase-1 coding children: {"texts": {name: text}, "final": [names]}, or {} when there are none. Off
+    (HARNESS_MINE_TEXTS=0) or fewer than MINE_MIN_TASKS coding tasks: nothing runs. Never fails the run: without
+    them phase 1 is as in round 10."""
     if not config.mine_texts():
         return {}
     try:
@@ -148,10 +150,10 @@ def _mine_texts(tasks: list, t0: float | None = None, deadline_s: float | None =
         if t0 is not None and deadline_s is not None:
             budget_s = min(budget_s, MINE_DEADLINE_SHARE * max(0.0, deadline_s - (time.monotonic() - t0)))
         start = time.monotonic()
-        texts = coding_solver.mine_known_texts(coding, budget_s=budget_s)
-        log.info("mined texts of %d functions from %d coding tasks in %.1f s: %s", len(texts), len(coding),
-                 time.monotonic() - start, sorted(texts))
-        return texts
+        texts, final = coding_solver.mine_known_texts(coding, budget_s=budget_s)
+        log.info("mined texts of %d functions from %d coding tasks in %.1f s: %s; final: %s", len(texts),
+                 len(coding), time.monotonic() - start, sorted(texts), sorted(final))
+        return {"texts": texts, "final": sorted(final)} if texts else {}
     except Exception:
         log.exception("mining function texts failed; phase 1 goes on without them")
         return {}

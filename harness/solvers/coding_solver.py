@@ -1050,8 +1050,8 @@ def _all_canonical(original: str, cur: str) -> bool:
                 continue
             if not (type(a) is ast.FunctionDef and type(b) is ast.FunctionDef and a.name == b.name):
                 return False
-            if _CANON.get(b.name) != db:
-                return False
+            if b.name not in _FINAL or _CANON.get(b.name) != db:
+                return False   # a mined text with weak evidence may stand here, but it is no final word
             changed += 1
         return changed > 0
     except Exception:
@@ -1062,6 +1062,9 @@ _CANON_NODES = {n.name: n for n in ast.parse(_CANON_SRC).body}
 _CANON_TEXT = {n.name: ast.get_source_segment(_CANON_SRC, n) for n in ast.parse(_CANON_SRC).body}
 _SHAPE_CALLS = {"sorted", "max", "min", "len", "sum", "reversed"}   # a slip may call these where the known text does not
 _EXAMPLE_NAMES = frozenset(_CANON)   # their texts come from the organizers' examples and are never replaced
+# names whose known text is a final word: a repair to it is `canonical` (no 2c/2d) and a test red on it proves the
+# task infeasible. The example names, and mined texts with strong evidence (`MINE_FINAL_VOTES`, nothing against)
+_FINAL: set[str] = set(_EXAMPLE_NAMES)
 
 
 # ---------------------------------------------------------------- texts mined from the task set itself
@@ -1071,6 +1074,7 @@ _EXAMPLE_NAMES = frozenset(_CANON)   # their texts come from the organizers' exa
 # above for names the examples do not show and is used only the way they are (`_canonical_substitute`: same shape;
 # kept only when red tests strictly decrease and no green one turns red). 0 tokens.
 MINE_MIN_VOTES = 2        # distinct tasks that must hold the same text with green tests
+MINE_FINAL_VOTES = 3      # ... for a final word (`_FINAL`), with nothing at all against it
 MINE_RUN_TIMEOUT = 10.0   # one run of a task's tests
 MINE_BUDGET_S = 60.0      # all runs together
 
@@ -1096,51 +1100,113 @@ def _self_contained(fn: ast.FunctionDef, module_names: set[str]) -> bool:
     return not {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} & (module_names - {fn.name})
 
 
-def _mine_votes(ws: Path, timeout: float) -> tuple[dict, dict] | None:
-    """(green, red) of one workspace: name -> (AST dump, text) of the top-level self-contained functions whose
-    tests are all green, and of those red alone in some test (a red test that uses that function and nothing else
-    of mylib). None when the run proves nothing: unreadable files, a failure not laid on tests, a timeout."""
+def _skipped_tests(tree: ast.Module) -> set[str]:
+    """Test methods that may not run or whose failure counts as success: a skip or expectedFailure decorator on the
+    method or its class, or a skipTest call. Their functions are not tested by them."""
+    def marked(decos) -> bool:
+        return any("skip" in n.lower() or n == "expectedFailure"
+                   for d in decos for n in [x.id if isinstance(x, ast.Name) else x.attr for x in ast.walk(d)
+                                            if isinstance(x, (ast.Name, ast.Attribute))])
+    out: set[str] = set()
+    for cls in tree.body:
+        if not isinstance(cls, ast.ClassDef):
+            continue
+        for fn in cls.body:
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                    marked(cls.decorator_list) or marked(fn.decorator_list)
+                    or any(isinstance(n, ast.Attribute) and n.attr == "skipTest" for n in ast.walk(fn))):
+                out.add(fn.name)
+    return out
+
+
+@dataclass
+class _MineRun:
+    ws: Path
+    test_file: str
+    src: str
+    refs: dict
+    green: dict      # name -> (AST dump, text): self-contained functions whose tests are all green here
+    alone: dict      # name -> node: functions red alone here (a red test that uses that function and nothing else)
+
+
+def _mine_run(ws: Path, timeout: float) -> _MineRun | None:
+    """One workspace's evidence. None when the run proves nothing: unreadable files, a failure not laid on tests,
+    a timeout."""
     from collections import Counter
     from harness.solvers.testrun import run_tests
     test_file = "test_mylib.py" if (ws / "test_mylib.py").is_file() else sorted(
         p.name for p in ws.glob("test_*.py"))[0]
     src = (ws / "mylib.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
-    refs = _test_refs((ws / test_file).read_text(encoding="utf-8"))
+    test_src = (ws / test_file).read_text(encoding="utf-8")
+    refs = _test_refs(test_src)
+    skipped = _skipped_tests(ast.parse(test_src))
     rep = run_tests(ws, test_file, timeout=timeout)
     if not rep.ok and (not rep.failed or any(f.startswith("<") or not refs.get(f) for f in rep.failed)):
         return None   # the run failed, timed out, or a failure cannot be laid on functions: no evidence here
     red = set().union(*(refs[f] for f in rep.failed)) if rep.failed else set()
     red_alone = {next(iter(refs[f])) for f in rep.failed if len(refs[f]) == 1}
-    tested = set().union(*refs.values()) if refs else set()
-    defined = Counter(n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+    tested = set().union(set(), *(r for f, r in refs.items() if f not in skipped))
+    defined = Counter(n.name for n in tree.body
+                      if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
     names = _module_names(tree)
-    green, red_forms = {}, {}
+    green, alone = {}, {}
     for node in tree.body:
-        if type(node) is not ast.FunctionDef or node.decorator_list or defined[node.name] != 1                 or node.name in _EXAMPLE_NAMES or node.name not in tested or not _self_contained(node, names):
+        if type(node) is not ast.FunctionDef or node.decorator_list or defined[node.name] != 1 \
+                or node.name in _EXAMPLE_NAMES:
+            continue
+        if node.name in red_alone:
+            alone[node.name] = node
+        if node.name in red or node.name not in tested or not _self_contained(node, names):
             continue
         text = ast.get_source_segment(src, node)
-        if not text:
-            continue
-        if node.name not in red:
+        if text:
             green[node.name] = (ast.dump(node), text)
-        elif node.name in red_alone:
-            red_forms[node.name] = (ast.dump(node), text)
-    return green, red_forms
+    return _MineRun(ws, test_file, src, refs, green, alone)
+
+
+def _cross_check(name: str, text: str, runs: list, stop: float, run_timeout: float) -> bool:
+    """The candidate text in every workspace where `name` is red alone and has the candidate's shape: no test that
+    uses `name` alone may be red there with it (a red one says the text is not what the tests want, or the task is
+    infeasible; either way the text proves nothing). Running out of time is a refusal."""
+    node = ast.parse(text).body[0]
+    for run in runs:
+        own = run.alone.get(name)
+        if own is None:
+            continue
+        if ast.dump(own) == ast.dump(node):
+            return False   # the very text is red here
+        cand = _canonical_substitute(run.src, {name}, {name: (node, text)})
+        if cand is None:
+            continue   # another shape or other parameters: the text would never be put here
+        left = stop - time.monotonic()
+        if left < 0.5:
+            return False
+        tmp = Path(tempfile.mkdtemp(prefix="coding_mine_"))
+        try:
+            shutil.copytree(run.ws, tmp / "ws", ignore=shutil.ignore_patterns("__pycache__"))
+            _write_mylib(tmp / "ws" / "mylib.py", cand)
+            rep = run_in_dir(tmp / "ws", run.test_file, timeout=min(run_timeout, left))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        if any(f.startswith("<") or run.refs.get(f) == {name} for f in rep.failed):
+            return False
+    return True
 
 
 def mine_known_texts(workspaces: Iterable[Path], budget_s: float = MINE_BUDGET_S,
-                     run_timeout: float = MINE_RUN_TIMEOUT) -> dict[str, str]:
-    """name -> text of the functions that at least MINE_MIN_VOTES distinct workspaces hold in one form (same AST)
-    with all the tests that use them green, when that form has at least twice the weight of everything against it:
-    the other green forms, and twice each workspace where the same form is red alone in a test (a red test on the
-    very text is the strongest evidence that the text is not the one the tests want). Only top-level undecorated
-    self-contained functions (`_self_contained`) defined once, names the examples do not show. Each workspace is run
-    once in a throw-away copy, at most `run_timeout` s each and `budget_s` s in all; identical workspaces count once;
-    any trouble with one workspace skips it."""
-    import hashlib
-    votes: dict[str, dict[str, list]] = {}   # name -> AST dump -> [green votes, red-alone votes, text]
-    seen: set[str] = set()
+                     run_timeout: float = MINE_RUN_TIMEOUT) -> tuple[dict[str, str], set[str]]:
+    """(name -> text, final names). A text is accepted when at least MINE_MIN_VOTES distinct workspaces hold it in
+    one form (same AST) with all the tests that use it green, when that form has at least twice the votes of the
+    other green forms together, and when it passes `_cross_check` (no test of that function alone stays red with it
+    where the function is red). It is final (`_FINAL`) with MINE_FINAL_VOTES votes and no other green form; else it
+    may still be substituted, but the repair is checked like any other. Only top-level undecorated self-contained
+    functions (`_self_contained`) defined once, names the examples do not show, tests that are not skipped. Each
+    workspace is run once in a throw-away copy, at most `run_timeout` s each and `budget_s` s in all, cross-checks
+    included; workspaces with the same code and tests (AST) count once; any trouble with one workspace skips it."""
+    votes: dict[str, dict[str, list]] = {}   # name -> AST dump -> [green votes, text]
+    runs: list[_MineRun] = []
+    seen: set[tuple[str, str]] = set()
     stop = time.monotonic() + budget_s
     for ws in workspaces:
         left = stop - time.monotonic()
@@ -1148,36 +1214,54 @@ def mine_known_texts(workspaces: Iterable[Path], budget_s: float = MINE_BUDGET_S
             break
         try:
             ws = Path(ws)
-            key = hashlib.sha256(b"\0".join(p.read_bytes() for p in sorted(ws.glob("*.py")))).hexdigest()
+            tests = sorted(ws.glob("test_*.py"))
+            key = (ast.dump(ast.parse((ws / "mylib.py").read_bytes())),
+                   "\0".join(ast.dump(ast.parse(p.read_bytes())) for p in tests))
             if key in seen:
                 continue
             seen.add(key)
-            got = _mine_votes(ws, min(run_timeout, left))
+            run = _mine_run(ws, min(run_timeout, left))
         except Exception:
             continue
-        if got is None:
+        if run is None:
             continue
-        for col, forms in enumerate(got):
-            for name, (dump, text) in forms.items():
-                votes.setdefault(name, {}).setdefault(dump, [0, 0, text])[col] += 1
-    out: dict[str, str] = {}
-    for name, forms in votes.items():
+        runs.append(run)
+        for name, (dump, text) in run.green.items():
+            votes.setdefault(name, {}).setdefault(dump, [0, text])[0] += 1
+    texts: dict[str, str] = {}
+    final: set[str] = set()
+    for name, forms in sorted(votes.items()):
         best = max(forms.values(), key=lambda e: e[0])
-        against = sum(e[0] for e in forms.values() if e is not best) + 2 * best[1]
-        if best[0] >= MINE_MIN_VOTES and best[0] >= 2 * against:
-            out[name] = best[2]
-    return out
+        against = sum(e[0] for e in forms.values() if e is not best)
+        if best[0] < MINE_MIN_VOTES or best[0] < 2 * against:
+            continue
+        try:
+            if not _cross_check(name, best[1], runs, stop, run_timeout):
+                continue
+        except Exception:
+            continue
+        texts[name] = best[1]
+        if best[0] >= MINE_FINAL_VOTES and against == 0:
+            final.add(name)
+    return texts, final
 
 
-def install_known_texts(texts: dict | None) -> list[str]:
-    """Add mined texts to the known ones; the example names keep their example texts. Returns the names added."""
+def install_known_texts(texts: dict | None, final: Iterable[str] = ()) -> list[str]:
+    """Add mined texts to the known ones; names in `final` become final words (`_FINAL`). The example names keep
+    their example texts. Returns the names added."""
     added = []
+    final = set(final)
     for name, text in (texts or {}).items():
         try:
             body = ast.parse(text).body
-            if name in _EXAMPLE_NAMES or len(body) != 1 or type(body[0]) is not ast.FunctionDef                     or body[0].name != name or body[0].decorator_list:
+            if name in _EXAMPLE_NAMES or len(body) != 1 or type(body[0]) is not ast.FunctionDef \
+                    or body[0].name != name or body[0].decorator_list:
                 continue
             _CANON[name], _CANON_NODES[name], _CANON_TEXT[name] = ast.dump(body[0]), body[0], text
+            if name in final:
+                _FINAL.add(name)
+            else:
+                _FINAL.discard(name)
             added.append(name)
         except Exception:
             continue
@@ -1221,26 +1305,28 @@ def _same_shape(node: ast.FunctionDef, ref: ast.FunctionDef) -> bool:
         and _guards(node) <= _guards(ref)
 
 
-def _canonical_substitute(src: str, names: set[str]) -> str | None:
+def _canonical_substitute(src: str, names: set[str], table: dict | None = None) -> str | None:
     """`src` with the known correct text in place of every top-level function of `names` that has a known name,
     the known parameters, no decorators, the known shape (`_same_shape`) and another body; None when there is
-    nothing to replace."""
+    nothing to replace. `table` (name -> (node, text)) stands for the known texts when given."""
     try:
         tree = ast.parse(src)
     except (SyntaxError, ValueError, RecursionError):
         return None
+    if table is None:
+        table = {n: (_CANON_NODES[n], _CANON_TEXT[n]) for n in names if n in _CANON}
     lines = src.split("\n")
     edits = []
     for node in tree.body:
-        if type(node) is not ast.FunctionDef or node.name not in names or node.name not in _CANON:
+        if type(node) is not ast.FunctionDef or node.name not in names or node.name not in table:
             continue
-        ref = _CANON_NODES[node.name]
+        ref, text = table[node.name]
         if node.decorator_list or node.col_offset or ast.dump(node.args) != ast.dump(ref.args) \
                 or not _same_shape(node, ref):
             continue
-        if ast.dump(node) == _CANON[node.name]:
+        if ast.dump(node) == ast.dump(ref):
             continue
-        edits.append((node.lineno - 1, node.end_lineno, _CANON_TEXT[node.name].split("\n")))
+        edits.append((node.lineno - 1, node.end_lineno, text.split("\n")))
     if not edits:
         return None
     for start, stop, text in sorted(edits, reverse=True):
@@ -1279,7 +1365,7 @@ def known_text_fails(test_src: str, src: str, failed: Iterable[str], refs: dict[
             elif not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant)):
                 return False   # imports, assignments, code at module level: the known text may not be what runs
         known = {st.name for st in lib.body if type(st) is ast.FunctionDef and bound[st.name] == 1
-                 and not st.decorator_list and st.name in _CANON and _CANON[st.name] == ast.dump(st)
+                 and not st.decorator_list and st.name in _FINAL and _CANON.get(st.name) == ast.dump(st)
                  and _self_contained(st, set(bound))}
         methods = [fn.name for cls in tree.body if isinstance(cls, ast.ClassDef) for fn in cls.body
                    if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
@@ -1348,7 +1434,10 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                 return SolveResult("infeasible", note="a test fails on the known correct text")
             try:
                 used = set().union(*(refs.get(f, set()) for f in report.failed))
-                for name in sorted(used & set(_CANON)):   # one at a time: each must earn its place
+                # one at a time: each must earn its place. Final words first: a mined text with weak evidence
+                # comes after them and leaves the base of the 2c/2d hints alone, so the model sees the real text
+                strong = sorted(used & set(_CANON) & _FINAL)
+                for name in strong + sorted((used & set(_CANON)) - _FINAL):
                     canon = _canonical_substitute(cur, {name})
                     if canon is None:
                         continue
@@ -1360,7 +1449,8 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                     if rep.ok or (not any(f.startswith("<") for f in rep.failed)
                                   and set(rep.failed) < set(report.failed)):
                         cur, report = canon, rep
-                        hint_base, hint_failing = canon, list(rep.failed)
+                        if name in _FINAL:
+                            hint_base, hint_failing = canon, list(rep.failed)
                         substituted.append(name)
                     if report.ok:
                         break
@@ -1402,7 +1492,7 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
         try:
             # the model must see the real buggy text: a known text the search changed again is not the original
             final = {n.name: ast.dump(n) for n in ast.parse(preferred).body if type(n) is ast.FunctionDef}
-            kept = {n for n in substituted if final.get(n) == _CANON[n]}
+            kept = {n for n in substituted if final.get(n) == _CANON[n] and n in _FINAL}
             verify_base = hint_base if len(kept) == len(substituted) else                 (_canonical_substitute(original, kept) if kept else None) or original
             hint = _verify_hint(verify_base, preferred, test_src) if config.verify_coding() else None
         except Exception:
