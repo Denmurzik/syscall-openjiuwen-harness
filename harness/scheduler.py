@@ -698,7 +698,7 @@ def _audit_tasks(tasks: list) -> list:
 async def _audit_stage(tasks, client, ledger, t0, deadline_s, status, traj, state) -> None:
     """HARNESS_AUDIT_FORMS: functions that stand green in rival forms across the answered coding tasks
     (`harness.audit`). One unit per function: two 8-token calls (MODEL_FAST, MODEL_ALT); the option both name replaces
-    the other forms where the visible tests stay green, and an option the set holds less often needs MODEL_REASON too.
+    the other shown forms where every test file stays green, and an option the set holds less often needs MODEL_REASON.
     No rival forms: no call. The spend gate holds for every unit and every third opinion. Never fails the run."""
     if not tasks or state["stop"] or ledger.exhausted or ledger.spent >= AUDIT_SPEND_LIMIT * ledger.budget:
         return
@@ -730,7 +730,7 @@ async def _audit_stage(tasks, client, ledger, t0, deadline_s, status, traj, stat
             return True
 
         def unit(name, forms):
-            est = (sum(len(f["text"]) for f in forms[:audit.MAX_FORMS]) // 30 + 60) * len(config.ARBITRATE_MODELS)
+            est = audit.unit_estimate(forms)
 
             async def go():
                 if not gate():

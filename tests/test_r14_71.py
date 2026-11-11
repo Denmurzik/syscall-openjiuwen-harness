@@ -29,13 +29,15 @@ TEST_NO_MIN = TEST.replace("    def test_minimum(self):\n        self.assertEqua
 
 
 class Fake:
-    """Replies per model, in order; every call recorded. `charge` is added to the ledger per call."""
+    """Replies per model, in order; every call recorded. `charge` is added to the ledger per call. A digit reply of
+    MODEL_ALT names the option in MODEL_FAST's order (the audit shows ALT the options reversed); `raw` turns that off."""
 
-    def __init__(self, replies, charge=0.0, budget=100000):
+    def __init__(self, replies, charge=0.0, budget=100000, raw=False):
         self.replies = {m: list(replies) for m in ARBITRATE_MODELS} if isinstance(replies, list) else \
             {m: list(v) for m, v in replies.items()}
         self.calls = []
         self.charge = charge
+        self.raw = raw
         self.ledger = TokenLedger(budget, 0)
 
     async def chat(self, model, messages, max_tokens, **extra):
@@ -47,6 +49,10 @@ class Fake:
             raise r
         if isinstance(r, ChatResult):
             return r
+        regex = (extra.get("extra_body") or {}).get("guided_regex")
+        if model == ARBITRATE_MODELS[1] and not self.raw and regex and r.isdigit():
+            n = int(regex[3:-1])
+            r = str(n + 1 - int(r))
         return ChatResult(text=r, prompt_tokens=10, completion_tokens=1, cost=2)
 
 
@@ -60,7 +66,9 @@ def _tasks(tmp_path, libs, tests=None, libs2=None):
     out = []
     for i, lib in enumerate(libs):
         d = tmp_path / f"coding_{i}"
-        _write(d, lib + "\n\n" + ((libs2 or {}).get(i, GOOD2)) + "\n\n" + OTHER, (tests or {}).get(i, TEST))
+        # `_TASK`: every workspace differs (identical ones count once)
+        _write(d, lib + "\n\n" + ((libs2 or {}).get(i, GOOD2)) + "\n\n" + OTHER + f"\n_TASK = {i}\n",
+               (tests or {}).get(i, TEST))
         out.append(Task(f"coding_{i}", "coding", "fix", 2.0, "unittest", d, d / "workspace"))
     return out
 
@@ -84,9 +92,35 @@ def test_rival_forms_are_found_with_votes(tmp_path):
     holders, rivals = audit.census(_tasks(tmp_path, [GOOD, BAD, GOOD]))
     assert list(rivals) == ["minimum"]   # count_pos is unique in the set; total is an example function
     assert [f["votes"] for f in rivals["minimum"]] == [2, 1]
-    shown, rest, rows = audit.options("minimum", rivals["minimum"], holders)
-    assert [o["votes"] for o in shown] == [2, 1] and rest == []
-    assert rows and all(" -> " in r and " | " in r for r in rows)
+    shown, rows = audit.options("minimum", rivals["minimum"], holders)
+    assert [o["votes"] for o in shown] == [2, 1]
+    assert rows and all(c.startswith("minimum(") and len(res) == 2 and res[0] != res[1] for c, res in rows)
+
+
+def test_identical_workspaces_vote_once_and_still_take_the_winner(tmp_path):
+    tasks = _tasks(tmp_path, [GOOD, BAD, GOOD, BAD])
+    (tasks[3].workspace / "mylib.py").write_text(_lib(tasks[1]), encoding="utf-8")   # coding_3 = coding_1
+    holders, rivals = audit.census(tasks)
+    assert len(holders) == 4 and [f["votes"] for f in rivals["minimum"]] == [2, 1]
+    winner, _ = _decide(Fake(["1"]), rivals, holders)
+    assert sorted(audit.apply("minimum", winner, holders)) == ["coding_1", "coding_3"]
+
+
+def test_a_holder_passes_every_test_file(tmp_path):
+    tasks = _tasks(tmp_path, [GOOD, BAD, GOOD])
+    (tasks[1].workspace / "test_extra.py").write_text(
+        TEST.replace("m.minimum([4, -1, 7]), -1", "m.minimum([3, 5]), 3"), encoding="utf-8")
+    holders, rivals = audit.census(tasks)
+    assert [h.task.task_id for h in holders] == ["coding_0", "coding_2"] and rivals == {}
+
+
+def test_a_replacement_must_keep_every_test_file_green(tmp_path):
+    tasks = _tasks(tmp_path, [GOOD, BAD, GOOD])
+    (tasks[1].workspace / "test_extra.py").write_text(
+        TEST.replace("m.minimum([4, -1, 7]), -1", "m.minimum([4, 1, 7]), 0"), encoding="utf-8")   # only BAD passes
+    holders, rivals = audit.census(tasks)
+    winner, _ = _decide(Fake(["1"]), rivals, holders)
+    assert audit.apply("minimum", winner, holders) == [] and "best = 0" in _lib(tasks[1])
 
 
 def test_example_functions_are_never_audited(tmp_path):
@@ -213,18 +247,19 @@ def test_a_tie_needs_no_third_vote(tmp_path):
     assert winner["text"] == GOOD.strip() and len(client.calls) == 2
 
 
-def test_forms_with_the_same_behaviour_are_one_option(tmp_path):
-    """A rewrite of the right text and the right text are one option with their votes together: the bug held by
-    more files than either form alone is the minority, and files with the rewrite are left as they are."""
+def test_forms_with_the_same_behaviour_are_one_option_without_adding_votes(tmp_path):
+    """A rewrite of the right text and the right text are one option (shown once, its files left as they are), but
+    its votes are those of one text: 3 files hold the bug, 2 + 2 the right behaviour, and the bug is still the
+    majority, so the right option needs the third opinion."""
     same = GOOD.replace("if x < best:", "if best > x:")
     tasks = _tasks(tmp_path, [BAD, BAD, BAD, GOOD, GOOD, same, same])
     holders, rivals = audit.census(tasks)
     assert [f["votes"] for f in rivals["minimum"]] == [3, 2, 2]
-    shown, rest, rows = audit.options("minimum", rivals["minimum"], holders)
-    assert [o["votes"] for o in shown] == [4, 3] and len(shown[0]["dumps"]) == 2 and rest == []
-    client = Fake(["1"])
+    shown, rows = audit.options("minimum", rivals["minimum"], holders)
+    assert [o["votes"] for o in shown] == [3, 2] and len(shown[1]["dumps"]) == 2
+    client = Fake({ARBITRATE_MODELS[0]: ["2"], ARBITRATE_MODELS[1]: ["2"], MODEL_REASON: ["2"]})
     winner, note = _decide(client, rivals, holders)
-    assert len(client.calls) == 2 and "both models" in note   # the majority option: no third opinion
+    assert len(client.calls) == 3 and "minority" in note
     assert sorted(audit.apply("minimum", winner, holders)) == ["coding_0", "coding_1", "coding_2"]
     assert "if best > x:" in _lib(tasks[5]) and "best = xs[0]" in _lib(tasks[0])
 
@@ -273,16 +308,53 @@ def test_untested_form_picked_against_the_tested_one_needs_the_third_vote(tmp_pa
     assert _decide(client, rivals, holders)[0] is None and len(client.calls) == 3
 
 
-def test_untested_forms_take_the_winner_of_the_tested_ones(tmp_path):
+def test_an_untested_form_not_shown_is_never_rewritten(tmp_path):
     third = GOOD.replace("best = xs[0]", "best = 100")
     tasks = _tasks(tmp_path, [GOOD, GOOD, BAD, third], tests={3: TEST_NO_MIN})
     holders, rivals = audit.census(tasks)
-    shown, rest, _ = audit.options("minimum", rivals["minimum"], holders)
-    assert [o["votes"] for o in shown] == [2, 1] and len(rest) == 1
+    shown, _ = audit.options("minimum", rivals["minimum"], holders)
+    assert [o["votes"] for o in shown] == [2, 1]
     client = Fake(["1"])
     winner, _ = _decide(client, rivals, holders)
-    assert "best = 100" not in client.calls[0][1][1]["content"]   # the untested option is not shown
-    assert sorted(audit.apply("minimum", winner, holders)) == ["coding_2", "coding_3"]
+    assert all("best = 100" not in c[1][1]["content"] for c in client.calls)   # the untested option is not shown
+    assert audit.apply("minimum", winner, holders) == ["coding_2"]
+    assert "best = 100" in _lib(tasks[3])
+
+
+def test_two_wrong_tested_forms_never_overwrite_the_right_untested_one(tmp_path):
+    """The reviewer's case: two wrong forms under visible tests (1:1, the models must name one) and the right form
+    in a file that does not test the function. That file keeps its form."""
+    bad3 = "def minimum(xs):\n    return min(xs[1:])\n"   # green on [4, -1, 7], wrong on [3, 5]
+    tasks = _tasks(tmp_path, [BAD, bad3, GOOD], tests={2: TEST_NO_MIN})
+    holders, rivals = audit.census(tasks)
+    shown, _ = audit.options("minimum", rivals["minimum"], holders)
+    assert [o["votes"] for o in shown] == [1, 1] and not any("best = xs[0]" in o["text"] for o in shown)
+    winner, note = _decide(Fake(["1"]), rivals, holders)
+    assert winner is not None and "both models" in note
+    assert "coding_2" not in audit.apply("minimum", winner, holders)
+    assert "best = xs[0]" in _lib(tasks[2])
+
+
+def test_alt_sees_the_options_in_reverse_order(tmp_path):
+    holders, rivals = audit.census(_tasks(tmp_path, [GOOD, GOOD, BAD]))
+    client = Fake({ARBITRATE_MODELS[0]: ["1"], ARBITRATE_MODELS[1]: ["1"]}, raw=True)
+    winner, note = _decide(client, rivals, holders)
+    assert winner is None and "no agreement (1, 2)" in note   # both said "1": the first place, two different options
+    fast = next(c[1][1]["content"] for c in client.calls if c[0] == ARBITRATE_MODELS[0])
+    alt = next(c[1][1]["content"] for c in client.calls if c[0] == ARBITRATE_MODELS[1])
+    assert fast.index("best = xs[0]") < fast.index("best = 0") and alt.index("best = 0") < alt.index("best = xs[0]")
+    row = lambda text: next(ln for ln in text.splitlines() if ln.startswith("minimum([3, 5])"))  # noqa: E731
+    assert row(fast).endswith("3 | 0") and row(alt).endswith("0 | 3")
+    client = Fake({ARBITRATE_MODELS[0]: ["1"], ARBITRATE_MODELS[1]: ["2"]}, raw=True)
+    assert _decide(client, rivals, holders)[0]["text"] == GOOD.strip()
+
+
+@pytest.mark.parametrize("text, pick", [
+    ("2", 1), ("Option 2", 1), ("**2**", 1), ("Option 1 has a bug.\n2", 1), ("<think>option 1</think>Option 2.", 1),
+    ("Option 1 is wrong, option 2 is right.", 1), ("the answer is option 2 (n=1)", 1),
+    ("I would pick the second one", None), ("Answer: 9", None), ("", None), ("option 3", None)])
+def test_reason_pick(text, pick):
+    assert audit.reason_pick(text, 2) == pick
 
 
 # ---------------------------------------------------------------- the stage inside a run
@@ -297,7 +369,7 @@ def _run_dir(tmp_path, libs, libs2=None, search=0):
     root = tmp_path / "tasks"
     for i, lib in enumerate(libs):
         d = root / f"coding_{i}"
-        _write(d, lib + "\n\n" + ((libs2 or {}).get(i, GOOD2)) + "\n\n" + OTHER, TEST)
+        _write(d, lib + "\n\n" + ((libs2 or {}).get(i, GOOD2)) + "\n\n" + OTHER + f"\n_TASK = {i}\n", TEST)
         (d / "task.json").write_text(json.dumps({"task_id": f"coding_{i}", "task_type": "coding", "instruction": "fix",
                                                  "reward": 2, "check": "unittest"}), encoding="utf-8")
     for i in range(search):
@@ -428,7 +500,7 @@ def test_third_opinions_are_capped_per_run(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "LLM_WORKERS", 1)
     root = _run_dir(tmp_path, [BAD, BAD, GOOD], libs2={0: BAD2, 1: BAD2, 2: GOOD2})
     client = Fake({ARBITRATE_MODELS[0]: ["2", "2"], ARBITRATE_MODELS[1]: ["2", "2"],
-                   MODEL_REASON: ["Option 2. 2", "Option 2. 2"]})
+                   MODEL_REASON: ["Option 2.", "Option 2."]})
     scheduler.run(root, 100000, client, deadline_s=600, phase1_workers=2)
     assert [c[0] for c in client.calls].count(MODEL_REASON) == 1
     fixed = sum("best = xs[0]" in _mylib(root, i) for i in range(3)) + sum("x > 0" in _mylib(root, i)
