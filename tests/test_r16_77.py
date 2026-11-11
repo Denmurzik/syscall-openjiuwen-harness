@@ -1,18 +1,10 @@
-"""Expert pass 8: task shapes far from the examples (plain test functions, another module name, `import *`, prose
-knowledge bases), the hop check of batched 2a specs, and the harness as an openJiuwen agent."""
+"""Round 16, task 77 (expert pass 8, patch c): the hop check of batched 2a specs."""
 import asyncio
 import json
 
-from harness import json_route, llm_routes as L
+from harness import json_route
 from harness.llm import ChatResult
-from harness.result import SolveResult
-from harness.solvers import probe
-from harness.solvers.testrun import run_tests
 from harness.tasks import Task
-
-INS = ("Run `python3 test_mylib.py` in the current directory; some tests fail. Fix the bugs in mylib.py (do not edit "
-       "the tests) until all tests pass. Work only inside the current directory. When you are done, write ONLY the "
-       "word DONE to the file answer.txt in the current directory (for example with bash: echo 42 > answer.txt).")
 
 
 class Fake:
@@ -67,3 +59,35 @@ def test_a_batched_spec_with_a_wrong_hop_count_gets_its_own_call(tmp_path, monke
     assert len(client.calls) == 2                      # the batch, then the dropped text alone
     assert out["s1"].status == "solved" and out["s1"].answer == "1999"
     assert out["s2"].status == "solved" and out["s2"].answer == "1970"
+
+
+# ------------------------------------------------------------------ fix round 1: the chain told twice is not counted
+STEPS = ("- The kb/ directory contains a small knowledge base of markdown files.\n- We need to find the mentor of {E1}.\n"
+         "- Then find the mentor of that person.\n- Then find the employer of that second mentor.\n"
+         "- Finally, determine the city where that employer's headquarters is located.\n"
+         "In which city is the headquarters of the employer of the mentor of the mentor of {E1}? Use the file tools or "
+         "bash (ls, grep, cat) to find it.")
+LEAD_IN = ("Let's trace the mentorship chain for {E1}. Who is the mentor of the mentor of the mentor of the mentor of "
+           "{E1}? (The directory kb/ contains a small knowledge base of markdown files.) Use the file tools or bash "
+           "(ls, grep, cat) to find it.")
+Q21 = ("The directory kb/ contains a small knowledge base of markdown files. Which year saw the foundation of the "
+       "employer of the mentor of {E1}? Use the file tools or bash (ls, grep, cat) to find it.")
+
+
+def test_a_step_style_text_keeps_its_correct_batched_spec():
+    # runs/r5/llm search_0073: the steps and the question both name the chain (Mentor 5 words, Employer 3 words)
+    spec, _ = json_route._from_hops({"entity": "{E1}", "hops": ["Mentor", "Mentor", "Employer", "Headquarters"]})
+    assert not json_route.hop_count_mismatch(STEPS, spec)
+
+
+def test_a_lead_in_with_mentorship_keeps_its_correct_batched_spec():
+    # runs/r5/llm search_0137: "mentorship" is not a hop
+    spec, _ = json_route._from_hops({"entity": "{E1}", "hops": ["Mentor", "Mentor", "Mentor", "Mentor"]})
+    assert not json_route.hop_count_mismatch(LEAD_IN, spec)
+    assert json_route.hop_count_mismatch(LEAD_IN, {**spec, "path": ["Mentor", "Mentor", "Mentor", "Mentor", "Mentor"]})
+
+
+def test_search_0021_wrong_batched_spec_is_still_rejected():
+    good = {"entity": "{E1}", "path": ["Mentor", "Employer"], "field": "Founded"}
+    assert not json_route.hop_count_mismatch(Q21, good)
+    assert json_route.hop_count_mismatch(Q21, {**good, "path": ["Mentor", "Mentor", "Employer"]})

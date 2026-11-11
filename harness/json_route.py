@@ -478,8 +478,8 @@ _BATCH_NOTE = (
 
 
 _HOP_WORDS = {
-    "Mentor": re.compile(r"\bmentor", re.I),
-    "Employer": re.compile(r"\bemploy|\bworks? for\b|\bpayroll\b", re.I),
+    "Mentor": re.compile(r"\bmentor(?:s|ing)?\b", re.I),  # not "mentorship"
+    "Employer": re.compile(r"\bemploy(?:er|ers|s|ed)?\b|\bworks? for\b|\bpayroll\b", re.I),
 }
 
 
@@ -494,8 +494,13 @@ def hop_count_mismatch(template: str, spec: object) -> bool:
     if not isinstance(path, list) or not isinstance(field, str):
         return False
     hops = [h for h in path if isinstance(h, str)] + [field]
+    # counted only when the relation words sit in one sentence: a text that lists the steps and then asks the
+    # question, or adds a lead-in ("trace the mentorship chain"), tells the chain twice; no such sentence: not counted
+    sents = [s for s in split_sentences(template) if any(rx.search(s) for rx in _HOP_WORDS.values())]
+    if len(sents) != 1:
+        return False
     # a relation the text never names by these words is worded another way ("pays the salary of"): not counted
-    counts = {name: len(rx.findall(template)) for name, rx in _HOP_WORDS.items()}
+    counts = {name: len(rx.findall(sents[0])) for name, rx in _HOP_WORDS.items()}
     return any(n and hops.count(name) != n for name, n in counts.items())
 
 
