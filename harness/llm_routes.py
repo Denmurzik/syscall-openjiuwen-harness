@@ -682,9 +682,10 @@ def _budget_is_free(client) -> bool:
         return False  # fake or foreign clients: keep the old reward threshold
 
 
-async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveResult:
+async def fix_coding(task: Task, client, resume: dict | None = None, restart: str | None = None) -> SolveResult:
     """`resume`: the `ladder` of an earlier result that found the LLM unavailable. Models answer the same at
-    temperature 0, so only the rungs that got no answer are bought again, from the partial fix reached so far."""
+    temperature 0, so only the rungs that got no answer are bought again, from the partial fix reached so far.
+    `restart`: the file before phase-1 mutations (`extra["restart"]` of a partial repair); asked for first."""
     resume = resume or {}
     ws = Path(task.workspace)
     mylib_path = ws / "mylib.py"
@@ -700,7 +701,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveRes
     if provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
         return SolveResult("infeasible", note="tests contradict each other")
     output = base_report.output
-    restart = resume.get("restart")
+    restart = restart or resume.get("restart")
     if restart and restart != base and not resume.get("answered"):
         # phase 1 left a partial repair: mutations no one checked. One MODEL_FAST call for the whole repair from
         # the file before them; a green result is taken, anything else leaves the ladder below as it was
@@ -714,10 +715,12 @@ async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveRes
                     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                     return SolveResult("solved", answer="DONE",
                                        note=f"patched by {MODEL_FAST} from the file before mutations")
-        except LLMUnavailable:
-            # the ladder below meets the same proxy and keeps its own retry state; the retry pass resumes that
-            # ladder from the partial file (the restart is not asked again)
-            pass
+        except LLMUnavailable as e:
+            # the same proxy would cost the ladder a second timeout: stop here and keep the restart, so that the
+            # retry pass asks it again
+            return SolveResult("unparsed", note=f"llm unavailable: {e}",
+                               extra={"ladder": {"answered": [], "base": base, "restart": restart},
+                                      "restart": restart})
     attempts = [(MODEL_FAST, 400, {}), (MODEL_ALT, 600, {})]
     if task.reward >= 3 or _budget_is_free(client):
         attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))
