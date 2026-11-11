@@ -403,7 +403,8 @@ class LLMClient:
         stripped = False  # structured params dropped for this call as a trial
         recovered = 0  # times the base URL or the model id was changed for this call
         gen = self._fix_gen
-        prompt_cost = self.ledger.cost(len(str(messages)) // 4, 0)
+        prompt_tokens = len(str(messages)) // 4
+        prompt_cost = self.ledger.cost(prompt_tokens, 0)
         min_tokens = config.MIN_REASONING_CALL_TOKENS if "reasoning_effort" in extra else config.MIN_CALL_TOKENS
         while True:
             if not self.structured_ok or stripped:
@@ -421,6 +422,14 @@ class LLMClient:
                 r = await asyncio.wait_for(m.invoke(messages, max_tokens=limit, **extra), self.timeout)
             except Exception as exc:
                 status = _status_of(exc)
+                msg = f"{type(exc).__name__}: {exc}"[:300]
+                connect = status is None and _is_connect_error(exc)
+                transport = status is None and not connect and _is_transport_failure(exc)
+                if not connect and not transport:
+                    # the request went out: the proxy bills its input whatever the answer (a connect error never
+                    # left, a transport failure has its own flat charge below). Inside this call's hold, so the
+                    # ledger never goes past what hold() allowed.
+                    record_call(model, prompt_tokens, 0, self.ledger.charge(prompt_tokens, 0), error=msg[:100])
                 if status in (402, 403):
                     self.ledger.mark_exhausted()
                     raise BudgetExhausted(f"HTTP {status}") from exc
@@ -431,15 +440,14 @@ class LLMClient:
                     logger.warning("HTTP 400 with structured output; retrying without it")
                     stripped = True
                     continue
-                msg = f"{type(exc).__name__}: {exc}"[:300]
                 delays = config.retry_delays()
-                connect = status is None and _is_connect_error(exc)
                 if status == 429 and attempt < len(delays):
                     wait = delays[attempt]
                     attempt += 1
                 elif connect or (status is not None and status >= 500):
-                    # no generation behind it: not charged, safe to repeat after the pause
-                    record_call(model, 0, 0, 0.0, error=msg[:100])
+                    # no generation behind it (a 5xx was charged its input above): safe to repeat after the pause
+                    if connect:
+                        record_call(model, 0, 0, 0.0, error=msg[:100])
                     self._proxy_failed(model, sent)
                     tries += 1
                     if tries >= MODEL_FAILING_AFTER or self._health[model].out:
@@ -447,7 +455,7 @@ class LLMClient:
                             self._health[model].out = True
                             raise ModelFailing(msg) from exc
                         alive = self._served > served_before or await self._ping(model)
-                elif status is None and _is_transport_failure(exc):
+                elif transport:
                     # may have been served and billed: a flat amount, never more than the call can cost; never repeat in place
                     charge = min(TIMEOUT_CHARGE, math.ceil(prompt_cost + limit))
                     record_call(model, 0, charge, self.ledger.charge(0, charge), error=msg[:100])
@@ -457,8 +465,7 @@ class LLMClient:
                         raise ModelFailing(msg) from exc
                     raise ProxyDown(msg) from exc
                 else:
-                    # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy
-                    record_call(model, 0, 0, 0.0, error=msg[:100])
+                    # other 4xx (400/404/422, exhausted 429): deterministic, not a dead proxy; charged above
                     if status in (400, 404) and recovered < 2 and await self._fix_endpoint(model, status, msg, gen):
                         recovered += 1
                         m = self._model(model)

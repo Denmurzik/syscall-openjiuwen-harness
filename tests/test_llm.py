@@ -14,6 +14,7 @@ from harness.config import TIMEOUT_CHARGE
 
 CHARGE_16 = 17  # a timed-out call of "hi" with a limit of 16: what it can cost at most, far below TIMEOUT_CHARGE
 DEAD_S = 300  # the default is the run deadline: these tests want the limit within reach
+HI_INPUT = (len(str([{"role": "user", "content": "hi"}])) // 4) / 10  # the input charge of a failed "hi" call
 
 
 @pytest.fixture(autouse=True)
@@ -27,9 +28,11 @@ class FakeModel:
         self.behavior = behavior
         self.calls = 0
         self.last_messages = None
+        self.limits = []  # max_tokens of each request: a ping asks for 1
 
     async def invoke(self, messages, **kw):
         self.calls += 1
+        self.limits.append(kw.get("max_tokens"))
         self.last_messages = messages
         return await self.behavior()
 
@@ -168,6 +171,11 @@ def _raiser(exc_factory):
     return bad
 
 
+def _failed_input(*fakes):
+    """What the failed real calls (not the pings) of these fakes cost: their input, as they reached the proxy."""
+    return HI_INPUT * sum(1 for f in fakes for lim in f.limits if lim != 1)
+
+
 def _no_sleep(monkeypatch):
     sleeps = []
 
@@ -190,8 +198,9 @@ def test_4xx_never_exhausts(status):
     for _ in range(5):
         with pytest.raises(LLMUnavailable):
             run(c)
-    # a 404 is tried once more on the other spelling of the base URL (once per run)
-    assert not ledger.exhausted and ledger.spent == 0 and fake.calls == (6 if status == 404 else 5)
+    # a 404 is tried once more on the other spelling of the base URL (once per run); each try is charged its input
+    assert not ledger.exhausted and fake.calls == (6 if status == 404 else 5)
+    assert ledger.spent == pytest.approx(HI_INPUT * fake.calls)
 
 
 def _req():
@@ -317,18 +326,18 @@ def test_structured_400_retries_without_and_remembers():
                            response_format={"type": "json_object"}, extra_body={"x": 1}))
     assert r.text == "ok" and c.structured_ok is False
     assert "response_format" not in seen[-1] and "extra_body" not in seen[-1]
-    assert ledger.spent == r.cost
+    assert ledger.spent == pytest.approx(r.cost + HI_INPUT)  # the rejected try went out: its input is charged
     asyncio.run(c.chat("m", [{"role": "user", "content": "hi"}], 16, response_format={"type": "json_object"}))
     assert len(seen) == 3 and "response_format" not in seen[-1]
 
 
-def test_400_without_structured_is_unavailable_no_charge():
+def test_400_without_structured_is_unavailable_charged_its_input():
     async def bad():
         raise _bad_request()
     c, fake, ledger = make(bad)
     with pytest.raises(LLMUnavailable):
         run(c)
-    assert fake.calls == 1 and c.structured_ok is True and ledger.spent == 0
+    assert fake.calls == 1 and c.structured_ok is True and ledger.spent == pytest.approx(HI_INPUT)
 
 
 def test_structured_400_both_ways_keeps_flag():
@@ -355,12 +364,12 @@ def _script(*steps):
     return beh
 
 
-def test_5xx_retried_after_shared_pause_and_not_charged(monkeypatch):
+def test_5xx_retried_after_shared_pause_and_charged_its_input(monkeypatch):
     c, fake, ledger = make(_script(HTTPErr(500), _ok()))
     clock, _ = _fake_time(monkeypatch, c)
     t0 = clock.t
     assert run(c).text == "ok"
-    assert fake.calls == 2 and ledger.spent == 2  # only the served call: 10/10 + 1
+    assert fake.calls == 2 and ledger.spent == pytest.approx(2 + HI_INPUT)  # the served call 10/10 + 1, the 500's input
     assert clock.t - t0 == config.RETRY_DELAYS[0]
 
 
@@ -370,7 +379,7 @@ def test_5xx_alone_never_kills_before_dead_s(monkeypatch):
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
         run(c)
-    assert clock.t - t0 >= DEAD_S and ledger.exhausted and ledger.spent == 0
+    assert clock.t - t0 >= DEAD_S and ledger.exhausted and ledger.spent == pytest.approx(HI_INPUT * fake.calls)
     assert 6 <= fake.calls <= 15  # the pause grows: not a hammering of the proxy
 
 
@@ -411,7 +420,7 @@ def test_outage_of_four_minutes_is_survived(monkeypatch):
         return _ok()
     fake.behavior = beh
     assert run(c).text == "ok"
-    assert not ledger.exhausted and ledger.spent == 2
+    assert not ledger.exhausted and ledger.spent == pytest.approx(2 + HI_INPUT * (fake.calls - 1))
 
 
 def test_success_ends_the_outage(monkeypatch):
@@ -641,7 +650,7 @@ def test_retry_after_5xx_takes_a_fresh_hold(monkeypatch):
         return _ok(p=0, c=5)
     c, fake, ledger, seen = _budgeted(1000, 100, beh)
     asyncio.run(_ask(c, 16))
-    assert ledger.held == 0 and ledger.spent == 5
+    assert ledger.held == 0 and ledger.spent == pytest.approx(5 + HI_INPUT)  # the served call, the input of the 500 (8 tokens too)
 
 
 def test_reasoning_outside_completion_is_charged():
@@ -770,7 +779,7 @@ def test_ping_is_charged_like_any_call_and_asks_for_one_token(monkeypatch):
     fakes["alt"].invoke = invoke
     with pytest.raises(ModelFailing):
         _say(c, "fast")
-    assert seen == {"max_tokens": 1} and ledger.spent == 2
+    assert seen == {"max_tokens": 1} and ledger.spent == pytest.approx(_failed_input(fakes["fast"]) + 2)  # the 503s, the ping
 
 
 def test_blip_that_ends_during_the_ping_stays_on_the_same_model(monkeypatch):
@@ -856,7 +865,7 @@ def test_model_that_answered_nothing_yet_is_not_taken_for_alive(monkeypatch):
     c, fakes, ledger, clock = _models(monkeypatch, fast=_down(), alt=_down(), reason=_down())
     with pytest.raises(BudgetExhausted):
         _say(c, "fast")
-    assert ledger.spent == 0 and clock.t - 1000 >= DEAD_S
+    assert ledger.spent == pytest.approx(_failed_input(*fakes.values())) and clock.t - 1000 >= DEAD_S  # failed pings are free
 
 
 def test_success_elsewhere_ends_the_wait_on_a_pause():
@@ -932,7 +941,7 @@ def test_proxy_is_dead_when_no_model_answers(monkeypatch):
     t0 = clock.t
     with pytest.raises(BudgetExhausted):
         asyncio.run(chat_or_alt(c, config.MODEL_FAST, [{"role": "user", "content": "hi"}], 16))
-    assert clock.t - t0 >= DEAD_S and ledger.exhausted and ledger.spent == 0
+    assert clock.t - t0 >= DEAD_S and ledger.exhausted and ledger.spent == pytest.approx(_failed_input(*fakes.values()))
     assert fakes[config.MODEL_FAST].calls >= 2 and fakes[config.MODEL_ALT].calls >= 2
 
 

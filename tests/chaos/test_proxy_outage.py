@@ -67,6 +67,14 @@ def _spent(run) -> float:
     return float(re.search(r"spent=([\d.]+)", run.stdout).group(1))
 
 
+def _failed_input(bodies) -> float:
+    """Most the failed real calls in `bodies` may cost (round 15, task 73: a request that reached the proxy is charged
+    its input, prompt / 10). The client estimates the prompt from len(str(messages)) // 4; a margin covers the
+    difference in spelling. A ping (max_tokens 1) that fails is free."""
+    real = [b for b in bodies if (b.get("max_tokens") or b.get("max_completion_tokens")) != 1]
+    return 1.5 * sum(len(str(b.get("messages"))) // 4 / 10 for b in real) + 1
+
+
 def _trajectory(tmp: Path) -> list:
     """What each unit did: the message of a failing test keeps it, the run's directory does not outlive the session."""
     path = tmp / "run" / "hlogs" / "trajectory.jsonl"
@@ -119,7 +127,8 @@ def test_proxy_gone_for_good_ends_the_run_after_dead_s(action, tasks, tmp_path, 
     if action == "500":  # held calls: only the dead limit can end this; a reset is not repeated in place,
         # so its tasks simply run out (twice, with the retry pass)
         assert stamps[-1] - stamps[0] >= 7, "ended before the dead limit: three failures must not end the run"
-        assert _spent(run) == 0, "5xx must not be charged"
+        # task 73: each 5xx that reached the proxy is charged its input, nothing more
+        assert 0 < _spent(run) <= _failed_input(proxy.bodies), (run.stdout, len(proxy.bodies))
 
 
 def test_deadline_ends_the_wait_on_the_shared_pause(tasks, tmp_path, make_proxy, baseline):
@@ -129,7 +138,8 @@ def test_deadline_ends_the_wait_on_the_shared_pause(tasks, tmp_path, make_proxy,
                        "HARNESS_STOP_NEW_BEFORE_DEADLINE_S": 10},
                       timeout=150)
     check_common(run, tasks, baseline, bound=90)
-    assert proxy.requests > 0 and _spent(run) == 0
+    # task 73: each 500 that reached the proxy is charged its input, nothing more
+    assert proxy.requests > 0 and 0 < _spent(run) <= _failed_input(proxy.bodies), run.stdout
 
 
 def test_max_tokens_stays_within_budget(tmp_path, make_proxy):
@@ -246,12 +256,13 @@ def test_whole_proxy_outage_costs_nothing_extra_on_the_ladder(tmp_path, make_pro
     """N3: a short outage of every model leaves coding tasks on the cheap rung; the most expensive reply: maxout."""
     monkeypatch.setattr(fakeproxy, "canned", _patch_for)
     tasks = _fixable_tasks(tmp_path / "tasks", 6)
-    sized = []
+    sized, failed = [], []
     blip = Blip(3.0, "503")
 
     def behavior(n, body):
         action = blip(n, body)
         if action == "503":
+            failed.append(body)
             return action
         sized.append((body.get("model"), body.get("max_tokens") or body.get("max_completion_tokens")))
         return "maxout"
@@ -261,7 +272,8 @@ def test_whole_proxy_outage_costs_nothing_extra_on_the_ladder(tmp_path, make_pro
     assert "solved=6" in run.stdout, (run.stdout, sized, _trajectory(tmp_path))
     real = [s for s in sized if s[1] != 1]
     assert {m for m, _ in real} == {MODEL_FAST}, sized
-    assert len(real) == 6 and _spent(run) <= 6 * 450 + 2 * 51, (run.stdout, sized)  # 500/10 + 400; a ping or two
+    # 500/10 + 400; a ping or two; the input of each 503 (task 73)
+    assert len(real) == 6 and _spent(run) <= 6 * 450 + 2 * 51 + _failed_input(failed), (run.stdout, sized)
 
 
 def test_failure_while_building_the_model_client_loses_no_task(tmp_path, make_proxy, monkeypatch):
