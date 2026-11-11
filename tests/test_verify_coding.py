@@ -124,7 +124,7 @@ def test_partial_repair_is_not_checked(tmp_path, monkeypatch):
              "    def test_has(self):\n        self.assertEqual(mylib.has([1, 2], 2), True)\n\n"
              "    def test_weird(self):\n        self.assertEqual(mylib.weird(1), 77123)\n")
     res = solve(_task(tmp_path, lib, tests))
-    assert res.tentative and "partial" in res.note and not res.extra
+    assert res.tentative and "partial" in res.note and set(res.extra) == {"restart"}   # no verify, no ambiguous
 
 
 def test_contradictory_tests_are_not_checked(tmp_path, monkeypatch):

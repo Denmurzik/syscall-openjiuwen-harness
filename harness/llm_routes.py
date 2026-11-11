@@ -700,6 +700,24 @@ async def fix_coding(task: Task, client, resume: dict | None = None) -> SolveRes
     if provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
         return SolveResult("infeasible", note="tests contradict each other")
     output = base_report.output
+    restart = resume.get("restart")
+    if restart and restart != base and not resume.get("answered"):
+        # phase 1 left a partial repair: mutations no one checked. One MODEL_FAST call for the whole repair from
+        # the file before them; a green result is taken, anything else leaves the ladder below as it was
+        try:
+            first = await asyncio.to_thread(_run_candidate, ws, restart)
+            if not first.ok and not any(f.startswith("<") for f in first.failed):
+                r = await client.chat(MODEL_FAST, _patch_messages(restart, tests, first.output), 400)
+                fixed = apply_patch(restart, r.text)
+                if fixed is not None and (await asyncio.to_thread(_run_candidate, ws, fixed)).ok:
+                    write_mylib(mylib_path, fixed)
+                    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+                    return SolveResult("solved", answer="DONE",
+                                       note=f"patched by {MODEL_FAST} from the file before mutations")
+        except LLMUnavailable:
+            # the ladder below meets the same proxy and keeps its own retry state; the retry pass resumes that
+            # ladder from the partial file (the restart is not asked again)
+            pass
     attempts = [(MODEL_FAST, 400, {}), (MODEL_ALT, 600, {})]
     if task.reward >= 3 or _budget_is_free(client):
         attempts.append((MODEL_REASON, 3000, {"reasoning_effort": "low"}))

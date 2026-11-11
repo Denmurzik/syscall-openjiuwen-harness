@@ -1132,11 +1132,15 @@ def _canonical_substitute(src: str, names: set[str]) -> str | None:
     return out
 
 
-def _partial(ws: Path, mylib: Path, cur: str, report: TestReport) -> SolveResult:
+def _partial(ws: Path, mylib: Path, cur: str, report: TestReport, restart: str | None = None) -> SolveResult:
     _write_mylib(mylib, cur)
     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+    # `restart`: the file before any mutation (the original with the known texts in place). The mutations kept
+    # here were picked by one visible assert each and are checked by nobody: the ladder asks the model for the
+    # whole repair from `restart` first
     return SolveResult("solved", answer="DONE", tentative=True,
-                       note=f"partial repair, still failing: {report.failed}")
+                       note=f"partial repair, still failing: {report.failed}",
+                       extra={"restart": restart} if restart is not None and restart != cur else None)
 
 
 def _solve(task: Task, time_limit: float) -> SolveResult:
@@ -1203,14 +1207,14 @@ def _solve(task: Task, time_limit: float) -> SolveResult:
                     if provable_contradiction(test_src, original, initially_failing):
                         return SolveResult("infeasible", note="tests contradict each other")
                     if cur != original:  # best partial repair: a guess beats no answer
-                        return _partial(ws, mylib, cur, report)
+                        return _partial(ws, mylib, cur, report, hint_base)
                     return SolveResult("unparsed", note=f"no repair found for {report.failed}")
                 cur, report = step
         except _OutOfTime:
             if provable_contradiction(test_src, original, initially_failing):  # search is hopeless: no model calls
                 return SolveResult("infeasible", note="tests contradict each other")
             if cur != original and not report.ok:
-                return _partial(ws, mylib, cur, report)
+                return _partial(ws, mylib, cur, report, hint_base)
             raise
         _write_mylib(mylib, cur)
         shutil.rmtree(ws / "__pycache__", ignore_errors=True)
