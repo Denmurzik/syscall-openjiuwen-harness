@@ -334,6 +334,18 @@ def test_agreeing_spellings_write_the_clean_one(tmp_path, fast, alt, written):
     assert models == [F, A] and res.answer == written
 
 
+@pytest.mark.parametrize("fast, alt, written", [
+    ("print('John Smith Jr.')", "print('John Smith Jr')", "John Smith Jr."),
+    ("print('John Smith Jr')", "print('John Smith Jr.')", "John Smith Jr."),
+    ("print('U.S. Steel Co.')", "print('U.S. Steel Co')", "U.S. Steel Co."),
+    ("print('Arktika Labs.')", "print('Arktika Labs')", "Arktika Labs"),
+])
+def test_an_abbreviation_keeps_its_dot(tmp_path, fast, alt, written):
+    files = {**BIO, "kb/x.md": "# X\n\nJohn Smith Jr. leads U.S. Steel Co. (John Smith Jr, U.S. Steel Co). Arktika Labs.\n"}
+    res, models = _agree(_task(tmp_path, files=files), {F: [fast], A: [alt]})
+    assert models == [F, A] and res.answer == written
+
+
 def test_agreeing_numbers_write_the_plain_integer():
     # (on a year question the shape check already refuses 1999.0; other number questions can print it)
     a, b = SolveResult("solved", answer="1999.0"), SolveResult("solved", answer="1999")
@@ -352,6 +364,9 @@ def test_reason_agreeing_after_normalisation_writes_the_clean_one(tmp_path):
 @pytest.mark.parametrize("answer, clean", [
     ("Arktika Labs", True), ("Arktika Labs.", False), ("O’Brien", False), ("O'Brien", True),
     ("Tartu  College", False), ("'Graz'", False), ("1999", True), ("1999.0", False), ("12.50", True), ("-3", True),
+    ("John Smith Jr.", True), ("John Smith Jr", False), ("U.S. Steel Co.", True), ("U.S. Steel Co", False),
+    ("Acme Inc.", True), ("Dune Ltd.", True), ("Baker St.", True), ("U.S.", True), ("B", True), ("B.", False),
+    ("No", True), ("No.", False), ("Arktika Labs.", False), ("Jr..", False),
 ])
 def test_is_clean(answer, clean):
     assert L._is_clean(answer) is clean

@@ -835,10 +835,15 @@ def _same_vote(a: str, b: str, check: str | None) -> bool:
     return check != "exact_int" and _vote_key(a) == _vote_key(b) != ""
 
 
+# a last word whose dot belongs to it: a known abbreviation (Jr., Inc., Co., St.) or two initials or more (U.S.)
+_ABBREV_END = re.compile(r"(?:^|[\s(])(?:Jr|Sr|Inc|Co|Ltd|Corp|St|Dr|Bros|Mfg|Plc|Esq|Ave)\.$|(?:^|\s)(?:[A-Za-z]\.){2,}$")
+
+
 def _is_clean(answer: str) -> bool:
     """The text is its own soft-check form, case aside: no extra spaces, quotes around it, closing punctuation or
     curly apostrophe; a whole number written as a plain integer ("1999", not "1999.0"). Other numbers count as clean
-    (their places may be the ones the task asks for)."""
+    (their places may be the ones the task asks for). The closing dot of an abbreviation is part of the answer:
+    "John Smith Jr." is clean and "John Smith Jr" is not, while "Arktika Labs." is not."""
     s = str(answer)
     try:
         d = Decimal(s.strip())
@@ -847,7 +852,10 @@ def _is_clean(answer: str) -> bool:
             return d != whole or s == format(whole, "f")
     except (InvalidOperation, ValueError):
         pass
-    return s == " ".join(s.split()).translate(_APOSTROPHES).strip("\"' ").rstrip(".,;:!").strip()
+    core = " ".join(s.split()).translate(_APOSTROPHES).strip("\"' ").rstrip(".,;:!").strip()
+    if core and _ABBREV_END.search(core + "."):
+        core += "."
+    return s == core
 
 
 def _cleanest(*results: SolveResult) -> SolveResult:
