@@ -30,8 +30,8 @@ from pathlib import Path
 from harness import config
 from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON
 from harness.llm import LLMUnavailable
-from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _first_def, _target_file, _test_file,
-                                apply_patch, write_mylib)
+from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _deep_tests, _first_def, _read_tests, _target_file,
+                                _test_file, apply_patch, write_mylib)
 from harness.solvers import coding_solver as cs
 from harness.proc import run_python
 from harness.solvers.probe import _ADDR, _MAX_REPR, behaviour, visible_call
@@ -63,9 +63,10 @@ def _left(stop: float | None, cap: float) -> float:
 
 
 def _test_files(ws: Path) -> list[str]:
-    """Every visible test file of the workspace (as the audit runs them), else phase 1's one."""
+    """Every visible test file of the workspace (as the audit runs them), else those below the root
+    (HARNESS_DEEP_TESTS), else phase 1's one."""
     names = sorted({p.name for p in ws.glob("test_*.py")} | {p.name for p in ws.glob("*_test.py")})
-    return names or [_test_file(ws)]
+    return names or _deep_tests(ws) or [_test_file(ws)]
 
 
 def _green(ws: Path, text: str, target: str, stop: float | None = None) -> bool:
@@ -916,8 +917,7 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
     (default the examples' texts only). `stop`: the monotonic time after which no probe or test run starts."""
     ws = Path(task.workspace)
     try:
-        test_name = _test_file(ws)
-        tests = (ws / test_name).read_text(encoding="utf-8")
+        test_name, tests = _read_tests(ws)
         target = _target_file(ws, tests)
         path = ws / target
         src = path.read_text(encoding="utf-8")
