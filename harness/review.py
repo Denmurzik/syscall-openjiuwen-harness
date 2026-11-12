@@ -206,6 +206,43 @@ _NESTED = [[], [[1, 2], [2, 3]], [[1, 5], [2, 3]], [[5, 8], [1, 3]], [1, [2, [3,
 BATTERY_CAP = 400
 
 
+_NUM_TEXT = ["0", "1", "-1", "7", "10", "99", "100", "150", "151", "999", "1000", "0.5", "2.5", "-3.5", "12.50"]
+
+
+def _str_variants(v: str) -> list:
+    """HARNESS_REVIEW_PROBES: strings of the same build as a visible argument, where the generic strings only make
+    the function raise: each sign flipped ('+02:00' -> '-02:00'), each run of digits replaced by other numbers
+    (' 42 ' -> ' 151 ', ' -1 '), the same text with its blanks stripped. For a text that is one number, other
+    numbers as text. At most 40."""
+    if not config.review_probes() or not v or len(v) > 80:
+        return []
+    out = []
+    for i, ch in enumerate(v):
+        if ch in "+-" and len(out) < 6:
+            out.append(v[:i] + ("-" if ch == "+" else "+") + v[i + 1:])
+    runs = list(re.finditer(r"\d+", v))
+    for m in runs[:5]:
+        n = int(m.group())
+        width = len(m.group())
+        for alt in (n + 1, max(n - 1, 0), 0, n * 10 + 9, 151, 999):
+            out.append(v[:m.start()] + str(alt).zfill(width) + v[m.end():])
+    if len(runs) == 1 and not re.search(r"[+-]\s*\d", v):
+        m = runs[0]
+        out.append(v[:m.start()] + "-" + m.group() + v[m.end():])
+        out.append(v[:m.start()] + "-1" + v[m.end():])
+    core = v.strip()
+    if core != v:
+        out.append(core)
+    if re.fullmatch(r"[+-]?\d+(\.\d+)?", core):
+        out += _NUM_TEXT + [f" {core} ", core + "x"]
+    seen, uniq = {v}, []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq[:40]
+
+
 def _pool(v) -> list:
     """Values of the shape of one visible argument."""
     if isinstance(v, bool):
@@ -215,7 +252,7 @@ def _pool(v) -> list:
     if isinstance(v, float):
         return [0.0, 0.5, 1.0, 2.5, 10.0, -1.5, 100.0, v * 2]
     if isinstance(v, str):
-        return _STRS + [v.upper(), v.title(), v[::-1], v + " " + v, v[:1]]
+        return _STRS + [v.upper(), v.title(), v[::-1], v + " " + v, v[:1]] + _str_variants(v)
     if isinstance(v, list):
         own = [v[::-1], v + v[:1], v[:1], v + v]
         if any(isinstance(x, (list, tuple)) for x in v):
@@ -257,6 +294,164 @@ def _battery(args: tuple | None, arity: int) -> list[tuple]:
         if key not in seen:
             seen.add(key)
             uniq.append(t)
+    return uniq[:BATTERY_CAP]
+
+
+# ---- HARNESS_REVIEW_PROBES: visible arguments that are not literals (Decimal("10.00"), date(2024, 2, 10)) ----
+_CTOR_MODULES = frozenset({"decimal", "datetime", "fractions"})
+_DEC = ["0", "1", "0.5", "0.05", "0.125", "1.005", "2.675", "12.5", "10.00", "-1.5", "100", "0.01", "0.015", "7",
+        "33.3", "1.25", "20"]
+_DATES = [(2024, 2, 29), (2023, 2, 28), (2024, 12, 31), (2023, 12, 1), (2024, 1, 1), (2024, 1, 31), (2024, 5, 10),
+          (2024, 5, 11), (2024, 5, 12), (2024, 5, 13), (2024, 3, 31), (2024, 11, 30), (2025, 6, 15), (2000, 2, 29),
+          (1999, 12, 31)]
+_TIMES = [(12, 0), (23, 59), (0, 0), (6, 15), (18, 45)]
+# Reads {"src", "func", "head", "inputs"}: `head` is the test file's own imports of decimal, datetime and fractions,
+# each input the source of one argument tuple, evaluated with those names. Output as probe._CHILD's.
+_EXPR_CHILD = r"""
+import copy, io, json, sys
+req = json.loads(sys.stdin.read())
+real = sys.stdout
+def emit(s):
+    real.write("@@PROBE@@" + json.dumps(s) + "\n"); real.flush()
+try:
+    import signal
+    def _alarm(*a):
+        raise TimeoutError()
+    signal.signal(signal.SIGALRM, _alarm)
+    have_alarm = True
+except Exception:
+    have_alarm = False
+sys.stdout = io.StringIO()
+ns, env = {"__name__": "mylib"}, {}
+try:
+    exec(req["head"], env)
+    exec(compile(req["src"], "mylib.py", "exec"), ns)
+    fn = ns[req["func"]]
+except BaseException as e:
+    for _ in req["inputs"]:
+        emit("<exc:%s>" % type(e).__name__)
+    sys.exit(0)
+for text in req["inputs"]:
+    try:
+        args = eval(text, env)
+        if have_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 1.0)
+        out = repr(fn(*copy.deepcopy(args)))[:LIMIT]
+    except BaseException as e:
+        out = "<exc:%s>" % type(e).__name__
+    finally:
+        if have_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+    sys.stdout = io.StringIO()
+    emit(out)
+""".replace("LIMIT", str(_MAX_REPR))
+
+
+def _expr_behaviour(src: str, func: str, head: str, inputs: list[str], timeout: float) -> list[str]:
+    """`probe.behaviour` for inputs given as source text (`_visible_exprs`)."""
+    if not inputs:
+        return []
+    req = json.dumps({"src": src, "func": func, "head": head, "inputs": list(inputs)})
+    with tempfile.TemporaryDirectory(prefix="probe_") as d:
+        res = run_python(["-c", _EXPR_CHILD], cwd=Path(d), timeout=timeout, stdin=req, env={"PYTHONHASHSEED": "0"})
+    out: list[str] = []
+    for line in res.stdout.splitlines():
+        if line.startswith("@@PROBE@@"):
+            try:
+                out.append(_ADDR.sub("", str(json.loads(line[9:]))))
+            except ValueError:
+                break
+    fill = "<exc:Timeout>" if res.timed_out else "<exc:Crash>"
+    return (out + [fill] * len(inputs))[:len(inputs)]
+
+
+def _ctor(node) -> str | None:
+    """'Decimal', 'date', ... for a call `Decimal("1.0")`, `datetime.date(2024, 1, 2)` with literal arguments."""
+    if not isinstance(node, ast.Call):
+        return None
+    f = node.func
+    name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+    if name not in ("Decimal", "Fraction", "date", "datetime", "timedelta"):
+        return None
+    try:
+        for a in [*node.args, *(k.value for k in node.keywords)]:
+            ast.literal_eval(a)
+    except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
+        return None
+    return name
+
+
+def _expr_pool(text: str) -> list[str]:
+    """Other values of the kind of one visible argument, as source text."""
+    node = ast.parse(text, mode="eval").body
+    kind = _ctor(node)
+    if kind is None:
+        return [repr(x) for x in _pool(ast.literal_eval(node))]
+    fn = ast.get_source_segment(text, node.func)
+    if kind == "Decimal":
+        return [f"{fn}({x!r})" for x in _DEC]
+    if kind == "Fraction":
+        return [f"{fn}({a}, {b})" for a, b in ((0, 1), (1, 2), (1, 3), (2, 4), (-3, 4), (7, 1), (5, 10), (22, 7))]
+    if kind == "date":
+        return [f"{fn}({y}, {m}, {d})" for y, m, d in _DATES]
+    if kind == "datetime":
+        return [f"{fn}({y}, {m}, {d}, {hh}, {mm})" for (y, m, d), (hh, mm) in zip(_DATES, _TIMES * 3)]
+    return [f"{fn}(days={d})" for d in (0, 1, 7, 30, 365, -1)] + [f"{fn}(hours={h})" for h in (1, 25, -3)]
+
+
+def _visible_exprs(tests: str, name: str) -> tuple[str, list[str]] | None:
+    """(head, argument sources) of the first call of `name` in the tests whose arguments are literals or Decimal /
+    Fraction / date / datetime / timedelta built from literals, at least one of them built; `head`: the test file's
+    imports of decimal, datetime and fractions. None when there is no such call."""
+    try:
+        tree = ast.parse(tests)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    head = []
+    for node in tree.body:
+        mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                else [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
+        if mods and all(m.split(".")[0] in _CTOR_MODULES for m in mods):
+            head.append(ast.get_source_segment(tests, node) or "")
+    if not head:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or node.keywords or _callee(node) != name or not node.args:
+            continue
+        built = 0
+        for a in node.args:
+            if _ctor(a) is not None:
+                built += 1
+                continue
+            try:
+                ast.literal_eval(a)
+            except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
+                built = -100
+                break
+        if built > 0:
+            return "\n".join(head), [ast.get_source_segment(tests, a) or "" for a in node.args]
+    return None
+
+
+def _expr_battery(args: list[str]) -> list[str]:
+    """`_battery` over argument sources: the visible call, one argument varied at a time, then pairs."""
+    pools = [_expr_pool(a) for a in args]
+    out = [list(args)]
+    for i, pool in enumerate(pools):
+        out += [args[:i] + [x] + args[i + 1:] for x in pool]
+    for i in range(len(args)):
+        for j in range(i + 1, len(args)):
+            for x in pools[i][:16]:
+                for y in pools[j][:16]:
+                    t = list(args)
+                    t[i], t[j] = x, y
+                    out.append(t)
+    seen, uniq = set(), []
+    for t in out:
+        key = "(" + ", ".join(t) + ",)"
+        if key not in seen:
+            seen.add(key)
+            uniq.append(key)
     return uniq[:BATTERY_CAP]
 
 
@@ -675,6 +870,7 @@ class _Trial:
         self.src, self.name, self.memo = src, name, {}
         self.inputs: list = []
         self.method, self.mod, self.head = "." in name, _module_name(target), ""
+        self.expr_head: str | None = None   # HARNESS_REVIEW_PROBES: the inputs are source text (`_visible_exprs`)
         # round 19: ours is probed twice and an input where it differs from itself is set aside (`steady`). Every
         # round-19 switch off: one run of ours, as in round 18
         self.twice = config.review_reason() or config.review_methods()
@@ -685,7 +881,18 @@ class _Trial:
         call = visible_call(tests, name)
         try:
             self.inputs = _battery(call[0] if call else None, _arity(src, name))
-        except (SyntaxError, ValueError, RecursionError, TypeError):
+            if config.review_probes() and call:
+                # a parameter with a default: calls that leave it out, one after another in the same process, so a
+                # mutable default that keeps what earlier calls put in it shows
+                need, args = _arity(src, name), call[0]
+                if 1 <= need < len(args):
+                    short = [tuple(args[:need])] + [(x,) + tuple(args[1:need]) for x in _pool(args[0])[:6]]
+                    self.inputs = self.inputs[:BATTERY_CAP - len(short)] + short
+            elif config.review_probes():
+                found = _visible_exprs(tests, name)
+                if found is not None:
+                    self.expr_head, self.inputs = found[0], _expr_battery(found[1])
+        except (SyntaxError, ValueError, RecursionError, TypeError, MemoryError):
             self.inputs = []
 
     @property
@@ -714,6 +921,8 @@ class _Trial:
             if limit < PROBE_TIMEOUT / 2:
                 return None
             self.memo[key] = (_scene_outcomes(full, self.mod, self.head, self.inputs, limit) if self.method
+                              else _expr_behaviour(full, self.name, self.expr_head, self.inputs, limit)
+                              if self.expr_head is not None
                               else behaviour(full, self.name, self.inputs, timeout=limit))
         return self.memo[key]
 
@@ -783,10 +992,25 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
         return [], len(valid) >= 3 and any(raises[i][0] != raises[i][1] for i in valid)
     if any(ba[i] != bb[i] and not raises[i][0] for i in both):
         return [], True
-    if not any(ba[i] == bb[i] and trial.public(ba[i]) != trial.public(ours[i])
-               and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
+    # HARNESS_REVIEW_PROBES: an input on which the file's function ran into the probe's one-second alarm (not the fill
+    # after the whole run was stopped) while both rewrites return the same value shows it wrong as well
+    hung = [i for i, o in enumerate(ours) if o == "<exc:TimeoutError>" and _exc(ba[i]) is None and ba[i] == bb[i]
+            and not trial.cut(ba[i])] if config.review_probes() and not trial.method else []
+    # HARNESS_REVIEW_PROBES: where the file's function raises a value-domain exception its own text does not name and
+    # both rewrites raise another one that the text does name ("Raises ValueError when the second number is zero",
+    # the file divides and lets ZeroDivisionError out), the file is shown wrong; the stored text must say `raise <Name>`
+    seg = _texts(src).get(name, "")
+    swap = {_exc(ba[i]) for i in range(len(ours))
+            if _exc(ours[i]) in _VALUE_EXC and _exc(ba[i]) in _VALUE_EXC and ba[i] == bb[i] and ba[i] != ours[i]
+            and _exc(ba[i]) in seg and _exc(ours[i]) not in seg} if config.review_probes() and not trial.method else set()
+    if not hung and not swap and not any(ba[i] == bb[i] and trial.public(ba[i]) != trial.public(ours[i])
+                                         and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
         return [], False
-    ok = [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
+
+    def says(t):
+        return all(re.search(r"\braise\s+" + e + r"\b", t) for e in swap)
+
+    ok = [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid) and says(t)]
     if ok:
         return ok, False
     # both rewrites raise where ours returns a value: stored only when they raise the same value-domain exception
@@ -795,11 +1019,10 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
     excs = {_exc(ba[i]) for i in spots}
     if not all(ba[i] == bb[i] and _exc(ba[i]) in _VALUE_EXC for i in spots):
         return [], False
-    seg = _texts(src).get(name, "")
     named = _naming(tests, name)
     if not all(e in seg or any(e in ln for ln in named) for e in excs):
         return [], False
-    return [t for t in (a, b) if all(re.search(r"\braise\s+" + e + r"\b", t) for e in excs)], False
+    return [t for t in (a, b) if all(re.search(r"\braise\s+" + e + r"\b", t) for e in excs) and says(t)], False
 
 
 _RAISES = frozenset({"raises", "assertRaises", "assertRaisesRegex"})

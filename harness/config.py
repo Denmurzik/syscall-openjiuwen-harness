@@ -258,6 +258,19 @@ def minimal_defs() -> bool:
     return _env_bool("HARNESS_MINIMAL_DEFS", MINIMAL_DEFS)
 
 
+# default of HARNESS_REVIEW_PROBES. Expert 10, patch a: the review's trial inputs reach what the generic battery
+# never did (x10: 5 files where FAST and ALT wrote the same right fix and it was kept as "no evidence"):
+# variants of a visible string argument (a flipped sign, other numbers in place of its digits), visible arguments built
+# by Decimal/Fraction/date/datetime/timedelta, calls that leave out the parameters with defaults (twice: a mutable
+# default shows), and an input on which the file's function hangs while both rewrites return the same value. Off: 55354db
+REVIEW_PROBES = True
+
+
+def review_probes() -> bool:
+    """The wider trial inputs of the review. Read at call time: HARNESS_REVIEW_PROBES=1/0."""
+    return _env_bool("HARNESS_REVIEW_PROBES", REVIEW_PROBES)
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 
