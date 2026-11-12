@@ -218,6 +218,7 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
             con = sqlite3.connect(p.resolve().as_uri() + "?mode=ro&immutable=1", uri=True, timeout=2)
             try:
                 con.set_progress_handler(lambda: 1, RICH_SQL_STEPS)   # a statement that runs long is interrupted
+                con.text_factory = lambda b: b.decode("utf-8", "replace")
                 lines = ["(SQLite database: tables and first rows)"]
                 tables = con.execute("select name, sql, type from sqlite_master where type in ('table', 'view') "
                                      "and name not like 'sqlite_%' order by name").fetchmany(8)
@@ -226,7 +227,10 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
                     if kind != "table":   # the rows of a view may cost a whole query: its schema is enough
                         continue
                     quoted = '"' + name.replace('"', '""') + '"'
-                    lines += ["  " + _clip(repr(row)) for row in con.execute(f"select * from {quoted} limit 2")]
+                    try:   # one table that cannot be read keeps the rest
+                        lines += ["  " + _clip(repr(row)) for row in con.execute(f"select * from {quoted} limit 2")]
+                    except sqlite3.Error:
+                        pass
             finally:
                 con.close()
             return "\n".join(lines)
@@ -240,26 +244,17 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
             with zipfile.ZipFile(p) as z:
                 names = z.namelist()
                 if any(n.startswith("xl/") for n in names):
-                    if p.stat().st_size > RICH_XLSX_MAX:
-                        return _xlsx_sheet_names(z)
-                    import openpyxl
-                    wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
-                    try:
-                        lines = ["(Excel workbook: sheets and first rows)"]
-                        for sheet in wb.worksheets[:6]:
-                            lines.append(f"sheet {sheet.title!r}:")
-                            for i, row in enumerate(sheet.iter_rows(values_only=True)):
-                                if i >= 3:
-                                    break
-                                lines.append("  " + _clip(repr(row)))
-                    finally:
-                        wb.close()
-                    return "\n".join(lines)
+                    book = _xlsx_sheet_names(z) if p.stat().st_size > RICH_XLSX_MAX else _xlsx_rows(p)
+                    if book is not None:
+                        return book
                 lines = [f"(zip archive, {len(names)} members)"] + names[:12]
                 first = next((n for n in names if not n.endswith("/")), None)
                 if first is not None:
-                    with z.open(first) as f:
-                        head = f.read(PREVIEW_FILE)
+                    try:   # an encrypted or damaged member keeps the listing
+                        with z.open(first) as f:
+                            head = f.read(PREVIEW_FILE)
+                    except Exception:
+                        head = b"\0"
                     if _is_text(head):
                         lines.append(f"first lines of {first}:")
                         lines += head.decode("utf-8", errors="ignore").splitlines()[:PREVIEW_LINES]
@@ -274,6 +269,31 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
     except Exception:   # a damaged or unusual file: the prompt names it, as before
         return None
     return None
+
+
+def _xlsx_rows(p: Path) -> str | None:
+    """The sheets and first rows of a workbook, None when openpyxl cannot open it (the archive is listed instead)."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+    except Exception:
+        return None
+    try:
+        lines = ["(Excel workbook: sheets and first rows)"]
+        for sheet in wb.worksheets[:6]:
+            lines.append(f"sheet {sheet.title!r}:")
+            try:
+                for i, row in enumerate(sheet.iter_rows(values_only=True)):
+                    if i >= 3:
+                        break
+                    lines.append("  " + _clip(repr(row)))
+            except Exception:   # a damaged sheet: its name stays
+                continue
+    except Exception:
+        return None
+    finally:
+        wb.close()
+    return "\n".join(lines)
 
 
 def _zip_members(p: Path) -> int | None:

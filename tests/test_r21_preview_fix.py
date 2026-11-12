@@ -103,3 +103,26 @@ def test_a_database_name_with_a_hash_or_a_space_creates_no_file(tmp_path):
     out = L.describe_workspace(tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == before
     assert out.count("CREATE TABLE t(x)") == 3 and out.count("(7,)") == 3
+
+
+def test_a_table_with_bad_utf8_or_an_unreadable_member_keeps_the_rest(tmp_path):
+    con = sqlite3.connect(tmp_path / "a.db")
+    con.execute("create table good(x text)")
+    con.execute("insert into good values ('fine')")
+    con.execute("create table bad(x text)")
+    con.execute("insert into bad values (cast(x'ff41' as text))")
+    con.commit()
+    con.close()
+    with zipfile.ZipFile(tmp_path / "fake.zip", "w") as z:     # an xl/ folder that is not a workbook
+        z.writestr("xl/readme.txt", "not a workbook\n")
+    out = L.describe_workspace(tmp_path)
+    assert "CREATE TABLE bad(x text)" in out and "('\ufffdA',)" in out and "('fine',)" in out
+    assert "(zip archive, 1 members)" in out and "not a workbook" in out
+
+
+def test_an_archive_member_that_cannot_be_read_keeps_the_listing(tmp_path, monkeypatch):
+    with zipfile.ZipFile(tmp_path / "kb.zip", "w") as z:
+        z.writestr("a.md", "# A\n")
+    monkeypatch.setattr(zipfile.ZipFile, "open", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("encrypted")))
+    out = L.describe_workspace(tmp_path)
+    assert "(zip archive, 1 members)\na.md" in out and "first lines of" not in out
