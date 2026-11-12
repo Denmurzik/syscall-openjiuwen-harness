@@ -1132,7 +1132,7 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
 
 # HARNESS_REVIEW_PROBES: words of the condition under which a function lets each value-domain exception out ("the
 # second number is zero" for a division): a docstring that names another exception for that condition
-_CONDITION = {"ZeroDivisionError": r"\bzero\b|\b0\b|divis|divid|denominator",
+_CONDITION = {"ZeroDivisionError": r"\bzero\b|(?<![\d.])0(?![\d.])|divis|divid|denominator",   # not the 0 of 0.75
               "IndexError": r"empty|index|out of range|position|bound",
               "KeyError": r"\bkey|missing|unknown|not found|absent|no such",
               "ValueError": r"invalid|malformed|format|negative|out of range|outside|not an?\b"}

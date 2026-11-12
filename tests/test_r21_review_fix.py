@@ -161,3 +161,9 @@ def test_a_mutable_default_meant_to_keep_state_is_no_evidence():
     fixed = ADD_TAG.replace("tags=[]):", "tags=None):").replace("    tags.append(tag)\n    return tags\n",
                                                                 "    return list(tags or []) + [tag]\n")
     assert accepted(ADD_TAG, ADD_TAG_TESTS, "add_tag", fixed)       # the docstring says nothing of kept state
+
+
+def test_a_number_like_0_75_is_no_zero_condition():
+    seg = _ratio("'3:4' gives 0.75 and raises ValueError when the text has no ':'.")
+    assert not r._doc_raises(seg, "ValueError", "ZeroDivisionError")
+    assert r._doc_raises(_ratio("Raises ValueError when the divisor is 0."), "ValueError", "ZeroDivisionError")
