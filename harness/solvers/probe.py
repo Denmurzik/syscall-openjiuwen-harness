@@ -4,6 +4,7 @@ import copy
 import json
 import random
 import re
+import sys
 import tempfile
 from pathlib import Path
 
@@ -119,21 +120,45 @@ def inputs_from_call(args: tuple, n: int = 6, seed: int = 0) -> list[tuple]:
     return out
 
 
+def _under_test(tree: ast.Module) -> frozenset:
+    """The modules whose functions the tests call: mylib; in tests that never import mylib (HARNESS_DEEP_TESTS), any
+    module they import from outside the standard library (`calc`, `pkg.core`), the module under test of another
+    layout."""
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Import) and any(a.name == "mylib" for a in node.names)
+                or isinstance(node, ast.ImportFrom) and node.module == "mylib"):
+            return frozenset({"mylib"})
+    from harness import config
+    if not config.deep_tests():
+        return frozenset({"mylib"})
+    out = set()
+    for node in ast.walk(tree):
+        names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                 else [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
+        out |= {m for m in names if m.split(".")[0] not in sys.stdlib_module_names
+                and m.split(".")[0] not in ("pytest", "mylib")}
+    return frozenset(out)
+
+
 def visible_call(test_src: str, func: str) -> tuple[tuple, str] | None:
-    """First call of mylib's `func` with literal arguments in the tests: (args, statement source)."""
+    """First call of mylib's `func` (or of the module under test, `_under_test`) with literal arguments in the tests:
+    (args, statement source)."""
     try:
         tree = ast.parse(test_src)
     except SyntaxError:
         return None
     imported: set[str] = set()
     modules: set[str] = set()
+    tested = _under_test(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            modules |= {a.asname or a.name for a in node.names if a.name == "mylib"}
-        elif isinstance(node, ast.ImportFrom) and node.module == "mylib":
+            modules |= {a.asname or a.name for a in node.names if a.name in tested and (a.asname or "." not in a.name)}
+        elif isinstance(node, ast.ImportFrom) and node.module in tested and (tested == {"mylib"} or not node.level):
             # `from mylib import *` binds every public name of mylib, `func` among them
             imported |= {func if a.name == "*" else (a.asname or a.name) for a in node.names
                          if a.name == func or (a.name == "*" and not func.startswith("_"))}
+            if tested != {"mylib"}:   # `from pkg import core`: `core.func(...)` calls it too
+                modules |= {a.asname or a.name for a in node.names if a.name != "*"}
     for stmt in ast.walk(tree):
         if not isinstance(stmt, ast.stmt) or isinstance(stmt, (ast.ClassDef, ast.FunctionDef,
                                                                ast.AsyncFunctionDef)):

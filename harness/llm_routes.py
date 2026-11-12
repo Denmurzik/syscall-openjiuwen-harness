@@ -23,6 +23,7 @@ from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
 from harness.trajectory import CALLS
 
+from harness import config  # noqa: E402
 from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON, PROGRAM_MAX_TOKENS  # noqa: E402,F401
 
 log = logging.getLogger("harness")
@@ -1068,12 +1069,127 @@ def apply_patch(src: str, patch: str) -> str | None:
         return None
 
 
+# directories a test file below the root is never looked for in (besides hidden ones: `.git`, `.venv`)
+_DEEP_SKIP = frozenset({"__pycache__", "node_modules", "site-packages", "venv", "env", "build", "dist"})
+DEEP_MAX_FILES = 8   # test files below the root run per candidate; more are left out (each run takes a process)
+
+
+def _deep_tests(ws: Path) -> list[str]:
+    """HARNESS_DEEP_TESTS: the test files below the workspace root (`tests/test_x.py`, `test/...`,
+    `tests/unit/x_test.py`) as relative posix paths, the shallowest first, when the root holds none. [] when the
+    root has a test file (its layout keeps round 18's discovery) or the switch is off."""
+    if not config.deep_tests():
+        return []
+    try:
+        if any(p.is_file() for pat in ("test_*.py", "*_test.py") for p in ws.glob(pat)):
+            return []
+        found = set()
+        for pat in ("test_*.py", "*_test.py"):
+            for p in ws.rglob(pat):
+                rel = p.relative_to(ws)
+                if len(rel.parts) < 2 or not p.is_file():
+                    continue
+                if any(part.startswith(".") or part in _DEEP_SKIP for part in rel.parts[:-1]):
+                    continue
+                found.add(rel.as_posix())
+    except (OSError, ValueError):
+        return []
+    return sorted(found, key=lambda r: (r.count("/"), r))[:DEEP_MAX_FILES]
+
+
 def _test_file(ws: Path) -> str:
-    """Same discovery as phase 1: test_mylib.py, else the first test_*.py (then the first *_test.py)."""
+    """Same discovery as phase 1: test_mylib.py, else the first test_*.py (then the first *_test.py). A root without
+    one: the first test file below it (`_deep_tests`)."""
     if (ws / "test_mylib.py").is_file():
         return "test_mylib.py"
     cands = sorted(p.name for p in ws.glob("test_*.py")) or sorted(p.name for p in ws.glob("*_test.py"))
+    if not cands:
+        cands = _deep_tests(ws)
     return cands[0] if cands else "test_mylib.py"
+
+
+def _read_tests(ws: Path) -> tuple[str, str]:
+    """(name, text) of the tests the ladder shows: the test file (`_test_file`); several files below the root as one
+    text, each under a `# <path>` line, named by their paths."""
+    deep = _deep_tests(ws)
+    if len(deep) > 1:
+        texts = [f"# {n}\n{(ws / n).read_text(encoding='utf-8')}" for n in deep]
+        return ", ".join(deep), "\n\n".join(texts)
+    name = _test_file(ws)
+    return name, (ws / name).read_text(encoding="utf-8")
+
+
+def _module_file(ws: Path, module: str) -> str | None:
+    """The workspace file of a dotted module (`pkg.core` -> `pkg/core.py` or `pkg/core/__init__.py`), from the root or
+    from `src/`; never a test file nor a helper of the tests (`tests/helpers.py`)."""
+    parts = module.split(".")
+    if not all(re.fullmatch(r"[A-Za-z_]\w*", q) for q in parts) or parts[0] in ("tests", "test"):
+        return None
+    for base in (ws, ws / "src"):
+        for p in (base.joinpath(*parts[:-1], parts[-1] + ".py"), base.joinpath(*parts, "__init__.py")):
+            if p.is_file() and not p.name.startswith("test_") and not p.name.endswith("_test.py"):
+                return p.relative_to(ws).as_posix()
+    return None
+
+
+def _defined(tree: ast.Module) -> set:
+    return {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+
+
+def _package_target(ws: Path) -> str | None:
+    """HARNESS_DEEP_TESTS: the file under repair when the tests import a module below the root (`pkg/core.py` for
+    `from pkg.core import f`, `import pkg.core as c` or `from pkg import core`; below `src/` too) or a package whose
+    `__init__.py` takes its names from its own modules (`from .core import f`). Of the files reached, the one that
+    defines most of the names the tests use (imported names, attributes); a tie goes to the first reached that is not
+    an `__init__.py`. None when no reached file defines any of them."""
+    if not config.deep_tests():
+        return None
+    reached: list[str] = []
+    used: set = set()
+
+    def reach(rel):
+        if rel is not None and rel not in reached:
+            reached.append(rel)
+
+    try:
+        for name in (_deep_tests(ws) or [_test_file(ws)]):
+            try:
+                tree = ast.parse((ws / name).read_bytes())
+            except (OSError, SyntaxError, ValueError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for a in node.names:
+                        reach(_module_file(ws, a.name) if "." in a.name else None)
+                elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                    for a in node.names:
+                        sub = _module_file(ws, f"{node.module}.{a.name}") if a.name != "*" else None
+                        if sub is not None:
+                            reach(sub)
+                        else:
+                            used.add(a.name)
+                            reach(_module_file(ws, node.module))
+                elif isinstance(node, ast.Attribute):
+                    used.add(node.attr)
+        # a package's __init__.py that takes its names from its own modules leads to them
+        for rel in list(reached):
+            if not rel.endswith("/__init__.py"):
+                continue
+            pkg = Path(rel).parent.parts
+            if pkg and pkg[0] == "src":
+                pkg = pkg[1:]
+            for node in ast.walk(ast.parse((ws / rel).read_bytes())):
+                if isinstance(node, ast.ImportFrom) and node.level == 1:
+                    for m in ([node.module] if node.module else [a.name for a in node.names]):
+                        reach(_module_file(ws, ".".join(pkg + tuple(m.split(".")))))
+        scored = []
+        for i, rel in enumerate(reached):
+            n = len(_defined(ast.parse((ws / rel).read_bytes())) & used)
+            if n:
+                scored.append((-n, rel.endswith("__init__.py"), i, rel))
+    except (OSError, SyntaxError, ValueError, RecursionError):
+        return None
+    return min(scored)[3] if scored else None
 
 
 def _target_file(ws: Path, tests: str) -> str:
@@ -1092,6 +1208,9 @@ def _target_file(ws: Path, tests: str) -> str:
             name = m.split(".")[0] + ".py"
             if (ws / name).is_file():
                 return name
+    deep = _package_target(ws)
+    if deep is not None:
+        return deep
     try:
         others = sorted(p.name for p in ws.glob("*.py") if not p.name.startswith("test_")
                         and not p.name.endswith("_test.py"))
@@ -1100,12 +1219,24 @@ def _target_file(ws: Path, tests: str) -> str:
     return others[0] if len(others) == 1 else "mylib.py"
 
 
+def _run_all(directory: Path, names: list[str]) -> TestReport:
+    """Every test file of `names` run in `directory`: green when all are; the failures of all, the output of the red."""
+    reports = [(n, run_in_dir(directory, n)) for n in names]
+    if all(r.ok for _, r in reports):
+        return TestReport(True, [], "\n".join(r.output for _, r in reports))
+    failed = [f for _, r in reports for f in r.failed]
+    return TestReport(False, failed, "\n".join(f"== {n}\n{r.output}" for n, r in reports if not r.ok))
+
+
 def _run_candidate(ws: Path, mylib_text: str, target: str = "mylib.py") -> TestReport:
     tmp = Path(tempfile.mkdtemp(prefix="llm_fix_"))
     try:
         cand = tmp / "ws"
         shutil.copytree(ws, cand, ignore=shutil.ignore_patterns("__pycache__"))
         (cand / target).write_text(mylib_text, encoding="utf-8", newline="\n")
+        deep = _deep_tests(ws)
+        if len(deep) > 1:   # several test files below the root: all of them
+            return _run_all(cand, deep)
         return run_in_dir(cand, _test_file(ws))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1160,8 +1291,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
     ws = Path(task.workspace)
     mylib_path = ws / "mylib.py"
     try:
-        test_name = _test_file(ws)
-        tests = (ws / test_name).read_text(encoding="utf-8")
+        test_name, tests = _read_tests(ws)
         target = _target_file(ws, tests)   # mylib.py whenever the workspace has one
         targs = () if target == "mylib.py" else (target,)
         mylib_path = ws / target
@@ -1173,7 +1303,8 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
     base_report = await call_tool("run_tests", _run_candidate, ws, base, *targs)
     if base_report.ok:
         return SolveResult("solved", answer="DONE", note="tests already pass")
-    if provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
+    # several test files below the root are one text here: no proof is read from it
+    if len(_deep_tests(ws)) < 2 and provable_contradiction(tests, base, base_report.failed):  # visible tests cannot all pass: spend nothing
         return SolveResult("infeasible", note="tests contradict each other")
     missing = missing_test_import(tests, ws, base_report.output, task.instruction)
     if missing is not None:   # the tests cannot even load: nothing done to mylib.py turns them green
@@ -1193,6 +1324,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
                 if fixed is not None and (await call_tool("run_tests", _run_candidate, ws, fixed, *targs)).ok:
                     write_mylib(mylib_path, fixed)
                     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+                    shutil.rmtree(mylib_path.parent / "__pycache__", ignore_errors=True)   # a package's own
                     return SolveResult("solved", answer="DONE",
                                        note=f"patched by {MODEL_FAST} from the file before mutations")
         except ModelFailing:
@@ -1232,6 +1364,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
             if report.ok:
                 write_mylib(mylib_path, fixed)
                 shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+                shutil.rmtree(mylib_path.parent / "__pycache__", ignore_errors=True)   # a package's own
                 return SolveResult("solved", answer="DONE", note=f"patched by {model}")
             note = f"{model}: tests still failing"
             # a candidate that hangs where the base did not: its empty run says nothing of the base asked next

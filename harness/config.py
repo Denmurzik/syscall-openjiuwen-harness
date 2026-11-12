@@ -211,6 +211,17 @@ def prose_agree() -> bool:
     return _env_bool("HARNESS_PROSE_AGREE", PROSE_AGREE)
 
 
+# default of HARNESS_DEEP_TESTS. Round 19, task 85: a coding workspace whose test files sit below the root
+# (`tests/test_x.py`, `test/...`, `tests/unit/x_test.py`) or whose code under test is a package (`pkg/core.py`,
+# `src/pkg/...`) goes to the ladder and the review; off, such a task ends "cannot read workspace" with no call (round 18)
+DEEP_TESTS = True
+
+
+def deep_tests() -> bool:
+    """Test discovery below the workspace root and package targets. Read at call time: HARNESS_DEEP_TESTS=1/0."""
+    return _env_bool("HARNESS_DEEP_TESTS", DEEP_TESTS)
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 

@@ -13,8 +13,14 @@ _MARK = "@@HARNESS_RESULT@@"
 # Runs the given unittest targets and prints one compact JSON line with the failed method
 # names, so the verdict never depends on (8 KB-truncated) traceback output.
 _RUNNER = r'''
-import json, sys, unittest
+import json, os, sys, unittest
 _STUB = None
+# a test file below the workspace root (`tests/test_x.py`, HARNESS_DEEP_TESTS): the run starts in the root, which
+# stays on sys.path for the code under test, and the file is imported by its own name with its directory first on
+# sys.path, as pytest imports a test file. Empty for a test file in the root: nothing below changes for it
+_SUB = os.environ.get("HARNESS_TEST_SUBDIR") or ""
+if _SUB:
+    sys.path.insert(0, os.path.abspath(_SUB))
 
 
 def _wants_stub():
@@ -22,7 +28,7 @@ def _wants_stub():
     # that guards the import (`except ImportError: pytest = None`), runs exactly as before the stand-in existed
     import ast
     try:
-        with open(sys.argv[1].split(".")[0] + ".py", encoding="utf-8") as fh:
+        with open(os.path.join(_SUB, sys.argv[1].split(".")[0] + ".py"), encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
     except Exception:
         return False
@@ -59,7 +65,9 @@ if _need_stub:
     _pt._fixtures = {}    # name -> (function, scope, autouse)
     _pt._bad = []         # reasons the file cannot run here as under pytest
     _pt._wide = ({}, [])  # module-scoped fixture values and their open generators
-    if _os.path.exists("conftest.py"):
+    # pytest loads the conftest.py of the root and of every directory down to the test file
+    _parts = [q for q in _SUB.replace("\\", "/").split("/") if q and q != "."]
+    if any(_os.path.exists(_os.path.join(*(_parts[:i] + ["conftest.py"]))) for i in range(len(_parts) + 1)):
         _pt._bad.append("conftest.py")
 
     class _Failed(BaseException):
@@ -634,7 +642,10 @@ def run_in_dir(directory: Path, test_file: str = "test_mylib.py", timeout: float
     targets = [module]
     if only:
         targets = _test_ids(directory / test_file, only) or [module]
-    res = run_python(["-c", _RUNNER, *targets], cwd=directory, timeout=timeout)
+    # `tests/test_x.py` (HARNESS_DEEP_TESTS): run from `directory`, the file imported from its own directory
+    sub = Path(test_file).parent.as_posix()
+    res = run_python(["-c", _RUNNER, *targets], cwd=directory, timeout=timeout,
+                     env={"HARNESS_TEST_SUBDIR": "" if sub == "." else sub})
     output = res.stderr + res.stdout
     if res.timed_out:
         return TestReport(False, ["<timeout>"], output)
