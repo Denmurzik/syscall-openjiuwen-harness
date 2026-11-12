@@ -37,6 +37,9 @@ CHECK_TIMEOUT = 30
 _TEXT_SUFFIXES = frozenset({".py", ".js", ".mjs", ".ts", ".sh", ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
                             ".cfg", ".ini", ".csv", ".go", ".java", ".rb", ".c", ".h", ".cpp", ".rs", ".sql", ".html"})
 _BLOCK = re.compile(r"^FILE[ \t]+(\S[^\n]*?)[ \t]*\n(.*?)(?:\nEND FILE[ \t]*$|(?=\nFILE[ \t]+\S)|\Z)", re.M | re.S)
+# a reply that closes its blocks: only END FILE ends one (a line "FILE FORMAT v2" inside a string stays in the body)
+_BLOCK_CLOSED = re.compile(r"^FILE[ \t]+(\S[^\n]*?)[ \t]*\n(.*?)^END FILE[ \t]*$", re.M | re.S)
+_END = re.compile(r"^END FILE[ \t]*$", re.M)
 _DOCTEST = re.compile(r"-m\s+doctest\s+(?:-v\s+)?([\w./-]+\.py)")
 _SKIP_DIRS = frozenset({"__pycache__", ".git", "node_modules", ".venv", "venv", ".pytest_cache"})
 # an existing file is rewritten only when it is code: data and configuration the tests read stay as they are
@@ -116,7 +119,7 @@ def parse(reply: str, ws: Path, whole: set) -> dict:
     text type, and either a new file or one that was shown whole. {} when the reply holds no such block."""
     out: dict = {}
     text = re.sub(r"<think>.*?</think>", "", (reply or "").replace("\r\n", "\n"), flags=re.S)
-    for m in _BLOCK.finditer(text):
+    for m in (_BLOCK_CLOSED if _END.search(text) else _BLOCK).finditer(text):
         rel = m.group(1).strip().strip("`'\"").replace("\\", "/")
         while rel.startswith("./"):
             rel = rel[2:]

@@ -147,3 +147,11 @@ def test_a_vendored_or_hidden_tree_is_not_another_source(tmp_path):
     assert not L._other_sources(ws, "mylib.py")
     (ws / "pkg/stats.py").write_text("x = 1\n", encoding="utf-8")
     assert L._other_sources(ws, "mylib.py")
+
+
+def test_a_file_line_inside_a_closed_block_stays_in_the_body(tmp_path):
+    body = 'def header():\n    return """\nFILE FORMAT v2\n"""\n\n\ndef f():\n    return 1\n'
+    reply = f"FILE report.py\n{body}END FILE\nFILE b.py\ny = 2\nEND FILE\n"
+    assert rescue.parse(reply, tmp_path, set()) == {"report.py": body, "b.py": "y = 2\n"}
+    # an empty block does not swallow the next one
+    assert rescue.parse("FILE a.py\nEND FILE\nFILE b.py\ny = 2\nEND FILE\n", tmp_path, set()) == {"b.py": "y = 2\n"}
