@@ -44,6 +44,7 @@ class Fake:
     async def chat(self, model, messages, max_tokens, **extra):
         self.calls.append(model)
         self.extra[model] = (max_tokens, extra)
+        self.msgs = {**getattr(self, "msgs", {}), model: messages}
         r = self.replies[model]
         if isinstance(r, BaseException):
             raise r
@@ -191,3 +192,14 @@ def test_methods_are_left_out_of_the_dispute(monkeypatch):
             "        self.assertEqual(m.A().f(1), 1)\n"
     assert review._verdict(src, tests, "A.f", "def f(self, x):\n    return 1\n",
                            "def f(self, x):\n    return 2\n") == ([], False)
+
+
+def test_third_opinion_is_asked_about_the_disputed_functions_only(tmp_path):
+    task = _task(tmp_path)
+    c = Fake(_reply(RIGHT), _reply(OTHER), _reply(RIGHT2))
+    _go(task, c)
+    plain = review._messages(SILENT, TESTS, "mylib.py", "test_mylib.py")
+    assert c.msgs[MODEL_FAST] == plain and c.msgs[MODEL_ALT] == plain          # round 18's prompt, untouched
+    assert c.msgs[MODEL_REASON][0] == plain[0]
+    assert c.msgs[MODEL_REASON][1]["content"] == plain[1]["content"] + (
+        "\n\nLook only at is_leap_year: rewrite it if it is wrong, else reply NONE.")

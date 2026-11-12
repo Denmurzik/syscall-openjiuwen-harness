@@ -8,8 +8,8 @@ function returns a value, on one of them they differ from it, and the visible te
 text (the examples' functions, texts mined from the set) and a method are never replaced. Any doubt keeps the file.
 
 Round 19 (task 82, HARNESS_REVIEW_REASON): where FAST and ALT both rewrote a function and their rewrites disagree on
-the trial inputs, MODEL_REASON is asked the same, once per file; a function is replaced when its rewrite and one of
-theirs pass the same rules.
+the trial inputs, MODEL_REASON is asked the same about those functions only (`_focus`), once per file; a function is
+replaced when its rewrite and one of theirs pass the same rules.
 
 Round 19 (task 84, HARNESS_REVIEW_METHODS): a method is checked too, on scenarios built from the visible tests that
 call it (`_scenes`): the objects are built and the methods called as the tests do, with other literal values, and the
@@ -51,7 +51,7 @@ MAX_FILE_CHARS = 9000   # a larger file is not reviewed: the reply could not hol
 RUN_TIMEOUT = 20        # one run of one visible test file
 PROBE_TIMEOUT = 10      # the trial inputs of one version of the function
 MIN_LEFT_S = 60         # no model call with less time than this before the stop: its rewrite could not be checked
-REASON_TOKENS = 3000    # output limit of MODEL_REASON's third opinion (low reasoning effort, then the FUNC blocks)
+REASON_TOKENS = 2000    # output limit of MODEL_REASON's third opinion (low reasoning effort, then the FUNC blocks)
 REASON_SPEND_LIMIT = 0.5   # no third opinion once this share of the budget is spent (the stage's own gate)
 
 
@@ -821,8 +821,16 @@ def _may_reason(client, msgs: list[dict]) -> bool:
     return not ledger.exhausted and ledger.spent < REASON_SPEND_LIMIT * ledger.budget and ledger.can_afford(est)
 
 
+def _focus(msgs: list[dict], names: list) -> list[dict]:
+    """The review prompt with the question narrowed to the disputed functions (no other reply shown). Asked about
+    the whole file, MODEL_REASON weighs every function and can spend its whole output limit reasoning (far8
+    coding_8004: 3000 tokens, no reply); asked about one, 150-1000 tokens."""
+    ask = f"\n\nLook only at {', '.join(names)}: rewrite it if it is wrong, else reply NONE."
+    return [*msgs[:-1], {**msgs[-1], "content": msgs[-1]["content"] + ask}]
+
+
 async def _third(client, msgs: list[dict], src: str) -> tuple[dict, str]:
-    """MODEL_REASON's rewrites on the same prompt (no other reply shown), and a word for the note."""
+    """MODEL_REASON's rewrites on `msgs` (`_focus`), and a word for the note."""
     try:
         r = await client.chat(MODEL_REASON, msgs, REASON_TOKENS, reasoning_effort="low")
     except LLMUnavailable:
@@ -877,10 +885,10 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
     if disputed and config.review_reason():
         if stop is not None and stop - time.monotonic() < MIN_LEFT_S:
             tail = f"; {sorted(disputed)} disputed, too close to the stop for {MODEL_REASON}"
-        elif not _may_reason(client, msgs):
+        elif not _may_reason(client, _focus(msgs, sorted(disputed))):
             tail = f"; {sorted(disputed)} disputed, no room for {MODEL_REASON}"
         else:
-            third, word = await _third(client, msgs, src)
+            third, word = await _third(client, _focus(msgs, sorted(disputed)), src)
             new, more = await asyncio.to_thread(_settle, ws, src, new, tests, target, first, second, third,
                                                 sorted(disputed), trials, stop)
             changed += more
