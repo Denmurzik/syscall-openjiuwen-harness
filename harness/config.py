@@ -129,6 +129,18 @@ def review_reason() -> bool:
     return _env_bool("HARNESS_REVIEW_REASON", REVIEW_REASON)
 
 
+# default of HARNESS_REVIEW_NAMED (round 19, task 83): a raise counts as named by a visible test also inside a
+# `with pytest.raises(X):` / `with self.assertRaises(X):` block that calls the function, and a test line names the
+# function only by the whole word (`mean` is not `mean_abs`)
+REVIEW_NAMED = True
+
+
+def review_named() -> bool:
+    """The review's reading of which exceptions the visible tests name. Off: round 18 (lines holding the name as a
+    substring). Read at call time: HARNESS_REVIEW_NAMED=1/0."""
+    return _env_bool("HARNESS_REVIEW_NAMED", REVIEW_NAMED)
+
+
 def verify_coding() -> bool:
     """A model checks green single coding fixes on its own. Read at call time: HARNESS_VERIFY_CODING=1/0."""
     return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)

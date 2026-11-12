@@ -359,10 +359,49 @@ def _verdict(src: str, tests: str, name: str, a: str, b: str, stop: float | None
     if not all(ba[i] == bb[i] and _exc(ba[i]) in _VALUE_EXC for i in spots):
         return [], False
     seg = _texts(src).get(name, "")
-    named = [ln for ln in tests.splitlines() if name in ln]
+    named = _naming(tests, name)
     if not all(e in seg or any(e in ln for ln in named) for e in excs):
         return [], False
     return [t for t in (a, b) if all(re.search(r"\braise\s+" + e + r"\b", t) for e in excs)], False
+
+
+_RAISES = frozenset({"raises", "assertRaises", "assertRaisesRegex"})
+
+
+def _callee(call: ast.Call) -> str | None:
+    """The called name: `f(...)` -> f, `x.f(...)` -> f."""
+    return getattr(call.func, "attr", None) or getattr(call.func, "id", None)
+
+
+def _naming(tests: str, name: str) -> list[str]:
+    """The test text that may name an exception for the function `name` (a method by its own name): the lines that
+    hold the name as a whole word (`mean` is not `mean_abs`), and the head of every `with pytest.raises(X):` /
+    `with self.assertRaises(X):` block whose body calls the function, though the call stands on another line.
+    HARNESS_REVIEW_NAMED off: round 18, the lines that hold the name anywhere."""
+    short = name.rsplit(".", 1)[-1]
+    if not config.review_named():
+        return [ln for ln in tests.splitlines() if short in ln]
+    word = re.compile(r"(?<!\w)" + re.escape(short) + r"(?!\w)")
+    out = [ln for ln in tests.splitlines() if word.search(ln)]
+    try:
+        tree = ast.parse(tests)
+    except (SyntaxError, ValueError, RecursionError):
+        return out
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _callee(node) in _RAISES and any(
+                getattr(a, "attr", None) == short or getattr(a, "id", None) == short for a in node.args[1:]):
+            out.append(ast.get_source_segment(tests, node) or "")   # assertRaises(X, f, ...) over several lines
+            continue
+        if not isinstance(node, (ast.With, ast.AsyncWith)):
+            continue
+        heads = [it.context_expr for it in node.items
+                 if isinstance(it.context_expr, ast.Call) and _callee(it.context_expr) in _RAISES]
+        if not heads:
+            continue
+        calls = any(isinstance(c, ast.Call) and _callee(c) == short for stmt in node.body for c in ast.walk(stmt))
+        if calls:
+            out += [ast.get_source_segment(tests, h) or "" for h in heads]
+    return out
 
 
 def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | None = None) -> list[str]:
@@ -375,8 +414,9 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | Non
     function raises today (a guard for empty input, another exception type) is no evidence. Only a rewrite that
     raises on no input where the file's function returns a value is stored: one that drops a guard of ours would
     turn a hidden test of that input red. The one exception: where both rewrites raise the same value-domain
-    exception on every such input, the function's text or a visible test line naming it names that exception
-    ("ValueError if the lengths differ"), and the stored text says `raise <Name>`. A method cannot be probed: kept.
+    exception on every such input, the function's text or the visible tests name that exception for it
+    ("ValueError if the lengths differ", `_naming`), and the stored text says `raise <Name>`. A method cannot be
+    probed: kept.
     Out of time before `stop`: kept."""
     return _verdict(src, tests, name, a, b, stop)[0]
 
