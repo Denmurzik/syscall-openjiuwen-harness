@@ -62,18 +62,42 @@ def _protected(rel: str) -> bool:
             or any(p in ("tests", "test", "__tests__", "spec") + _DATA_DIRS for p in parts[:-1]))
 
 
-def _named_by_tests(ws: Path, rel: str) -> bool:
-    """A file name some test file of the workspace mentions (expected output, fixture data)."""
+def _code_texts(ws: Path):
+    """The texts of the workspace's code files (tests and the code alike, vendored trees left out)."""
+    for p in ws.rglob("*"):
+        if (p.is_file() and p.suffix.lower() in _CODE_SUFFIXES
+                and not (set(p.relative_to(ws).parts[:-1]) & _SKIP_DIRS) and p.stat().st_size <= 200_000):
+            yield p.read_text(encoding="utf-8", errors="ignore")
+
+
+def _named_in_code(ws: Path, rel: str) -> bool:
+    """A file name some code file of the workspace mentions: a test file (expected output, fixture data) or a
+    helper of the code that reads it (`open('rate.json')` in loader.py). Such a data file is never created here."""
     name = Path(rel).name
     try:
-        for p in ws.rglob("*"):
-            if (p.is_file() and p.suffix.lower() in _CODE_SUFFIXES and _protected(p.relative_to(ws).as_posix())
-                    and not (set(p.relative_to(ws).parts[:-1]) & _SKIP_DIRS) and p.stat().st_size <= 200_000
-                    and name in p.read_text(encoding="utf-8", errors="ignore")):
-                return True
+        return any(name in text for text in _code_texts(ws))
     except OSError:
         return True
-    return False
+
+
+def _values_module(ws: Path, rel: str) -> bool:
+    """An existing Python module with no def and no class at its top level (`TOTAL = 7`) that some code file of the
+    workspace imports: the expected values of the tests, never rewritten."""
+    import ast
+    if not rel.endswith(".py"):
+        return False
+    try:
+        tree = ast.parse((ws / rel).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError, RecursionError):
+        return True
+    if any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for n in tree.body):
+        return False
+    mod = re.escape(rel[:-3].replace("/", "."))
+    used = re.compile(r"^\s*(?:from\s+" + mod + r"\s+import\b|import\s+(?:[\w.]+\s*,\s*)*" + mod + r"\b)", re.M)
+    try:
+        return any(used.search(text) for text in _code_texts(ws))
+    except OSError:
+        return True
 
 
 def _files(ws: Path) -> list[tuple[str, str]]:
@@ -139,7 +163,9 @@ def parse(reply: str, ws: Path, whole: set) -> dict:
             continue
         if (ws / rel).exists() and (rel not in whole or p.suffix.lower() not in _CODE_SUFFIXES):
             continue
-        if p.suffix.lower() not in _CODE_SUFFIXES and _named_by_tests(ws, rel):   # the tests' own data
+        if p.suffix.lower() not in _CODE_SUFFIXES and _named_in_code(ws, rel):   # data the tests or the code read
+            continue
+        if (ws / rel).exists() and _values_module(ws, rel):   # expected values kept in a module
             continue
         out[rel] = body
         if len(out) >= MAX_WRITES:

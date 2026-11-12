@@ -176,3 +176,32 @@ def test_no_call_when_the_budget_left_cannot_hold_a_whole_reply(tmp_path):
     c.ledger = TokenLedger(100_000, 0)
     r = asyncio.run(L.fix_coding(t, c))
     assert r.status == "solved" and len(c.calls) == 1
+
+
+USELESS = "FUNC total\ndef total(xs):\n    return sum(xs)\n"
+TOTAL_TEST = ("import unittest\nfrom pricing import total\n{imp}\n\nclass T(unittest.TestCase):\n"
+              "    def test_a(self):\n        self.assertEqual(total([1, 2, 3]), {exp})\n")
+
+
+def test_a_module_of_expected_values_is_never_rewritten(tmp_path):
+    t = _task(tmp_path, {"pricing.py": "def total(xs):\n    return sum(xs)\n", "expected.py": "TOTAL = 7\n",
+                         "test_pricing.py": TOTAL_TEST.format(imp="from expected import TOTAL", exp="TOTAL")}, reward=1.0)
+    c = Fake([USELESS, USELESS, "FILE expected.py\nTOTAL = 6\nEND FILE\n", "FILE expected.py\nTOTAL = 6\nEND FILE\n"])
+    r = asyncio.run(L.fix_coding(t, c))
+    assert r.status == "unparsed" and (t.workspace / "expected.py").read_text(encoding="utf-8") == "TOTAL = 7\n"
+    ws = t.workspace   # a module with a function may be rewritten; one nobody imports too
+    (ws / "consts.py").write_text("RATE = 2\n", encoding="utf-8")
+    assert rescue.parse("FILE pricing.py\ndef total(xs):\n    return 7\nEND FILE\nFILE consts.py\nRATE = 3\nEND FILE\n",
+                        ws, {"pricing.py", "consts.py"}) == {"pricing.py": "def total(xs):\n    return 7\n",
+                                                             "consts.py": "RATE = 3\n"}
+
+
+def test_a_new_data_file_the_code_reads_is_never_created(tmp_path):
+    files = {"pricing.py": "from loader import rate\n\n\ndef total(xs):\n    return sum(xs) * rate()\n",
+             "loader.py": "import json\n\n\ndef rate():\n    return json.load(open('rate.json'))['r']\n",
+             "test_pricing.py": TOTAL_TEST.format(imp="", exp="12")}
+    t = _task(tmp_path, files, reward=1.0)
+    data = 'FILE rate.json\n{"r": 2}\nEND FILE\n'
+    c = Fake([USELESS, USELESS, data, data])
+    r = asyncio.run(L.fix_coding(t, c))
+    assert r.status == "unparsed" and not (t.workspace / "rate.json").exists()
