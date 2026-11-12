@@ -249,7 +249,8 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
                         return book
                 lines = [f"(zip archive, {len(names)} members)"] + names[:12]
                 first = next((n for n in names if not n.endswith("/")), None)
-                if first is not None:
+                if first is not None and "[Content_Types].xml" not in names and names[:1] != ["mimetype"]:
+                    # (an Office or OpenDocument file: its first member is package XML, not content)
                     try:   # an encrypted or damaged member keeps the listing
                         with z.open(first) as f:
                             head = f.read(PREVIEW_FILE)

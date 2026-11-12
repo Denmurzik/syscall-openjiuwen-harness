@@ -136,3 +136,11 @@ def test_the_keys_of_every_object_are_listed(tmp_path):
     out = L.describe_workspace(tmp_path)
     assert "(a list of 50 objects with keys 'sku', 'qty', 'discount'; not in every object: 'discount')" in out
     assert "'k11' and 3 more)" in out
+
+
+def test_an_office_file_shows_its_members_without_package_xml(tmp_path):
+    with zipfile.ZipFile(tmp_path / "report.docx", "w") as z:
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types/>')
+        z.writestr("word/document.xml", "<w:document/>")
+    out = L.describe_workspace(tmp_path)
+    assert "(zip archive, 2 members)\n[Content_Types].xml\nword/document.xml" in out and "<?xml" not in out
