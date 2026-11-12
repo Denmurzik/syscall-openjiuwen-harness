@@ -94,7 +94,8 @@ def _mylib(t):
     return (t.workspace / "mylib.py").read_text(encoding="utf-8")
 
 
-def test_the_coding_8001_shape_keeps_the_fix_and_the_original_transfer(tmp_path):
+def test_the_whole_definition_pass_keeps_the_fix_and_the_original_transfer(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_MINIMAL_DEFS", "1")   # off by default
     t = _task(tmp_path, BANK, BANK_TESTS)
     r = asyncio.run(fix_coding(t, FakeClient([BANK_PATCH])))
     assert r.status == "solved" and r.note == f"patched by {MODEL_FAST}, cut back to the original text: " \
@@ -113,7 +114,7 @@ def test_a_helper_the_model_added_stays(tmp_path):
     # the fix calls a new helper: restoring `lo` turns a test red, the helper stays whatever happens
     patched = ("def _least(xs):\n    return sorted(xs)[0]\n\n\ndef lo(xs):\n    return _least(xs)\n\n\n"
                "def hi(xs):\n    return max(xs)\n")
-    t =_task(tmp_path, TWO, TWO_TESTS)
+    t = _task(tmp_path, TWO, TWO_TESTS)
     fixed, cut = asyncio.run(_cut_back(t.workspace, TWO, patched))
     assert cut == [] and fixed == patched
 
@@ -179,3 +180,80 @@ def test_switch_off_keeps_the_inlined_line(tmp_path, monkeypatch):
     t = _task(tmp_path, BANK, BANK_TESTS_8001)
     asyncio.run(fix_coding(t, FakeClient([BANK_PATCH])))
     assert "other.balance += amount" in _mylib(t)
+
+
+# ---------------------------------------------------------------- fix round 1 (review probes P1, P2, P3b, P4)
+def _cut(tmp_path, orig, fixed, tests):
+    t = _task(tmp_path, fixed, tests)
+    return asyncio.run(_cut_back(t.workspace, orig, fixed))
+
+
+def test_p1_a_faithful_inline_gets_no_second_call(tmp_path):
+    # the model wrote out all of `deposit` on `other`: giving the call back would log the deposit twice
+    faithful = BANK.replace("amount >= self.balance", "amount > self.balance").replace(
+        "        self.withdraw(amount)\n        other.deposit(amount)\n",
+        "        if amount > self.balance:\n            raise ValueError(\"insufficient funds\")\n"
+        "        self.balance -= amount\n        other.balance += amount\n"
+        "        other.history.append((\"deposit\", amount))\n")
+    fixed, cut = _cut(tmp_path, BANK, faithful, BANK_TESTS_8001)
+    assert cut == [] and fixed == faithful
+
+
+ORD = ("def fee(amount):\n    return amount * 2 // 100\n\n\ndef notify(log, order_id, who):\n"
+       "    log.append((order_id, who))\n\n\ndef place(log, order_id, who, amount):\n"
+       "    notify(log, who, order_id)\n    return amount + fee(amount)\n")
+ORD_TESTS = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n    def test_place(self):\n"
+             "        self.assertEqual(mylib.place([], 1, \"x\", 100), 103)\n")
+
+
+def test_p2_an_argument_fix_of_an_own_call_stays(tmp_path):
+    fixed_src = ORD.replace("notify(log, who, order_id)", "notify(log, order_id, who)").replace(
+        "return amount + fee(amount)", "return amount + fee(amount) + 1")
+    fixed, cut = _cut(tmp_path, ORD, fixed_src, ORD_TESTS)
+    assert cut == [] and "notify(log, order_id, who)" in fixed
+
+
+TAGS = ("class Tags:\n    def __init__(self):\n        self.tags = set()\n        self.count = 0\n\n"
+        "    def add(self, t):\n        self.tags.add(t)\n        self.count += 1\n\n"
+        "    def remove(self, t):\n        self.tags.remove(t)\n        self.count += 1\n        return self.count\n")
+TAGS_TESTS = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n    def test_remove(self):\n"
+              "        s = mylib.Tags()\n        s.add(\"a\")\n        self.assertEqual(s.remove(\"a\"), 0)\n")
+
+
+def test_p3b_a_set_method_named_like_an_own_method_is_no_own_call(tmp_path):
+    fixed_src = TAGS.replace("        self.tags.remove(t)\n        self.count += 1\n        return",
+                             "        self.tags.discard(t)\n        self.count -= 1\n        return")
+    fixed, cut = _cut(tmp_path, TAGS, fixed_src, TAGS_TESTS)
+    assert cut == [] and "self.tags.discard(t)" in fixed
+
+
+MEAN = "def mean(xs):\n    return sum(xs) // len(xs)\n\n\ndef spread(xs):\n    return max(xs) - max(xs)\n"
+MEAN_FIX = MEAN.replace("sum(xs) // len(xs)", "sum(xs) / len(xs)").replace("max(xs) - max(xs)", "max(xs) - min(xs)")
+MEAN_TESTS = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
+              "    def test_mean(self):\n        self.assertEqual(mylib.mean([2, 4]), 3)\n\n"
+              "    def test_spread(self):\n        self.assertEqual(mylib.spread([1, 4]), 3)\n")
+
+
+def test_p4_a_silent_fix_in_another_definition_stays_by_default(tmp_path, monkeypatch):
+    fixed, cut = _cut(tmp_path, MEAN, MEAN_FIX, MEAN_TESTS)
+    assert cut == [] and "sum(xs) / len(xs)" in fixed
+    monkeypatch.setenv("HARNESS_MINIMAL_DEFS", "1")   # the whole-definition pass would undo it
+    fixed, cut = _cut(tmp_path / "on", MEAN, MEAN_FIX, MEAN_TESTS)
+    assert cut == ["mean"] and "sum(xs) // len(xs)" in fixed
+
+
+def test_the_green_patch_is_on_disk_before_the_cut_back_runs(tmp_path, monkeypatch):
+    import harness.llm_routes as lr
+    seen = []
+
+    async def cancelled(ws, original, fixed, targs=()):
+        seen.append((ws / "mylib.py").read_text(encoding="utf-8"))
+        raise asyncio.CancelledError   # a deadline cancel inside a test run of the cut-back
+
+    monkeypatch.setattr(lr, "_cut_back", cancelled)
+    t = _task(tmp_path, BANK, BANK_TESTS_8001)
+    try:
+        asyncio.run(fix_coding(t, FakeClient([BANK_PATCH])))
+    except asyncio.CancelledError:
+        pass
+    assert seen and "amount > self.balance" in seen[0] and _mylib(t) == seen[0]

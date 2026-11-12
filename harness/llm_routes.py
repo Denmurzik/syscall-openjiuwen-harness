@@ -1412,6 +1412,47 @@ def _own_call(line: str, names: set) -> bool:
     return (f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None) in names
 
 
+_CONTAINER_METHODS = frozenset(dir(list)) | frozenset(dir(dict)) | frozenset(dir(set)) | frozenset(dir(str))
+
+
+def _callee(f: ast.expr) -> str | None:
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+
+
+def _inlined(src: str, original: str, name: str, new_line: str, old_line: str) -> bool:
+    """The model's `new_line` stands in for the own call `old_line` by inlining it, and giving the call back adds
+    nothing twice. Not when the model's line calls the callee itself (an argument fix: `notify(log, order_id, who)`);
+    for a method call, not when the receiver is no plain name (`self.tags.remove(t)` is a set's method), not when a
+    receiver other than `self` gets a list/dict/set/str method name, and not when a line of the callee's body that
+    acts on `self.` already stands, on the receiver, elsewhere in the model's definition (a faithful inline:
+    `other.history.append(...)` written out next to `other.balance += amount`)."""
+    try:
+        f = ast.parse(old_line.strip()).body[0].value.func
+        callee = _callee(f)
+        if any(isinstance(n, ast.Call) and _callee(n.func) == callee for n in ast.walk(ast.parse(new_line.strip()))):
+            return False
+        if not isinstance(f, ast.Attribute):
+            return True
+        if not isinstance(f.value, ast.Name):
+            return False
+        recv = f.value.id
+        if recv != "self" and callee in _CONTAINER_METHODS:
+            return False
+        s0, e0, _ = _locate(src)[name]
+        mine = {ln.strip() for ln in io.StringIO(src).readlines()[s0:e0]} - {new_line.strip()}
+        old_lines = io.StringIO(original).readlines()
+        for q, (s, e, _) in _locate(original).items():
+            if q.rsplit(".", 1)[-1] != callee:
+                continue
+            for ln in old_lines[s + 1:e]:
+                st = ln.strip()
+                if "self." in st and st.replace("self.", recv + ".") in mine:
+                    return False
+        return True
+    except (SyntaxError, ValueError, RecursionError, AttributeError, IndexError, KeyError):
+        return False
+
+
 def _line_restores(src: str, original: str, name: str) -> list[tuple[tuple, str]]:
     """(key, `src` with one line of the definition `name` given back an original line) for each line of a block the
     model rewrote (a `replace` of difflib) that is a simple statement standing where the original called a function
@@ -1440,6 +1481,8 @@ def _line_restores(src: str, original: str, name: str) -> list[tuple[tuple, str]
             if not cands or max(cands)[0] < LINE_SIMILAR:
                 continue
             k = -max(cands)[1]
+            if not _inlined(src, original, name, new[j], old[k]):
+                continue
             text = old[k] if old[k].endswith("\n") else old[k] + "\n"
             cand = "".join(lines[:s0 + j] + [text] + lines[s0 + j + 1:])
             try:
@@ -1451,12 +1494,13 @@ def _line_restores(src: str, original: str, name: str) -> list[tuple[tuple, str]
 
 
 async def _cut_back(ws: Path, original: str | None, fixed: str, targs: tuple = ()) -> tuple[str, list[str]]:
-    """HARNESS_MINIMAL_PATCH (round 20, task 88): `fixed` is green on the visible tests. Every function or method
-    whose text differs from `original` (the task's file before phase 1 and the ladder) takes its original text back,
-    one at a time in file order, when the visible tests stay green; passes repeat while one restore is kept. A model
-    that also rewrote a correct function (far8 coding_8001: `transfer` inlined, its history entries lost) leaves
-    only the change the tests need; the definition that was the bug fails a test on its old text and stays fixed.
-    Definitions the model added stay. Returns (source, restored names); never raises: out of time
+    """HARNESS_MINIMAL_PATCH (round 20, task 88): `fixed` is green on the visible tests; `original` is the task's
+    file before phase 1 and the ladder. With HARNESS_MINIMAL_DEFS (off by default) every function or method whose text
+    differs takes its original text back first, one at a time in file order, when the visible tests stay green
+    (passes repeat while one restore is kept). Then the line pass (`_line_restores`): a line where the model inlined a
+    call of the file's own function takes the call back when the tests stay green (far8 coding_8001:
+    `other.deposit(amount)` for `other.balance += amount`, which lost b's history entry). Definitions the model added
+    stay. Returns (source, restored names); never raises: out of time
     (`MINIMAL_PATCH_S`) or on any failure, what is done so far."""
     done: list[str] = []
     if not config.minimal_patch() or not original or original == fixed:
@@ -1465,7 +1509,7 @@ async def _cut_back(ws: Path, original: str | None, fixed: str, targs: tuple = (
     try:
         names = [n for n, _ in sorted(_locate(fixed).items(), key=lambda kv: kv[1][0])]
         tried: set = set()   # (name, source) pairs already run: a red restore is not run again on the same file
-        progress = True
+        progress = config.minimal_defs()   # HARNESS_MINIMAL_DEFS: the whole-definition pass, off by default
         while progress:
             progress = False
             for name in names:
@@ -1506,6 +1550,23 @@ async def _cut_back(ws: Path, original: str | None, fixed: str, targs: tuple = (
     except Exception:
         log.exception("cut-back of a green patch failed; the patch stays as it is")
     return fixed, done
+
+
+def _write_green(ws: Path, mylib_path: Path, text: str) -> None:
+    write_mylib(mylib_path, text)
+    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+    shutil.rmtree(mylib_path.parent / "__pycache__", ignore_errors=True)   # a package's own
+
+
+async def _write_and_cut(ws: Path, mylib_path: Path, original: str | None, fixed: str,
+                         targs: tuple = ()) -> tuple[str, list[str]]:
+    """The green patch goes to disk first (a deadline cancel inside the cut-back keeps it), then the cut-back; the
+    file is written again only when the cut-back changed the text."""
+    _write_green(ws, mylib_path, fixed)
+    cut_text, cut = await _cut_back(ws, original, fixed, targs)
+    if cut_text != fixed:
+        _write_green(ws, mylib_path, cut_text)
+    return cut_text, cut
 
 
 def _cut_note(note: str, names: list[str]) -> str:
@@ -1552,10 +1613,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
                 restarted = True
                 fixed = apply_patch(restart, r.text)
                 if fixed is not None and (await call_tool("run_tests", _run_candidate, ws, fixed, *targs)).ok:
-                    fixed, cut = await _cut_back(ws, original, fixed, targs)
-                    write_mylib(mylib_path, fixed)
-                    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
-                    shutil.rmtree(mylib_path.parent / "__pycache__", ignore_errors=True)   # a package's own
+                    fixed, cut = await _write_and_cut(ws, mylib_path, original, fixed, targs)
                     return SolveResult("solved", answer="DONE",
                                        note=_cut_note(f"patched by {MODEL_FAST} from the file before mutations", cut))
         except ModelFailing:
@@ -1594,10 +1652,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
                 continue
             report = await call_tool("run_tests", _run_candidate, ws, fixed, *targs)
             if report.ok:
-                fixed, cut = await _cut_back(ws, original, fixed, targs)
-                write_mylib(mylib_path, fixed)
-                shutil.rmtree(ws / "__pycache__", ignore_errors=True)
-                shutil.rmtree(mylib_path.parent / "__pycache__", ignore_errors=True)   # a package's own
+                fixed, cut = await _write_and_cut(ws, mylib_path, original, fixed, targs)
                 return SolveResult("solved", answer="DONE", note=_cut_note(f"patched by {model}", cut))
             note = f"{model}: tests still failing"
             # a candidate that hangs where the base did not: its empty run says nothing of the base asked next

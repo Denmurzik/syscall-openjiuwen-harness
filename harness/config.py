@@ -235,17 +235,27 @@ def deep_tests() -> bool:
     return _env_bool("HARNESS_DEEP_TESTS", DEEP_TESTS)
 
 
-# default of HARNESS_MINIMAL_PATCH. Round 20, task 88: a green model patch of the ladder is cut back to the
-# definitions the visible tests need. Each function or method it changed takes its original text back, one at a
-# time, while the visible tests stay green (far8 coding_8001: the model fixed `withdraw` and also rewrote the
-# correct `transfer`, dropping its history entries). Off: round 19
+# default of HARNESS_MINIMAL_PATCH. Round 20, task 88: a green model patch of the ladder gives back the calls of the
+# file's own functions it inlined, one line at a time, while the visible tests stay green (far8 coding_8001: the
+# visible test needs `transfer` changed, the model also wrote `other.balance += amount` for `other.deposit(amount)`
+# and lost b's history entry). Off: round 19
 MINIMAL_PATCH = True
-MINIMAL_PATCH_S = 20.0   # seconds of extra test runs per task; the restores not tried by then are skipped
+# default of HARNESS_MINIMAL_DEFS: before that, every changed definition takes its original text back while the visible
+# tests stay green. Off by default: it fired on no recorded task, and it undoes a silent fix the model made in another
+# definition (`//` -> `/` in a `mean` the visible test cannot tell)
+MINIMAL_DEFS = False
+# seconds of extra test runs per task; checked before each run, so the real cap is this plus one test run
+MINIMAL_PATCH_S = 20.0
 
 
 def minimal_patch() -> bool:
     """The cut-back of a green ladder patch. Read at call time: HARNESS_MINIMAL_PATCH=1/0."""
     return _env_bool("HARNESS_MINIMAL_PATCH", MINIMAL_PATCH)
+
+
+def minimal_defs() -> bool:
+    """The whole-definition pass of the cut-back (needs HARNESS_MINIMAL_PATCH). HARNESS_MINIMAL_DEFS=1/0."""
+    return _env_bool("HARNESS_MINIMAL_DEFS", MINIMAL_DEFS)
 
 
 def llm_timeout() -> float:
