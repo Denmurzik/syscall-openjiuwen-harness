@@ -943,6 +943,7 @@ class _Trial:
         self.inputs: list = []
         self.method, self.mod, self.head = "." in name, _module_name(target), ""
         self.expr_head: str | None = None   # HARNESS_REVIEW_PROBES: the inputs are source text (`_visible_exprs`)
+        self.short: set = set()   # HARNESS_REVIEW_PROBES: the inputs that leave a parameter with a default out
         # round 19: ours is probed twice and an input where it differs from itself is set aside (`steady`). Every
         # round-19 switch off: one run of ours, as in round 18
         self.twice = config.review_reason() or config.review_methods()
@@ -961,6 +962,7 @@ class _Trial:
                 if 1 <= need < len(args):
                     short = [tuple(args[:need])] + [(x,) + tuple(args[1:need]) for x in _pool(args[0])[:6]]
                     self.inputs = main[:BATTERY_CAP - len(short)] + extra + short
+                    self.short = set(range(len(self.inputs) - len(short), len(self.inputs)))
             elif config.review_probes():
                 found = _visible_exprs(tests, name)
                 if found is not None:
@@ -1102,6 +1104,13 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
                             and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
         if not (hung and trial.hangs(hung, stop)):   # the confirming run only when nothing else shows ours wrong
             return [], False
+    # HARNESS_REVIEW_PROBES: a difference only on the calls that leave a default out is a default that keeps state
+    # between calls (`used=set()`): no evidence where the docstring says the state is meant (unique across calls,
+    # a cache), since rewrites "fix" a mutable default on sight
+    shown = [i for i in both if ba[i] == bb[i] and trial.public(ba[i]) != trial.public(ours[i])
+             and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC)]
+    if shown and not swap and set(shown) <= trial.short and _KEEPS_STATE.search(seg.lower()):
+        return [], False
 
     def says(t):
         return all(re.search(r"\braise\s+" + e + r"\b", t) for e in swap)
@@ -1127,6 +1136,10 @@ _CONDITION = {"ZeroDivisionError": r"\bzero\b|\b0\b|divis|divid|denominator",
               "IndexError": r"empty|index|out of range|position|bound",
               "KeyError": r"\bkey|missing|unknown|not found|absent|no such",
               "ValueError": r"invalid|malformed|format|negative|out of range|outside|not an?\b"}
+
+
+_KEEPS_STATE = re.compile(r"cache|memo|across calls|between calls|previous|earlier call|unique|persist|remember|"
+                          r"so far|accumulat|registry")
 
 
 def _doc_raises(seg: str, name: str, theirs: str) -> bool:

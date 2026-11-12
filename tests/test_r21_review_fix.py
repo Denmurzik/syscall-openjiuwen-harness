@@ -123,3 +123,41 @@ def test_a_named_exception_counts_only_where_the_docstring_ties_it_to_the_condit
     assert accepted(tied, RATIO_TESTS, "parse_ratio", new(tied))
     assert not accepted(other, RATIO_TESTS, "parse_ratio", new(other))
     assert not accepted(caught, RATIO_TESTS, "parse_ratio", new(caught))
+
+
+NEXT_ID = '''def next_id(prefix, used=set()):
+    """A new id `prefix-N` that no earlier call returned (ids are unique across calls)."""
+    n = 1
+    while f"{prefix}-{n}" in used:
+        n += 1
+    used.add(f"{prefix}-{n}")
+    return f"{prefix}-{n}"
+'''
+NEXT_ID_TESTS = UT + '''from mylib import next_id
+
+
+class T(unittest.TestCase):
+    def test_first(self):
+        self.assertEqual(next_id("a", set()), "a-1")
+'''
+ADD_TAG = '''def add_tag(tag, tags=[]):
+    """Return a list made of `tags` followed by `tag`. The list passed in is not modified, and
+    calling add_tag('x') without a list always returns ['x']."""
+    tags.append(tag)
+    return tags
+'''
+ADD_TAG_TESTS = UT + '''from mylib import add_tag
+
+
+class T(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add_tag("b", ["a"]), ["a", "b"])
+'''
+
+
+def test_a_mutable_default_meant_to_keep_state_is_no_evidence():
+    fixed = NEXT_ID.replace("used=set()):", "used=None):").replace('    n = 1\n', '    used = set() if used is None else used\n    n = 1\n')
+    assert not accepted(NEXT_ID, NEXT_ID_TESTS, "next_id", fixed)
+    fixed = ADD_TAG.replace("tags=[]):", "tags=None):").replace("    tags.append(tag)\n    return tags\n",
+                                                                "    return list(tags or []) + [tag]\n")
+    assert accepted(ADD_TAG, ADD_TAG_TESTS, "add_tag", fixed)       # the docstring says nothing of kept state
