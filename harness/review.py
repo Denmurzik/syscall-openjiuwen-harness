@@ -1096,7 +1096,8 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
     seg = _texts(src).get(name, "")
     swap = {_exc(ba[i]) for i in range(len(ours))
             if _exc(ours[i]) in _VALUE_EXC and _exc(ba[i]) in _VALUE_EXC and ba[i] == bb[i] and ba[i] != ours[i]
-            and _exc(ba[i]) in seg and _exc(ours[i]) not in seg} if config.review_probes() and not trial.method else set()
+            and _doc_raises(seg, _exc(ba[i]), _exc(ours[i])) and _exc(ours[i]) not in seg} \
+        if config.review_probes() and not trial.method else set()
     if not swap and not any(ba[i] == bb[i] and trial.public(ba[i]) != trial.public(ours[i])
                             and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
         if not (hung and trial.hangs(hung, stop)):   # the confirming run only when nothing else shows ours wrong
@@ -1118,6 +1119,33 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
     if not all(e in seg or any(e in ln for ln in named) for e in excs):
         return [], False
     return [t for t in (a, b) if all(re.search(r"\braise\s+" + e + r"\b", t) for e in excs) and says(t)], False
+
+
+# HARNESS_REVIEW_PROBES: words of the condition under which a function lets each value-domain exception out ("the
+# second number is zero" for a division): a docstring that names another exception for that condition
+_CONDITION = {"ZeroDivisionError": r"\bzero\b|\b0\b|divis|divid|denominator",
+              "IndexError": r"empty|index|out of range|position|bound",
+              "KeyError": r"\bkey|missing|unknown|not found|absent|no such",
+              "ValueError": r"invalid|malformed|format|negative|out of range|outside|not an?\b"}
+
+
+def _doc_raises(seg: str, name: str, theirs: str) -> bool:
+    """The function's docstring says it raises `name` in a sentence that names the condition under which it lets
+    `theirs` out today ("Raises ValueError when the second number is zero", the code divides). A mention elsewhere
+    (an `except ValueError:` line, a docstring sentence about another condition) is not enough."""
+    try:
+        node = ast.parse(textwrap.dedent(seg)).body[0]
+        doc = ast.get_docstring(node) or ""
+    except (SyntaxError, ValueError, RecursionError, IndexError, TypeError):
+        return False
+    cond = _CONDITION.get(theirs)
+    if not doc or cond is None:
+        return False
+    for sentence in re.split(r"(?<=[.;!?])\s+|\n\s*\n", doc):
+        low = sentence.lower()
+        if re.search(r"\b" + name + r"\b", sentence) and re.search(r"\brais", low) and re.search(cond, low):
+            return True
+    return False
 
 
 _RAISES = frozenset({"raises", "assertRaises", "assertRaisesRegex"})

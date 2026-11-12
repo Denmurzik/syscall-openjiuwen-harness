@@ -95,3 +95,31 @@ def test_string_variants_never_push_pairs_out_of_the_cap(monkeypatch):
     off = r._battery(args, 3)
     assert len(off) == r.BATTERY_CAP and on[:r.BATTERY_CAP] == off     # the variants come after, in their own room
     assert "2024-03-10T12:00-02:00" in {t[0] for t in on[r.BATTERY_CAP:]}
+
+
+RATIO_TESTS = UT + '''from mylib import parse_ratio
+
+
+class T(unittest.TestCase):
+    def test_ratio(self):
+        self.assertEqual(parse_ratio("3:4"), 0.75)
+'''
+RATIO_FIX = '''    a, b = text.split(":")
+    if int(b) == 0:
+        raise ValueError("zero")
+    return int(a) / int(b)
+'''
+
+
+def _ratio(doc, extra=""):
+    return f'def parse_ratio(text):\n    """{doc}"""\n{extra}    a, b = text.split(":")\n    return int(a) / int(b)\n'
+
+
+def test_a_named_exception_counts_only_where_the_docstring_ties_it_to_the_condition():
+    tied = _ratio("'3:4' -> 0.75. Raises ValueError when the second number is zero or the text has no ':'.")
+    other = _ratio("'3:4' -> 0.75. Raises ValueError when the text has no ':'.")
+    caught = _ratio("'3:4' -> 0.75.", "    try:\n        int(text)\n    except ValueError:\n        pass\n")
+    new = lambda src: src.split('    a, b = text.split(":")')[0] + RATIO_FIX   # noqa: E731
+    assert accepted(tied, RATIO_TESTS, "parse_ratio", new(tied))
+    assert not accepted(other, RATIO_TESTS, "parse_ratio", new(other))
+    assert not accepted(caught, RATIO_TESTS, "parse_ratio", new(caught))
