@@ -56,13 +56,13 @@ def _task(tmp_path, files=BIO, q=Q, check="exact_str", tid="search_1", reward=2.
     return Task(tid, "search", q, reward, check, tmp_path / tid, ws)
 
 
-def _agree(task, replies, may_call=lambda reason: True):
+def _agree(task, replies, may_call=lambda reason: True, keep=None):
     client = Fake(replies)
 
     async def go():
         CALLS.set([])
         first = await L.solve_with_program(task, client)
-        return await L.prose_agreement(task, client, first, may_call)
+        return await L.prose_agreement(task, client, first, may_call, keep=keep)
     return asyncio.run(go()), client.models
 
 
@@ -170,6 +170,99 @@ def test_prose_more_gate(tmp_path):
     assert not scheduler._prose_more(ledger, task, t0 - 3600, 3600, False)   # new units have stopped
     small = TokenLedger(2000, 0)
     assert scheduler._prose_more(small, task, t0, 3600, False) and not scheduler._prose_more(small, task, t0, 3600, True)
+    # less than a REASON call's timeout before new units stop: ALT may still start, REASON may not
+    short = config.stop_new_before_deadline_s() + config.llm_timeout() / 2
+    assert scheduler._prose_more(ledger, task, t0, short, False) and not scheduler._prose_more(ledger, task, t0, short, True)
+
+
+# ---------------------------------------------------------------- fix round 1 (review of task 79)
+
+COMP = "import re\nprint(re.search(r'set up in (\\d+)', pages['Dune Robotics']).group(1))"
+
+
+def _hop(tmp_path):
+    return _task(tmp_path, q=HOP, check="exact_int")
+
+
+@pytest.mark.parametrize("fast, alt, reason", [
+    ([COMP], [CRASH, CRASH], ["1975"]),                  # REASON answers a lone number
+    ([COMP], [CRASH, CRASH], ["print(1975)"]),           # REASON prints a constant
+    ([COMP, COMP], [ModelFailing("down")], ["print(1975)"]),   # ALT served by FAST's weights: no vote either
+    ([CRASH, CRASH], [COMP], ["1975"]),                  # FAST failed, ALT computed it
+])
+def test_a_reason_constant_on_a_chain_is_no_vote(tmp_path, fast, alt, reason):
+    res, _ = _agree(_hop(tmp_path), {F: fast, A: alt, R: reason})
+    assert res.status == "solved" and res.answer == "1999" and "no vote" in res.note
+
+
+def test_a_reason_constant_on_a_count_is_no_vote(tmp_path):
+    q = LEAD + "How many people work at Dune Robotics?"
+    count = "print(sum('works at Dune Robotics' in t for t in pages.values()))"
+    res, _ = _agree(_task(tmp_path, q=q, check="exact_int"), {F: [count], A: [CRASH, CRASH], R: ["7"]})
+    assert res.answer == "1" and "no majority, first kept" in res.note
+
+
+def test_a_computed_reason_answer_on_a_chain_still_votes(tmp_path):
+    res, _ = _agree(_hop(tmp_path), {F: [CRASH, CRASH], A: ["print(1975 + 1)"], R: [COMP]})
+    assert res.answer == "1999" and "no majority, reason's answer" in res.note
+
+
+def test_reason_marks_its_constants(tmp_path):
+    def reason(reply):
+        return asyncio.run(L.solve_with_reason(_task(tmp_path, q=Q), Fake({R: [reply]})))
+    assert reason("print('Tartu College')").extra == {"literal": True}
+    assert reason("1975").extra == {"literal": True}
+    computed = reason("print(pages['Ann Lee'].split('graduating from ')[1].split(',')[0])")
+    assert computed.answer == "Tartu College" and computed.extra is None
+
+
+def test_alts_answer_is_kept_before_the_reason_attempt(tmp_path):
+    kept, seen_at_reason = [], []
+
+    class Watch(Fake):
+        async def chat(self, model, messages, max_tokens, **extra):
+            if model == R:
+                seen_at_reason.append([r.answer for r in kept])
+            return await super().chat(model, messages, max_tokens, **extra)
+
+    task = _task(tmp_path)
+    client = Watch({F: [CRASH, CRASH], A: [GRAZ], R: [TARTU]})
+
+    async def go():
+        CALLS.set([])
+        first = await L.solve_with_program(task, client)
+        return await L.prose_agreement(task, client, first, lambda reason: True, keep=kept.append)
+    res = asyncio.run(go())
+    assert seen_at_reason == [["Graz"]] and res.answer == "Tartu College"
+
+
+def test_fasts_answer_is_not_kept_twice(tmp_path):
+    kept = []
+    _agree(_task(tmp_path), {F: [TARTU], A: [LYON], R: [GRAZ]}, keep=kept.append)
+    assert kept == []   # the scheduler wrote FAST's answer before the agreement
+
+
+@pytest.mark.parametrize("fast, alt", [
+    ("print('Arktika Labs')", "print('Arktika Labs.')"),
+    ("print(\"O'Brien Labs\")", "print('O\\u2019Brien Labs')"),
+    ("print('Tartu College')", "print('  tartu  college ')"),
+])
+def test_spellings_the_soft_check_reads_alike_agree(tmp_path, fast, alt):
+    res, models = _agree(_task(tmp_path, files={**BIO, "kb/x.md": "# X\n\nArktika Labs. O'Brien Labs. O’Brien Labs.\n"}),
+                         {F: [fast], A: [alt]})
+    assert models == [F, A] and "fast and alt" in res.note
+
+
+def test_numbers_agree_as_numbers(tmp_path):
+    as_float = "import re\nprint(float(re.search(r'set up in (\\d+)', pages['Dune Robotics']).group(1)))"
+    res, models = _agree(_hop(tmp_path), {F: [COMP], A: [as_float]})
+    assert res.answer == "1999" and models == [F, A]
+
+
+def test_different_names_still_disagree():
+    assert not L._same_vote("Mina Garcia", "Elena Olsen", "exact_str")
+    assert not L._same_vote("18", "19", "exact_int") and L._same_vote("18", "18.0", "exact_int")
+    assert not L._same_vote(".", "!", "exact_str")
 
 
 # ---------------------------------------------------------------- the multi-hop literal rule
@@ -181,6 +274,11 @@ def test_prose_more_gate(tmp_path):
     ("In which year was the mentor of Wim Kowalski born?", False),
     ("In which city is the headquarters of the company where Rosa Kowalski works?", False),
     ("What is the name of the spouse of Quinn Olsen?", False),
+    ("What is the name of Quinn Olsen's spouse?", False),
+    ("What is the name of Dmitri Fischer's employer?", False),
+    ("What was the name of Leo Ito's first company?", False),
+    ("What is the title of Leo Ito's first novel?", False),
+    ("In which year was the company of Ann Lee's mentor founded?", True),
     ("In which year was Nikolai Haddad born?", False),
 ])
 def test_asks_multihop(q, hop):
@@ -267,7 +365,7 @@ def test_only_prose_tasks_get_agreement(tmp_path, monkeypatch, run_env):
         return SolveResult("solved", answer="7" if task.task_type == "math" else "Graz", note="model program")
     seen, on_disk = [], {}
 
-    async def agree(task, client, first, may_call):
+    async def agree(task, client, first, may_call, keep=None):
         seen.append(task.task_id)
         on_disk.update(_answers(tasks))   # FAST's answer is written before the extra attempts
         assert may_call(False) and may_call(True)
@@ -298,7 +396,7 @@ def test_agreement_off_is_round_16(tmp_path, monkeypatch, run_env):
     async def prog(task, client):
         return SolveResult("solved", answer="Graz", note="model program")
 
-    async def agree(task, client, first, may_call):
+    async def agree(task, client, first, may_call, keep=None):
         raise AssertionError("no agreement with the knob off")
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     monkeypatch.setattr(scheduler, "prose_agreement", agree)
@@ -313,7 +411,7 @@ def test_a_crashing_agreement_keeps_fasts_answer(tmp_path, monkeypatch, run_env)
     async def prog(task, client):
         return SolveResult("solved", answer="Graz", note="model program")
 
-    async def agree(task, client, first, may_call):
+    async def agree(task, client, first, may_call, keep=None):
         raise RuntimeError("boom")
     monkeypatch.setattr(scheduler, "solve_with_program", prog)
     monkeypatch.setattr(scheduler, "prose_agreement", agree)

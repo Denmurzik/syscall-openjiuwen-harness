@@ -465,11 +465,12 @@ def _asks_aggregate(question: str) -> bool:
 
 # a relation chain over pages ("the employer of the mentor of X", "X's mentor's employer", "the employer of X's
 # mentor"): a constant printed for it was followed across pages in the head (r16c search_8104: 1975, a whole word on
-# another page, for 1973). One relation ("the mentor of X", "the company where X works") is read from the shown pages
+# another page, for 1973). One relation ("the mentor of X", "the company where X works", "the name of X's spouse",
+# "the title of X's novel") is read from the shown pages
 _PROSE_MULTIHOP_ASK = re.compile(
     r"\b[Tt]he (?!(?:name|year|date|city|country|place|title)\b)[a-z]+(?: [a-z]+)? of the [a-z]+(?: [a-z]+)? of\b"
     r"|\w['\u2019]s [a-z]+(?: [a-z]+)?['\u2019]s\b"
-    r"|\bof (?:the )?[A-Z][\w-]*(?: [A-Z][\w-]*)*['\u2019]s [a-z]+")
+    r"|(?<!\bname )(?<!\btitle )\bof (?:the )?[A-Z][\w-]*(?: [A-Z][\w-]*)*['\u2019]s [a-z]+")
 
 
 def _asks_multihop(question: str) -> bool:
@@ -742,7 +743,8 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
         return SolveResult("unparsed", note="reason program cut by the budget limit")
     bare = bare_answer(r.text, task)  # the model answered without a program (a lone number)
     if bare is not None:
-        return SolveResult("solved", answer=bare, note="model reason answer")
+        # `literal`: no code computed it (the prose agreement gives it no vote on a count or a chain; task 79)
+        return SolveResult("solved", answer=bare, note="model reason answer", extra={"literal": True})
     use_kb = _is_kb_task(task)
     code = extract_code(r.text, join_all=False)
     res = await call_tool("run_program", run_program, kb_program(code) if use_kb else code, task.workspace)
@@ -767,7 +769,8 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
     if bad is not None:
         return SolveResult("unparsed", note=f"answer shape: {bad}",
                            extra={"best_guess": answer, "shape_mismatch": True})
-    return SolveResult("solved", answer=answer, note="model reason program")
+    return SolveResult("solved", answer=answer, note="model reason program",
+                       extra={"literal": True} if is_bare_literal(code) else None)
 
 
 # ---------------------------------------------------------------- prose agreement (round 17, task 79)
@@ -806,22 +809,45 @@ async def _prose_attempt(route, task: Task) -> tuple[SolveResult | None, set]:
     return res, used
 
 
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'", "`": "'"})
+
+
+def _vote_key(answer: str) -> str:
+    """A text answer as the soft check reads it: no case, no extra spaces, no quotes around it, no closing
+    punctuation ("Arktika Labs." = "arktika labs"), one apostrophe (U+2019 = "'")."""
+    s = " ".join(str(answer).split()).translate(_APOSTROPHES).strip("\"' ")
+    return s.rstrip(".,;:!").strip().casefold()
+
+
+def _same_vote(a: str, b: str, check: str | None) -> bool:
+    """Two attempts give the same answer: numbers as numbers (exact_int: 18 = 18.0), text by `_vote_key`."""
+    from harness.confirm import same_answer
+    if same_answer(a, b):
+        return True
+    return check != "exact_int" and _vote_key(a) == _vote_key(b) != ""
+
+
 def _agreed(res: SolveResult, note: str, reasoned: bool) -> SolveResult:
     extra = {**(res.extra or {}), "reasoned": True} if reasoned else res.extra
     return SolveResult(res.status, answer=res.answer, note=note, extra=extra)
 
 
-async def prose_agreement(task: Task, client, first: SolveResult, may_call) -> SolveResult:
+async def prose_agreement(task: Task, client, first: SolveResult, may_call, keep=None) -> SolveResult:
     """A prose answer stands when two independent attempts give it (round 17, task 79). `first` is the FAST program
-    route's result (`solve_with_program`). A MODEL_ALT program on the same prompt follows; equal answers (`same_answer`:
-    numbers as numbers, text without case and extra spaces, as the soft check) settle it. Different, or one gave
+    route's result (`solve_with_program`). A MODEL_ALT program on the same prompt follows; equal answers (`_same_vote`:
+    numbers as numbers, text as the soft check reads it) settle it. Different, or one gave
     nothing: one MODEL_REASON program (`solve_with_reason`) is the third, and an answer two attempts share wins;
     without one, REASON's answer, else the first, else ALT's (a wrong answer scores the same as none). An ALT
     attempt answered by FAST's weights (ALT failing, `chat_or_alt`) is no vote. `may_call(reason)` is the
     scheduler's gate (ledger, spend share, time) before the ALT (False) and the REASON (True) attempt: when it
     says no, the answers so far stand. `extra["reasoned"]`: REASON gave its verdict here, the final pass skips the
-    task. A first result that is no failed program (IMPOSSIBLE, a missing page, the proxy) is returned as it is."""
-    from harness.confirm import family, same_answer
+    task. A first result that is no failed program (IMPOSSIBLE, a missing page, the proxy) is returned as it is.
+    REASON's answer is no vote when no code computed it (a lone number, a printed constant) and the question is a
+    count, a comparison or a chain (`_asks_aggregate`, `_asks_multihop`): the r16c search_8104 failure. `keep(res)`
+    (the scheduler's settle) writes ALT's answer before the REASON attempt when FAST had none (FAST's own answer is
+    on disk already), so a deadline in that call keeps it."""
+    from harness.confirm import family
+    same = lambda a, b: _same_vote(a, b, task.check)  # noqa: E731
     fast = _prose_vote(first)
     if fast is None and not _program_failed(first):
         return first
@@ -834,21 +860,28 @@ async def prose_agreement(task: Task, client, first: SolveResult, may_call) -> S
     alt_say = repr(alt)
     if alt is not None and family(MODEL_FAST) in alt_used:
         alt, alt_say = None, f"{alt!r} (answered by {MODEL_FAST}, no vote)"
-    if fast is not None and alt is not None and same_answer(fast, alt):
+    if fast is not None and alt is not None and same(fast, alt):
         return _agreed(first, f"{head} fast and alt {fast!r}", False)
     head = f"{head} fast {fast!r}, alt {alt_say}"
+    if fast is None and alt is not None and keep is not None:
+        keep(alt_res)
     if not may_call(True):
         if fast is None and alt is not None:
             return _agreed(alt_res, f"{head}; no budget for {MODEL_REASON}: alt's answer", False)
         return _agreed(first, f"{head}; no budget for {MODEL_REASON}: first kept", False)
     rsn_res, _ = await _prose_attempt(lambda: solve_with_reason(task, client), task)
     rsn = _prose_vote(rsn_res)
+    rsn_say = repr(rsn)
+    if rsn is not None and (rsn_res.extra or {}).get("literal"):
+        question = strip_boilerplate(task.instruction)
+        if _asks_aggregate(question) or _asks_multihop(question):
+            rsn, rsn_say = None, f"{rsn!r} (a constant for a count or a chain, no vote)"
     rnote = (rsn_res.note or "") if rsn_res is not None else ""
     reasoned = rsn_res is not None and not rnote.startswith("llm unavailable") and "cut by the budget" not in rnote
-    head = f"{head}, reason {rsn!r}"
-    if rsn is not None and fast is not None and same_answer(rsn, fast):
+    head = f"{head}, reason {rsn_say}"
+    if rsn is not None and fast is not None and same(rsn, fast):
         return _agreed(first, f"{head}: fast and reason agree", reasoned)
-    if rsn is not None and alt is not None and same_answer(rsn, alt):
+    if rsn is not None and alt is not None and same(rsn, alt):
         return _agreed(rsn_res, f"{head}: alt and reason agree", reasoned)
     if rsn is not None:
         return _agreed(rsn_res, f"{head}: no majority, reason's answer", reasoned)

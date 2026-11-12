@@ -64,10 +64,13 @@ def _reason_2b(ledger: TokenLedger, task: Task, t0: float, deadline_s: float) ->
 
 def _prose_more(ledger: TokenLedger, task: Task, t0: float, deadline_s: float, reason: bool) -> bool:
     """One more attempt on a prose answer (task 79) may start: less than REASON_PASS_SPEND_LIMIT of the budget is
-    spent, new units are not stopped yet, and the ledger holds the attempt (a REASON call whole, see _reason_fits)."""
+    spent, new units are not stopped yet, and the ledger holds the attempt (a REASON call whole, see _reason_fits).
+    A REASON attempt also needs the time of its call to its timeout before new units stop: one cut by the deadline
+    is paid and answers nothing."""
     if ledger.spent >= REASON_PASS_SPEND_LIMIT * ledger.budget:
         return False
-    if time.monotonic() - t0 > deadline_s - config.stop_new_before_deadline_s():
+    left_s = deadline_s - config.stop_new_before_deadline_s() - (time.monotonic() - t0)
+    if left_s < 0 or (reason and left_s < config.llm_timeout()):
         return False
     return _reason_fits(ledger, task) if reason else ledger.can_afford(estimate_tokens(task))
 
@@ -591,7 +594,8 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
         try:
             if first.status == "solved" and more(False):
                 settle(2, task, first, time.monotonic() - start)
-            res = await prose_agreement(task, client, first, more)
+            res = await prose_agreement(task, client, first, more,
+                                        keep=lambda best: settle(2, task, best, time.monotonic() - start))
         except BudgetExhausted:
             raise
         except Exception:   # the extra attempts are lost, FAST's answer is not

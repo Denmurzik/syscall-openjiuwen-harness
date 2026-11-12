@@ -157,7 +157,8 @@ def confirm_2a() -> bool:
 
 # default of HARNESS_PROSE_AGREE. Round 17, task 79: a 2b answer on a prose knowledge base stands when a MODEL_ALT
 # program gives it too; else a MODEL_REASON program is the third attempt (llm_routes.prose_agreement). Round 16 gave
-# other answers to byte-identical prompts (runs/r16b, r16c prose2: 26 and 23 of 31). Off: round 16
+# other answers to byte-identical prompts (runs/r16b, r16c prose2: 26 and 23 of 31). Off: one FAST attempt as in round
+# 16, but the multi-hop literal rule stays (on prose2 search_8104 FAST's program then fails: no answer)
 PROSE_AGREE = True
 
 
