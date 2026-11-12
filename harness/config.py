@@ -284,6 +284,18 @@ def rich_preview() -> bool:
     return _env_bool("HARNESS_RICH_PREVIEW", RICH_PREVIEW)
 
 
+# default of HARNESS_CODING_RESCUE. Expert 10, patch b: a coding task the ladder cannot serve (no file to repair yet,
+# no test file, another language, or every rung answered and the tests are still red while the workspace has other
+# source files) gets one whole-file answer of MODEL_FAST (then MODEL_ALT), stored when the checks that can be run
+# here are green or when nothing can be run (`harness/rescue.py`). Off: such a task ends without an answer (55354db)
+CODING_RESCUE = True
+
+
+def coding_rescue() -> bool:
+    """The whole-file last resort of the coding ladder. Read at call time: HARNESS_CODING_RESCUE=1/0."""
+    return _env_bool("HARNESS_CODING_RESCUE", CODING_RESCUE)
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 

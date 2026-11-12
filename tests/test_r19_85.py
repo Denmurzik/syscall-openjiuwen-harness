@@ -32,6 +32,7 @@ def _ws(tmp_path, files, name="t"):
 @pytest.fixture
 def deep_off(monkeypatch):
     monkeypatch.setenv("HARNESS_DEEP_TESTS", "0")
+    monkeypatch.setenv("HARNESS_CODING_RESCUE", "0")   # expert 10: round 18 had no whole-file last resort either
 
 
 # discovery

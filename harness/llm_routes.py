@@ -1682,6 +1682,19 @@ def _cut_note(note: str, names: list[str]) -> str:
     return f"{note}, cut back to the original text: {names}" if names else note
 
 
+def _other_sources(ws: Path, target: str) -> bool:
+    """The workspace holds Python source besides the file under repair and the tests (another module the code under
+    test may import)."""
+    from harness.rescue import _protected
+    try:
+        return any(p.is_file() and p.relative_to(ws).as_posix() != target
+                   and not _protected(p.relative_to(ws).as_posix()) and "__pycache__" not in p.parts
+                   and p.name not in ("setup.py", "__init__.py")
+                   for p in ws.rglob("*.py"))
+    except (OSError, ValueError):
+        return False
+
+
 async def fix_coding(task: Task, client, resume: dict | None = None, restart: str | None = None) -> SolveResult:
     """`resume`: the `ladder` of an earlier result that found the LLM unavailable. Models answer the same at
     temperature 0, so only the rungs that got no answer are bought again, from the partial fix reached so far.
@@ -1698,6 +1711,9 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
     except (OSError, UnicodeDecodeError) as e:
         if is_free_coding(task):  # nothing to repair: the text asks for a program's output
             return await solve_with_program(task, client)
+        if config.coding_rescue():   # expert 10: another build of task, one whole-file answer
+            from harness.rescue import rescue_coding
+            return await rescue_coding(task, client, f"cannot read workspace: {e}")
         return SolveResult("unparsed", note=f"cannot read workspace: {e}")
     base_report = await call_tool("run_tests", _run_candidate, ws, base, *targs)
     if base_report.ok:
@@ -1777,6 +1793,10 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         await client.wait_for_model([a[0] for a in attempts])
         unavailable = None
     if unavailable is None:
+        if config.coding_rescue() and note != "no attempt made" and _other_sources(ws, target):
+            # expert 10: every rung answered and the tests are still red; the defect may sit in another module
+            from harness.rescue import rescue_coding
+            return await rescue_coding(task, client, note)
         return SolveResult("unparsed", note=note)
     ladder = {"answered": answered, "base": base}
     if original != base:   # the partial fix of a rung is the base now: the cut-back still goes to the original

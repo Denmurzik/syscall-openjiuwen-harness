@@ -1,0 +1,201 @@
+"""Last resort for a coding task the ladder cannot serve (expert 10, patch b, HARNESS_CODING_RESCUE).
+
+The ladder repairs one Python file against one test file. A task of another build ends without an answer and without
+a call: the file to write does not exist yet (`solve.py` from a description), there is no test file (the examples in
+the docstrings are the tests), the code is not Python, or the defect sits in a module the tests do not import. Here
+the model sees the task text and the files of the workspace once and returns whole files. They are stored when the
+checks that can be run here are green (the Python test files, a `python -m doctest` the task names) or when nothing
+can be run at all (another language): a wrong answer costs nothing, no answer scores nothing. A red check stores
+nothing. Test files are never written."""
+import asyncio
+import re
+import shutil
+import tempfile
+from pathlib import Path
+
+from harness.config import MODEL_ALT, MODEL_FAST
+from harness.llm import LLMUnavailable
+from harness.proc import run_python
+from harness.result import SolveResult
+from harness.solvers.testrun import run_in_dir
+
+RESCUE_SYSTEM = (
+    "You finish a small programming task in a working directory where you cannot run commands. The task text and the "
+    "files of the directory follow. Reply with the complete new text of every file you create or change and nothing "
+    "else, one block per file, in exactly this format:\nFILE <relative path>\n<complete text of the file>\nEND FILE\n"
+    "Never create or change test files (test_*.py, *_test.py, conftest.py, test.js, anything under tests/) and never "
+    "change the examples inside docstrings. Hidden tests run the same code on other inputs: every function must do "
+    "what its name, docstring, comments, the README and the task text say for every valid input. Keep the file "
+    "names, function names and signatures the tests and the task use. No explanations, no markdown fences.")
+MAX_TOKENS = 1800
+FILE_CHARS = 8000      # a longer file is shown cut and may not be rewritten
+TOTAL_CHARS = 24000
+MAX_FILES = 24
+MAX_WRITES = 6
+CHECK_TIMEOUT = 30
+_TEXT_SUFFIXES = frozenset({".py", ".js", ".mjs", ".ts", ".sh", ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+                            ".cfg", ".ini", ".csv", ".go", ".java", ".rb", ".c", ".h", ".cpp", ".rs", ".sql", ".html"})
+_BLOCK = re.compile(r"^FILE[ \t]+(\S[^\n]*?)[ \t]*\n(.*?)(?:\nEND FILE[ \t]*$|(?=\nFILE[ \t]+\S)|\Z)", re.M | re.S)
+_DOCTEST = re.compile(r"-m\s+doctest\s+(?:-v\s+)?([\w./-]+\.py)")
+_SKIP_DIRS = frozenset({"__pycache__", ".git", "node_modules", ".venv", "venv", ".pytest_cache"})
+
+
+def _protected(rel: str) -> bool:
+    """A file of the tests: never written."""
+    parts = rel.lower().split("/")
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0]
+    return (stem.startswith("test_") or stem.endswith("_test") or stem in ("test", "tests", "conftest")
+            or ".test." in name or ".spec." in name or any(p in ("tests", "test", "__tests__", "spec") for p in parts[:-1]))
+
+
+def _files(ws: Path) -> list[tuple[str, str]]:
+    """(relative path, text) of the workspace's text files, the smallest first so that a large one cannot crowd out
+    the rest; at most MAX_FILES."""
+    out = []
+    try:
+        paths = sorted(p for p in ws.rglob("*") if p.is_file() and not (set(p.relative_to(ws).parts[:-1]) & _SKIP_DIRS))
+    except OSError:
+        return []
+    for p in paths:
+        rel = p.relative_to(ws).as_posix()
+        if p.suffix.lower() not in _TEXT_SUFFIXES or rel == "answer.txt":
+            continue
+        try:
+            if p.stat().st_size > 200_000:
+                continue
+            out.append((rel, p.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return sorted(out, key=lambda x: (len(x[1]), x[0]))[:MAX_FILES]
+
+
+def messages(task, files: list[tuple[str, str]]) -> tuple[list[dict], set]:
+    """The prompt, and the files shown whole (only those may be rewritten; a new file may always be created)."""
+    blocks, whole, used = [], set(), 0
+    for rel, text in sorted(files, key=lambda x: x[0]):
+        shown = text
+        if len(text) > FILE_CHARS or used + len(text) > TOTAL_CHARS:
+            room = max(0, min(FILE_CHARS, TOTAL_CHARS - used))
+            shown = text[:room] + "\n...[cut]..."
+        else:
+            whole.add(rel)
+        used += len(shown)
+        tag = " (tests, read-only)" if _protected(rel) else ""
+        blocks.append(f"--- {rel}{tag} ---\n{shown}")
+    user = f"Task:\n{task.instruction}\n\nFiles of the directory:\n" + ("\n".join(blocks) if blocks else "(none)")
+    return [{"role": "system", "content": RESCUE_SYSTEM}, {"role": "user", "content": user}], whole
+
+
+def parse(reply: str, ws: Path, whole: set) -> dict:
+    """relative path -> new text for the blocks that may be stored: a path inside the workspace, not a test file, a
+    text type, and either a new file or one that was shown whole. {} when the reply holds no such block."""
+    out: dict = {}
+    text = re.sub(r"<think>.*?</think>", "", (reply or "").replace("\r\n", "\n"), flags=re.S)
+    for m in _BLOCK.finditer(text):
+        rel = m.group(1).strip().strip("`'\"").replace("\\", "/")
+        while rel.startswith("./"):
+            rel = rel[2:]
+        body = m.group(2)
+        lines = body.split("\n")
+        if lines and lines[0].lstrip().startswith("```"):     # a fenced block in spite of the format
+            lines = lines[1:]
+            while lines and not lines[-1].strip():
+                lines.pop()
+            if lines and lines[-1].strip() == "```":
+                lines.pop()
+        body = "\n".join(lines).rstrip("\n") + "\n"
+        p = Path(rel)
+        if (not rel or p.is_absolute() or ".." in p.parts or rel.startswith("/") or ":" in rel or _protected(rel)
+                or p.suffix.lower() not in _TEXT_SUFFIXES or rel == "answer.txt" or not body.strip()):
+            continue
+        if (ws / rel).exists() and rel not in whole:
+            continue
+        out[rel] = body
+        if len(out) >= MAX_WRITES:
+            break
+    return out
+
+
+def _checks(task, ws: Path) -> tuple[list[str], str | None]:
+    """What can be run here: the Python test files (the root's, else those below it) and a doctest file the task
+    names."""
+    from harness.llm_routes import _deep_tests
+    try:
+        tests = sorted(p.name for pat in ("test_*.py", "*_test.py") for p in ws.glob(pat) if p.is_file())
+    except OSError:
+        tests = []
+    tests = tests or _deep_tests(ws)
+    m = _DOCTEST.search(task.instruction or "")
+    doc = m.group(1).lstrip("./") if m else None
+    if doc is not None and (".." in Path(doc).parts or Path(doc).is_absolute()):
+        doc = None
+    return tests, doc
+
+
+def _verify(task, ws: Path, new: dict) -> bool | None:
+    """True: every check that can be run is green with the new files; False: one is red; None: nothing can be run."""
+    tests, doc = _checks(task, ws)
+    if not tests and doc is None:
+        return None
+    tmp = Path(tempfile.mkdtemp(prefix="rescue_"))
+    try:
+        cand = tmp / "ws"
+        shutil.copytree(ws, cand, ignore=shutil.ignore_patterns("__pycache__"))
+        for rel, text in new.items():
+            (cand / rel).parent.mkdir(parents=True, exist_ok=True)
+            (cand / rel).write_text(text, encoding="utf-8", newline="\n")
+        for name in tests:
+            if not run_in_dir(cand, name, timeout=CHECK_TIMEOUT).ok:
+                return False
+        if doc is not None:
+            if not (cand / doc).is_file():
+                return False
+            res = run_python(["-m", "doctest", doc], cwd=cand, timeout=CHECK_TIMEOUT)
+            if res.timed_out or res.returncode != 0:
+                return False
+        return True
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _store(ws: Path, new: dict) -> None:
+    for rel, text in new.items():
+        p = ws / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f".{p.name}.rescue.tmp")
+        tmp.write_text(text, encoding="utf-8", newline="\n")
+        tmp.replace(p)
+    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+
+
+async def rescue_coding(task, client, why: str) -> SolveResult:
+    """One call of MODEL_FAST, then one of MODEL_ALT when the first reply cannot be stored. `why`: the note of the
+    result this replaces; it is kept when nothing is stored."""
+    ws = Path(task.workspace)
+    files = await asyncio.to_thread(_files, ws)
+    if not files:
+        return SolveResult("unparsed", note=why)
+    msgs, whole = messages(task, files)
+    note = why
+    for model in (MODEL_FAST, MODEL_ALT):
+        try:
+            r = await client.chat(model, msgs, MAX_TOKENS)
+        except LLMUnavailable as e:
+            note = f"{why}; rescue: llm unavailable: {e}"[:300]
+            continue
+        if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= MAX_TOKENS:
+            note = f"{why}; rescue: {model} hit the output limit"[:300]
+            continue
+        new = parse(r.text, ws, whole)
+        if not new:
+            note = f"{why}; rescue: {model} returned no file"[:300]
+            continue
+        verdict = await asyncio.to_thread(_verify, task, ws, new)
+        if verdict is False:
+            note = f"{why}; rescue: {model}: checks still red"[:300]
+            continue
+        await asyncio.to_thread(_store, ws, new)
+        how = "checks green" if verdict else "nothing to run here, stored unchecked"
+        return SolveResult("solved", answer="DONE", note=f"rescue by {model}: wrote {sorted(new)} ({how})"[:300])
+    return SolveResult("unparsed", note=note)
