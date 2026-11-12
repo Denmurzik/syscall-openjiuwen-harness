@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 from harness.config import MODEL_ALT, MODEL_FAST
-from harness.llm import LLMUnavailable
+from harness.llm import LLMUnavailable, ProxyDown
 from harness.proc import run_python
 from harness.result import SolveResult
 from harness.solvers.testrun import run_in_dir
@@ -256,6 +256,9 @@ async def rescue_coding(task, client, why: str) -> SolveResult:
     for model in (MODEL_FAST, MODEL_ALT):
         try:
             r = await client.chat(model, msgs, MAX_TOKENS)
+        except ProxyDown as e:   # no model answers: the second would only wait for its own timeout
+            note = f"{why}; rescue: llm unavailable: {e}"[:300]
+            break
         except LLMUnavailable as e:
             note = f"{why}; rescue: llm unavailable: {e}"[:300]
             continue

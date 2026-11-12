@@ -122,3 +122,17 @@ def test_too_much_source_to_rewrite_whole_costs_no_call(tmp_path):
     c = Fake(["FILE stats.js\nfunction f() { return 1; }\nEND FILE\n"])
     r = asyncio.run(L.fix_coding(t, c))
     assert r.status == "solved" and len(c.calls) == 1
+
+
+def test_a_proxy_that_is_down_is_not_asked_twice(tmp_path):
+    from harness.llm import ProxyDown
+
+    class Down(Fake):
+        async def chat(self, model, messages, max_tokens, **extra):
+            self.calls.append((model, messages))
+            raise ProxyDown("timeout")
+
+    t = _task(tmp_path, {"stats.js": "function f() {}\n"}, "`node test.js` fails. Fix stats.js.")
+    c = Down([])
+    r = asyncio.run(L.fix_coding(t, c))
+    assert r.status == "unparsed" and "llm unavailable" in r.note and len(c.calls) == 1
