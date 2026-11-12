@@ -1780,12 +1780,19 @@ def _cut_note(note: str, names: list[str]) -> str:
 def _other_sources(ws: Path, target: str) -> bool:
     """The workspace holds Python source besides the file under repair and the tests (another module the code under
     test may import)."""
-    from harness.rescue import _protected
+    import os
+    from harness.rescue import _SKIP_DIRS, _protected
     try:
-        return any(p.is_file() and p.relative_to(ws).as_posix() != target
-                   and not _protected(p.relative_to(ws).as_posix()) and "__pycache__" not in p.parts
-                   and p.name not in ("setup.py", "__init__.py")
-                   for p in ws.rglob("*.py"))
+        for root, dirs, names in os.walk(ws):
+            # a vendored or hidden tree (.venv, node_modules, .git) is not the task's code, and is not walked
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".") and d != "site-packages"]
+            for name in names:
+                if not name.endswith(".py") or name in ("setup.py", "__init__.py"):
+                    continue
+                rel = Path(root, name).relative_to(ws).as_posix()
+                if rel != target and not _protected(rel):
+                    return True
+        return False
     except (OSError, ValueError):
         return False
 

@@ -136,3 +136,14 @@ def test_a_proxy_that_is_down_is_not_asked_twice(tmp_path):
     c = Down([])
     r = asyncio.run(L.fix_coding(t, c))
     assert r.status == "unparsed" and "llm unavailable" in r.note and len(c.calls) == 1
+
+
+def test_a_vendored_or_hidden_tree_is_not_another_source(tmp_path):
+    ws = tmp_path
+    for rel in (".venv/lib/site-packages/six.py", "node_modules/x/y.py", ".hidden/z.py", "venv/a.py",
+                "pkg/__pycache__/m.py", "mylib.py", "test_mylib.py", "conftest.py", "setup.py"):
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text("x = 1\n", encoding="utf-8")
+    assert not L._other_sources(ws, "mylib.py")
+    (ws / "pkg/stats.py").write_text("x = 1\n", encoding="utf-8")
+    assert L._other_sources(ws, "mylib.py")
