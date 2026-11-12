@@ -200,11 +200,11 @@ def test_timeout_or_name_error_of_both_rewrites_is_no_evidence(monkeypatch):
     fa = "def int_sqrt(n):\n    return 0\n"
     fb = "def int_sqrt(n):\n    return 1\n"
     for exc in ("<exc:TimeoutError>", "<exc:NameError>", "<exc:MemoryError>", "<exc:Timeout>"):
-        seq = iter([["1"] * n, ["1"] * (n - 2) + [exc] * 2, ["1"] * (n - 2) + [exc] * 2])
+        seq = iter([["1"] * n, ["1"] * n, ["1"] * (n - 2) + [exc] * 2, ["1"] * (n - 2) + [exc] * 2])
         monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
         assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb) == [], exc
     # the same values with no exception: evidence, both rewrites may be stored
-    seq = iter([["1"] * n, ["1"] * (n - 2) + ["2"] * 2, ["1"] * (n - 2) + ["2"] * 2])
+    seq = iter([["1"] * n, ["1"] * n, ["1"] * (n - 2) + ["2"] * 2, ["1"] * (n - 2) + ["2"] * 2])
     monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
     assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb) == [fa, fb]
 
@@ -310,7 +310,7 @@ def test_values_cut_at_the_repr_limit_are_no_evidence(monkeypatch):
     fa = "def int_sqrt(n):\n    return 0\n"
     fb = "def int_sqrt(n):\n    return 1\n"
     long = "'" + "y" * (review._MAX_REPR - 1)
-    seq = iter([["1"] * n, ["1"] * (n - 2) + [long] * 2, ["1"] * (n - 2) + [long] * 2])
+    seq = iter([["1"] * n, ["1"] * n, ["1"] * (n - 2) + [long] * 2, ["1"] * (n - 2) + [long] * 2])
     monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
     assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb) == []
 

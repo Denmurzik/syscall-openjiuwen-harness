@@ -101,3 +101,30 @@ def test_naming_reads_lines_blocks_and_call_forms():
     assert "lookups" not in text
     assert review._naming(tests, "Store.lookup") == review._naming(tests, "lookup")    # a method by its own name
     assert review._naming("def f(:\n", "f") == ["def f(:"]      # no tree: the lines only
+
+
+# fix round 1, I2: a block names the exception only for the call that raises, the last statement's outermost call
+PARSE_MEAN = ("def parse(text):\n    \"\"\"Numbers of a comma-separated text; ValueError for anything else.\"\"\"\n"
+              "    return [float(p) for p in text.split(',')]\n\n\n"
+              "def mean(xs):\n    \"\"\"Mean of xs; 0.0 for an empty list.\"\"\"\n    if not xs:\n        return 0.0\n"
+              "    return sum(xs) / len(xs)\n")
+PARSE_TESTS = ("import pytest\nfrom mylib import parse, mean\n\n\ndef test_mean():\n    assert mean([1.0, 3.0]) == 2.0\n"
+               "\n\ndef test_bad():\n    with pytest.raises(ValueError):\n        mean(parse('1,x'))\n")
+
+
+def test_a_wrapping_call_does_not_name_the_inner_raise(tmp_path):
+    fix = ("def mean(xs):\n    \"\"\"Mean of xs; 0.0 for an empty list.\"\"\"\n    if not xs:\n"
+           "        raise ValueError('empty')\n    return sum(xs) / len(xs)\n")
+    fix2 = fix.replace("sum(xs) / len(xs)", "sum(xs) / float(len(xs))")
+    task = _task(tmp_path, PARSE_MEAN, PARSE_TESTS)
+    assert _go(task, Fake(_reply(fix), _reply(fix2)))[0] == [] and _lib(task) == PARSE_MEAN
+    assert not any("ValueError" in t for t in review._naming(PARSE_TESTS, "mean"))
+
+
+def test_a_block_names_only_its_last_call():
+    tests = ("import pytest\nimport mylib as m\n\n\ndef test_a():\n    with pytest.raises(KeyError):\n"
+             "        x = m.normalize({})\n        m.validate(x)\n\n\ndef test_b():\n    with pytest.raises(IndexError):\n"
+             "        y = m.first([])\n")
+    assert not any("KeyError" in t for t in review._naming(tests, "normalize"))
+    assert any("KeyError" in t for t in review._naming(tests, "validate"))
+    assert any("IndexError" in t for t in review._naming(tests, "first"))      # an assignment's value counts

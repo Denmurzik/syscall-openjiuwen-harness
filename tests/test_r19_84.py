@@ -230,8 +230,9 @@ def test_scene_outcomes_show_values_state_and_raises():
     assert "<raised:IndexError>" in ours[0]
     two = scenes[0].replace("_rec(st.push(4))", "_rec(st.push(4))\nst.push(5)")
     a, b = (review._scene_outcomes(t, "mylib", head, [two], 10)[0] for t in (STACK, lifo))
-    assert a == '["None", "4", "4", "5", "<raised:none>", "st=Stack{}"]'      # public attributes only
-    assert b == '["None", "5", "4", "4", "<raised:none>", "st=Stack{}"]'
+    tail = chr(30) + '["st._items=[]"]'                     # the private state, after a record separator
+    assert a == '["None", "4", "4", "5", "<raised:none>", "st=Stack{}"]' + tail
+    assert b == '["None", "5", "4", "4", "<raised:none>", "st=Stack{}"]' + tail
     broken = STACK.replace("raise IndexError", "raise ZeroDivisionError")
     assert review._scene_outcomes(broken, "mylib", head, ["st = Stack()\n_rec(st.pop())"], 10) == \
         ["<exc:ZeroDivisionError>"]
@@ -247,3 +248,71 @@ def test_object_state_counts_where_return_values_agree():
     fix2 = "def add(self, k):\n    self.log.append(k)\n    self.n = self.n + k\n    return self.n\n"
     texts, split = review._verdict(lib, tests, "Box.add", fix, fix2)
     assert texts == [fix, fix2] and not split
+
+
+# fix round 1: M1 private state counts for the agreement, M2 a rewrite that changes the decorators is no evidence
+BAG = '''class Bag:
+    def __init__(self):
+        self._data = []
+        self._size = 0
+
+    def add(self, x):
+        self._data.append(x)
+        self._size += 1
+
+    def remove(self, x):
+        """Remove every copy of x."""
+        if x in self._data:
+            self._data.remove(x)
+            self._size -= 1
+
+    def items(self):
+        return list(self._data)
+
+    def __len__(self):
+        return self._size
+'''
+BAG_TESTS = '''import unittest
+from mylib import Bag
+
+
+class T(unittest.TestCase):
+    def test_remove(self):
+        b = Bag()
+        b.add(1)
+        b.add(2)
+        b.remove(1)
+        self.assertEqual(b.items(), [2])
+'''
+BAG_FAST = "def remove(self, x):\n    \"\"\"Remove every copy of x.\"\"\"\n    self._data = [y for y in self._data if y != x]\n"
+BAG_ALT = ("def remove(self, x):\n    \"\"\"Remove every copy of x.\"\"\"\n    n = self._data.count(x)\n"
+           "    self._data = [y for y in self._data if y != x]\n    self._size -= n\n")
+
+
+def test_private_state_makes_a_dispute_the_third_opinion_settles(tmp_path):
+    assert review._verdict(BAG, BAG_TESTS, "Bag.remove", BAG_FAST, BAG_ALT) == ([], True)
+    task = _task(tmp_path, lib=BAG, tests=BAG_TESTS)
+    c = Fake(_reply("Bag.remove", BAG_FAST), _reply("Bag.remove", BAG_ALT), _reply("Bag.remove", BAG_ALT))
+    changed, note = _go(task, c)
+    assert changed == ["Bag.remove"] and note.endswith("with ALT") and "self._size -= n" in _lib(task)
+
+
+def test_private_state_alone_is_no_difference_from_ours():
+    # the same public behaviour, a different private bookkeeping: agreement, but nothing shows ours wrong
+    lib = BAG.replace("        self._size = 0\n", "        self._size = 0\n        self._ops = 0\n")
+    fix = BAG.split("    def remove")[1].split("    def items")[0]
+    fix = "def remove" + fix.replace("\n        ", "\n    ").rstrip() + "\n    self._ops = 1\n"
+    assert review._verdict(lib, BAG_TESTS, "Bag.remove", fix, fix) == ([], False)
+
+
+TEMP = "class Temp:\n    def __init__(self, c):\n        self.c = c\n\n    @property\n    def f(self):\n" \
+       "        return self.c * 9 / 5 + 23\n"
+TEMP_TESTS = "import unittest\nfrom mylib import Temp\n\n\nclass T(unittest.TestCase):\n    def test_f(self):\n" \
+             "        self.assertIsNotNone(Temp(10).f)\n"
+
+
+def test_a_rewrite_that_drops_a_decorator_is_no_evidence():
+    nodec = "def f(self):\n    return self.c * 9 / 5 + 32\n"
+    dec = "@property\n" + nodec
+    assert review._verdict(TEMP, TEMP_TESTS, "Temp.f", nodec, nodec) == ([], False)
+    assert review._verdict(TEMP, TEMP_TESTS, "Temp.f", dec, dec)[0] == [dec, dec]

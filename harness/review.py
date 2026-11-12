@@ -53,6 +53,8 @@ PROBE_TIMEOUT = 10      # the trial inputs of one version of the function
 MIN_LEFT_S = 60         # no model call with less time than this before the stop: its rewrite could not be checked
 REASON_TOKENS = 2000    # output limit of MODEL_REASON's third opinion (low reasoning effort, then the FUNC blocks)
 REASON_SPEND_LIMIT = 0.5   # no third opinion once this share of the budget is spent (the stage's own gate)
+REASON_MAX_CALLS = 6       # third opinions a run, at most (1 to 2K units each: a set where every file disputes would
+REASON_MAX_UNITS = 8000    # otherwise be held back by the 50 % gate alone), and the units they may spend in all
 
 
 def _left(stop: float | None, cap: float) -> float:
@@ -416,7 +418,13 @@ def scene(code):
                 and not isinstance(ns[k], (types.ModuleType, type, types.FunctionType))]
         state = ["%%s=%%s" %% (k, show(ns[k])) for k in left]
         state += ["self.%%s=%%s" %% (k, show(v)) for k, v in sorted(vars(me).items()) if not k.startswith("_")]
-        out = json.dumps(trace + state) + ("<cut>" if cut else "")
+        # the objects' single-underscore attributes: the rewrites must agree on them too, but a difference from ours
+        # is read on the public part only (`_Trial.public`)
+        bound = [(k, ns[k]) for k in left] + [("self." + k, v) for k, v in sorted(vars(me).items())
+                                               if not k.startswith("_")]
+        private = ["%%s.%%s=%%s" %% (k, a, show(x)) for k, v in bound if _ours(type(v)) and hasattr(v, "__dict__")
+                   for a, x in sorted(vars(v).items()) if a.startswith("_") and not a.startswith("__")]
+        out = json.dumps(trace + state) + ("\x1e" + json.dumps(private) if private else "") + ("<cut>" if cut else "")
     except BaseException as e:
         out = "<exc:%%s>" %% ("TimeoutError" if isinstance(e, _Alarm) else type(e).__name__)
     finally:
@@ -621,6 +629,9 @@ class _Trial:
         self.src, self.name, self.memo = src, name, {}
         self.inputs: list = []
         self.method, self.mod, self.head = "." in name, Path(target).stem, ""
+        # round 19: ours is probed twice and an input where it differs from itself is set aside (`steady`). Every
+        # round-19 switch off: one run of ours, as in round 18
+        self.twice = config.review_reason() or config.review_methods()
         if self.method:
             if config.review_methods():
                 self.head, self.inputs = _scenes(tests, name)
@@ -639,35 +650,79 @@ class _Trial:
         """A value cut at the probe's repr limit: it shows neither agreement nor a difference."""
         return out.endswith("<cut>") if self.method else len(out) >= _MAX_REPR
 
-    def outcomes(self, text: str | None, stop: float | None) -> list[str] | None:
-        """The outcomes of the file with `text` as the function (None: the file's own); None when out of time."""
+    def public(self, out: str) -> str:
+        """What a difference from ours is read on: a scene's outcome without its private state (`_SCENE_CHILD`
+        puts the single-underscore attributes after a \\x1e); a function's outcome as it is."""
+        return out.split("\x1e", 1)[0] if self.method else out
+
+    def outcomes(self, text: str | None, stop: float | None, role: str = "ours") -> list[str] | None:
+        """The outcomes of the file with `text` as the function (None: the file's own); None when out of time.
+        A run is remembered by `role` and text: two roles with the same text are two runs, so a rewrite whose output
+        is not the same on every run does not agree with itself."""
         full = self.src if text is None else _spliced(self.src, self.name, text)
         if full is None:
             return None
-        if full not in self.memo:
+        key = (role, full)
+        if key not in self.memo:
             limit = _left(stop, PROBE_TIMEOUT)
             if limit < PROBE_TIMEOUT / 2:
                 return None
-            self.memo[full] = (_scene_outcomes(full, self.mod, self.head, self.inputs, limit) if self.method
-                               else behaviour(full, self.name, self.inputs, timeout=limit))
-        return self.memo[full]
+            self.memo[key] = (_scene_outcomes(full, self.mod, self.head, self.inputs, limit) if self.method
+                              else behaviour(full, self.name, self.inputs, timeout=limit))
+        return self.memo[key]
+
+    def steady(self, stop: float | None) -> list[bool] | None:
+        """Per input: ours gives the same outcome on a second run. An input where it does not (random, time) shows
+        neither agreement nor a difference. All True with every round-19 switch off (round 18: one run)."""
+        first = self.outcomes(None, stop)
+        if first is None or not self.twice:
+            return None if first is None else [True] * len(first)
+        again = self.outcomes(None, stop, "ours again")
+        return None if again is None else [x == y for x, y in zip(first, again)]
+
+
+def _decorators(text: str) -> list[str] | None:
+    """The decorator list of the function in `text`, as AST dumps; None when it does not parse."""
+    try:
+        node = ast.parse(textwrap.dedent(text)).body[0]
+    except (SyntaxError, ValueError, RecursionError, IndexError):
+        return None
+    return [ast.dump(d) for d in getattr(node, "decorator_list", [])]
 
 
 def _verdict(src: str, tests: str, name: str, a: str, b: str, stop: float | None = None,
-             trial: "_Trial | None" = None) -> tuple[list[str], bool]:
+             trial: "_Trial | None" = None, roles: tuple = ("first", "second")) -> tuple[list[str], bool]:
     """(`_evidence`, disagree): disagree is True when the two rewrites are two opinions rather than one: one of them
     shows itself broken and the other does not, they return different values where the file's function returns one,
-    or one raises where the other returns a value. Only then can a third opinion side with one of them."""
+    or one raises where the other returns a value. Only then can a third opinion side with one of them. Where ours
+    differs from itself on some input (`_Trial.steady`), nothing is judged. `roles`: under which names the runs of
+    `a` and `b` are remembered (`_Trial.outcomes`). A method rewrite that changes the method's decorators (drops
+    `@property`) is no evidence."""
     trial = trial if trial is not None else _Trial(src, tests, name)
     if not trial.ok or _spliced(src, name, a) is None or _spliced(src, name, b) is None:
         return [], False
+    if trial.method and not (_decorators(_texts(src).get(name, "")) == _decorators(a) == _decorators(b)):
+        return [], False
+    steady = trial.steady(stop)
+    if steady is None:
+        return [], False
     outs = []
-    for text in (None, a, b):
-        o = trial.outcomes(text, stop)
+    for text, role in ((a, roles[0]), (b, roles[1])):
+        o = trial.outcomes(text, stop, role)
         if o is None:
             return [], False
         outs.append(o)
-    ours, ba, bb = outs
+    if not all(steady):
+        # ours is not the same on every run (random, time): an input where it happened to repeat itself can still
+        # hide chance, the rewrites' agreement there as well as their difference from ours (probe_memo: a wrong
+        # `random.choice(xs[:-1] or xs)` "differs" on [1, 2] when ours drew 2 twice). Not judged, no third opinion
+        return [], False
+    return _judge(src, tests, name, a, b, trial, trial.outcomes(None, stop), *outs)
+
+
+def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", ours: list, ba: list,
+           bb: list) -> tuple[list[str], bool]:
+    """`_verdict`'s rules on the outcomes of ours and of the two rewrites."""
     broken = _broken(ours, ba), _broken(ours, bb)
     if broken[0] or broken[1]:
         return [], broken[0] != broken[1]
@@ -682,7 +737,8 @@ def _verdict(src: str, tests: str, name: str, a: str, b: str, stop: float | None
         return [], len(valid) >= 3 and any(raises[i][0] != raises[i][1] for i in valid)
     if any(ba[i] != bb[i] and not raises[i][0] for i in both):
         return [], True
-    if not any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
+    if not any(ba[i] == bb[i] and trial.public(ba[i]) != trial.public(ours[i])
+               and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
         return [], False
     ok = [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
     if ok:
@@ -711,7 +767,8 @@ def _callee(call: ast.Call) -> str | None:
 def _naming(tests: str, name: str) -> list[str]:
     """The test text that may name an exception for the function `name` (a method by its own name): the lines that
     hold the name as a whole word (`mean` is not `mean_abs`), and the head of every `with pytest.raises(X):` /
-    `with self.assertRaises(X):` block whose body calls the function, though the call stands on another line.
+    `with self.assertRaises(X):` block whose last statement is the call of the function (no other call in its
+    arguments), though the call stands on another line.
     HARNESS_REVIEW_NAMED off: round 18, the lines that hold the name anywhere."""
     short = name.rsplit(".", 1)[-1]
     if not config.review_named():
@@ -733,8 +790,11 @@ def _naming(tests: str, name: str) -> list[str]:
                  if isinstance(it.context_expr, ast.Call) and _callee(it.context_expr) in _RAISES]
         if not heads:
             continue
-        calls = any(isinstance(c, ast.Call) and _callee(c) == short for stmt in node.body for c in ast.walk(stmt))
-        if calls:
+        # the block names the exception for `short` only when the call of `short` is what raises: the outermost call
+        # of the block's last statement, with no other call in its arguments (`mean(parse("1,x"))` raises in parse)
+        call = getattr(node.body[-1], "value", None) if node.body else None
+        if isinstance(call, ast.Call) and _callee(call) == short and not any(
+                isinstance(c, ast.Call) for a in [*call.args, *(k.value for k in call.keywords)] for c in ast.walk(a)):
             out += [ast.get_source_segment(tests, h) or "" for h in heads]
     return out
 
@@ -789,36 +849,44 @@ def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: di
 
 
 def _settle(ws: Path, src: str, cur: str, tests: str, target: str, first: dict, second: dict, third: dict,
-            names: list, trials: dict, stop: float | None = None) -> tuple[str, list[str]]:
+            names: list, trials: dict, stop: float | None = None) -> tuple[str, list[str], dict]:
     """The disputed functions (`names`) where the third rewrite and FAST's, else ALT's, pass `_verdict` as one
-    opinion: that pair's text goes into `cur` when the visible tests stay green."""
-    changed = []
+    opinion: that pair's text goes into `cur` when the visible tests stay green. Also name -> the side taken
+    ("FAST" / "ALT"), for the note."""
+    changed, sides = [], {}
     for name in names:
         if name not in third:
             continue
-        for other in (first[name], second[name]):
+        for other, role, side in ((first[name], "first", "FAST"), (second[name], "second", "ALT")):
             if stop is not None and time.monotonic() > stop:
-                return cur, changed
-            texts, _ = _verdict(src, tests, name, third[name], other, stop, trials.get(name))
+                return cur, changed, sides
+            texts, _ = _verdict(src, tests, name, third[name], other, stop, trials.get(name), ("third", role))
             for text in texts:
                 cand = _spliced(cur, name, text)
                 if cand is not None and _green(ws, cand, target, stop):
                     cur = cand
                     changed.append(name)
+                    sides[name] = side
                     break
             if name in changed:
                 break
-    return cur, changed
+    return cur, changed, sides
 
 
 def _may_reason(client, msgs: list[dict]) -> bool:
     """The third opinion fits the stage's gates: under REASON_SPEND_LIMIT of the budget and affordable (a client
-    without a ledger, as in the tests, always may)."""
+    without a ledger, as in the tests, passes this part), and under the run's cap: REASON_MAX_CALLS calls and
+    REASON_MAX_UNITS units, tallied on the client (one client a run). A True reserves one call."""
+    calls, units = getattr(client, "_review_reason", (0, 0.0))
+    if calls >= REASON_MAX_CALLS or units >= REASON_MAX_UNITS:
+        return False
     ledger = getattr(client, "ledger", None)
-    if ledger is None:
-        return True
-    est = sum(len(m["content"]) for m in msgs) // 40 + REASON_TOKENS
-    return not ledger.exhausted and ledger.spent < REASON_SPEND_LIMIT * ledger.budget and ledger.can_afford(est)
+    if ledger is not None:
+        est = sum(len(m["content"]) for m in msgs) // 40 + REASON_TOKENS
+        if ledger.exhausted or ledger.spent >= REASON_SPEND_LIMIT * ledger.budget or not ledger.can_afford(est):
+            return False
+    client._review_reason = (calls + 1, units)
+    return True
 
 
 def _focus(msgs: list[dict], names: list) -> list[dict]:
@@ -835,6 +903,8 @@ async def _third(client, msgs: list[dict], src: str) -> tuple[dict, str]:
         r = await client.chat(MODEL_REASON, msgs, REASON_TOKENS, reasoning_effort="low")
     except LLMUnavailable:
         return {}, "unavailable"
+    calls, units = getattr(client, "_review_reason", (1, 0.0))
+    client._review_reason = (calls, units + (r.cost or 0))
     if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= REASON_TOKENS:
         return {}, "hit the output limit"
     third = _rewrites(src, r.text)
@@ -881,6 +951,14 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
     disputed, trials = [], {}
     new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known, stop, disputed,
                                            trials)
+    if changed and new != src:
+        # the agreed fixes are written before the third opinion is asked: a failure or a cancel there keeps them
+        if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it
+            return [], "review: the file changed meanwhile, kept"
+        write_mylib(path, new)
+        shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+    else:
+        changed, new = [], src
     tail = ""
     if disputed and config.review_reason():
         if stop is not None and stop - time.monotonic() < MIN_LEFT_S:
@@ -889,14 +967,17 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
             tail = f"; {sorted(disputed)} disputed, no room for {MODEL_REASON}"
         else:
             third, word = await _third(client, _focus(msgs, sorted(disputed)), src)
-            new, more = await asyncio.to_thread(_settle, ws, src, new, tests, target, first, second, third,
-                                                sorted(disputed), trials, stop)
-            changed += more
-            tail = f"; {sorted(disputed)} disputed, {MODEL_REASON} {word}, sided {sorted(more)}"
-    if not changed or new == src:
+            cur, more, sides = await asyncio.to_thread(_settle, ws, src, new, tests, target, first, second, third,
+                                                       sorted(disputed), trials, stop)
+            side = (f" with {sides[more[0]]}" if len(more) == 1 else f" with {sides}") if more else ""
+            tail = f"; {sorted(disputed)} disputed, {MODEL_REASON} {word}, sided {sorted(more)}{side}"
+            if more:
+                if path.read_text(encoding="utf-8") != new:
+                    tail += ", the file changed meanwhile"
+                else:
+                    write_mylib(path, cur)
+                    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+                    changed += more
+    if not changed:
         return [], f"review: no evidence against {sorted(set(first) & set(second))}{tail}, kept"[:300]
-    if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it
-        return [], "review: the file changed meanwhile, kept"
-    write_mylib(path, new)
-    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
     return changed, f"review: replaced {changed} ({sorted(first)} / {sorted(second)}){tail}"[:300]

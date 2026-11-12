@@ -203,3 +203,76 @@ def test_third_opinion_is_asked_about_the_disputed_functions_only(tmp_path):
     assert c.msgs[MODEL_REASON][0] == plain[0]
     assert c.msgs[MODEL_REASON][1]["content"] == plain[1]["content"] + (
         "\n\nLook only at is_leap_year: rewrite it if it is wrong, else reply NONE.")
+
+
+# fix round 1 (review of round 19): I1 nondeterminism, M3 the side in the note, M4 the run's cap, M5 decided fixes kept
+RND = "import random\n\n\ndef pick(xs):\n    \"\"\"A random element of xs.\"\"\"\n    return random.choice(xs)\n"
+RND_TESTS = TESTS.replace("m.is_leap_year(2024)", "m.pick([3]) == 3")
+RND_WRONG = "def pick(xs):\n    \"\"\"A random element of xs.\"\"\"\n    return random.choice(xs[:-1] or xs)\n"
+
+
+@pytest.mark.parametrize("off", [False, True])
+def test_identical_rewrites_of_a_random_function_are_no_evidence(monkeypatch, off):
+    if off:   # every round-19 switch off: round 18 (two runs of the rewrites, one of ours)
+        for k in ("HARNESS_REVIEW_REASON", "HARNESS_REVIEW_METHODS", "HARNESS_REVIEW_NAMED"):
+            monkeypatch.setenv(k, "0")
+    for _ in range(2):
+        texts, split = review._verdict(RND, RND_TESTS, "pick", RND_WRONG, RND_WRONG)
+        assert texts == [] and (off or not split)    # on: ours differs from itself, no dispute either
+
+
+def test_identical_texts_are_two_runs_and_ours_runs_twice(monkeypatch):
+    calls = []
+    real = review.behaviour
+    monkeypatch.setattr(review, "behaviour", lambda *a, **k: calls.append(a[0]) or real(*a, **k))
+    trial = review._Trial(SILENT, TESTS, "is_leap_year")
+    review._verdict(SILENT, TESTS, "is_leap_year", RIGHT, RIGHT, None, trial)
+    assert len(calls) == 4 and calls[0] == calls[1] == SILENT and calls[2] == calls[3]
+    monkeypatch.setenv("HARNESS_REVIEW_REASON", "0")
+    monkeypatch.setenv("HARNESS_REVIEW_METHODS", "0")
+    calls.clear()
+    review._verdict(SILENT, TESTS, "is_leap_year", RIGHT, RIGHT)
+    assert len(calls) == 3 and calls[0] == SILENT                    # round 18: ours once
+
+
+def test_random_function_costs_no_third_opinion(tmp_path):
+    task = _task(tmp_path, lib=RND, tests=RND_TESTS)
+    other = "def pick(xs):\n    \"\"\"A random element of xs.\"\"\"\n    return xs[random.randrange(len(xs))]\n"
+    c = Fake(_reply(RND_WRONG), _reply(other), _reply(RND_WRONG))
+    assert _go(task, c)[0] == [] and c.calls == [MODEL_FAST, MODEL_ALT] and _lib(task) == RND
+
+
+def test_note_names_the_side_taken(tmp_path):
+    task = _task(tmp_path)
+    assert _go(task, Fake(_reply(RIGHT), _reply(OTHER), _reply(RIGHT2)))[1].endswith("sided ['is_leap_year'] with FAST")
+    task = _task(tmp_path / "b")
+    assert _go(task, Fake(_reply(OTHER), _reply(RIGHT), _reply(RIGHT2)))[1].endswith("sided ['is_leap_year'] with ALT")
+
+
+def test_third_opinions_have_a_cap_a_run(tmp_path):
+    c = Fake(_reply(RIGHT), _reply(OTHER), "NONE")
+    for i in range(review.REASON_MAX_CALLS):
+        assert review._may_reason(c, [{"content": "x"}])
+    assert not review._may_reason(c, [{"content": "x"}])
+    c2 = Fake(_reply(RIGHT), _reply(OTHER), "NONE")
+    c2._review_reason = (1, review.REASON_MAX_UNITS)
+    task = _task(tmp_path)
+    changed, note = _go(task, c2)
+    assert changed == [] and MODEL_REASON not in c2.calls and "no room" in note
+    c3 = Fake(_reply(RIGHT), _reply(OTHER), _reply(RIGHT2))
+    _go(_task(tmp_path / "c"), c3)
+    assert c3._review_reason == (1, 2)                               # one call, its cost
+
+
+def test_a_failed_third_opinion_keeps_the_agreed_fix(tmp_path):
+    from harness.llm import BudgetExhausted
+    clamp = "\n\ndef clamp(x, lo, hi):\n    return max(lo, min(x, hi))\n"
+    tests = TESTS.replace("    def test_leap", "    def test_clamp(self):\n        self.assertEqual(m.clamp(5, 0, 9), 5)"
+                                                "\n\n    def test_leap")
+    task = _task(tmp_path, lib=SILENT + clamp, tests=tests)
+    c1 = "def clamp(x, lo, hi):\n    return min(hi, max(x, lo)) if lo <= hi else lo\n"
+    c2 = "def clamp(x, lo, hi):\n    return min(hi, max(x, lo)) if lo <= hi else hi\n"
+    c = Fake(_reply(RIGHT, c1), _reply(RIGHT2, c2), BudgetExhausted("out"))
+    with pytest.raises(BudgetExhausted):
+        _go(task, c)
+    assert c.calls == [MODEL_FAST, MODEL_ALT, MODEL_REASON] and "y % 400 == 0" in _lib(task)
