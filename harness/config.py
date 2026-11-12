@@ -271,6 +271,19 @@ def review_probes() -> bool:
     return _env_bool("HARNESS_REVIEW_PROBES", REVIEW_PROBES)
 
 
+# default of HARNESS_RICH_PREVIEW. Expert 10, patch d: the 2b prompt listed a binary file by name only (x10: an SQLite
+# database, three programs guessed the column names and gave up) and showed five lines of a JSON file whose second
+# top-level key was further down (x10: a three-step search printed IMPOSSIBLE twice). On: the schema and first rows of
+# an SQLite file, the sheets and first rows of an .xlsx, the members of a zip, the first lines of a .gz, and one line
+# with the top-level structure of a JSON file that does not fit its preview. Off: 55354db
+RICH_PREVIEW = True
+
+
+def rich_preview() -> bool:
+    """Previews of binary files and the JSON structure line. Read at call time: HARNESS_RICH_PREVIEW=1/0."""
+    return _env_bool("HARNESS_RICH_PREVIEW", RICH_PREVIEW)
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 

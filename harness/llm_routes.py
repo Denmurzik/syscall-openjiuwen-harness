@@ -198,6 +198,95 @@ def _nbytes(t: str) -> int:
     return len(t.encode("utf-8"))
 
 
+def _clip(text: str, limit: int = 160) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def _binary_preview(p: Path, raw: bytes) -> str | None:
+    """HARNESS_RICH_PREVIEW: a few lines on what a file that is not text holds, None when it is not a kind read here
+    or cannot be read. Nothing is written: the database is opened read-only and immutable (no journal file)."""
+    try:
+        if raw.startswith(b"SQLite format 3\x00"):
+            import sqlite3
+            con = sqlite3.connect(f"file:{p.as_posix()}?mode=ro&immutable=1", uri=True, timeout=2)
+            try:
+                lines = ["(SQLite database: tables and first rows)"]
+                tables = con.execute("select name, sql from sqlite_master where type in ('table', 'view') "
+                                     "and name not like 'sqlite_%' order by name").fetchmany(8)
+                for name, sql in tables:
+                    lines.append(_clip(sql or name, 300))
+                    quoted = '"' + name.replace('"', '""') + '"'
+                    lines += ["  " + _clip(repr(row)) for row in con.execute(f"select * from {quoted} limit 2")]
+            finally:
+                con.close()
+            return "\n".join(lines)
+        if raw.startswith(b"PK\x03\x04"):
+            import zipfile
+            with zipfile.ZipFile(p) as z:
+                names = z.namelist()
+                if any(n.startswith("xl/") for n in names):
+                    import openpyxl
+                    wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+                    try:
+                        lines = ["(Excel workbook: sheets and first rows)"]
+                        for sheet in wb.worksheets[:6]:
+                            lines.append(f"sheet {sheet.title!r}:")
+                            for i, row in enumerate(sheet.iter_rows(values_only=True)):
+                                if i >= 3:
+                                    break
+                                lines.append("  " + _clip(repr(row)))
+                    finally:
+                        wb.close()
+                    return "\n".join(lines)
+                lines = [f"(zip archive, {len(names)} members)"] + names[:12]
+                first = next((n for n in names if not n.endswith("/")), None)
+                if first is not None:
+                    with z.open(first) as f:
+                        head = f.read(PREVIEW_FILE)
+                    if _is_text(head):
+                        lines.append(f"first lines of {first}:")
+                        lines += head.decode("utf-8", errors="ignore").splitlines()[:PREVIEW_LINES]
+                return "\n".join(lines)
+        if raw.startswith(b"\x1f\x8b"):
+            import gzip
+            with gzip.open(p, "rb") as f:
+                head = f.read(PREVIEW_FILE)
+            if _is_text(head):
+                return "\n".join(["(gzip file, first lines after decompression)"]
+                                 + head.decode("utf-8", errors="ignore").splitlines()[:PREVIEW_LINES])
+    except Exception:   # a damaged or unusual file: the prompt names it, as before
+        return None
+    return None
+
+
+def _json_shape(p: Path, shown: str) -> str | None:
+    """HARNESS_RICH_PREVIEW: one line on the top-level structure of a .json file longer than the preview shows."""
+    try:
+        import json
+        if p.suffix.lower() != ".json" or p.stat().st_size > 2_000_000:
+            return None
+        text = p.read_text(encoding="utf-8")
+        if len(text.strip()) <= len(shown.strip()):
+            return None
+        data = json.loads(text)
+    except Exception:   # unreadable or not JSON: the first lines stand alone, as before
+        return None
+
+    def kind(v):  # noqa: E306
+        if isinstance(v, dict):
+            return f"object with {len(v)} keys such as {', '.join(map(repr, list(v)[:3]))}" if v else "empty object"
+        if isinstance(v, list):
+            return f"list of {len(v)}"
+        return type(v).__name__
+
+    if isinstance(data, dict):
+        return _clip("(top-level keys: " + "; ".join(f"{k!r}: {kind(v)}" for k, v in list(data.items())[:10]) + ")", 480)
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return _clip(f"(a list of {len(data)} objects with keys {', '.join(map(repr, list(data[0])[:12]))})", 480)
+    return None
+
+
 def describe_workspace(ws: Path) -> str:
     """File tree plus first lines of text files; at most PREVIEW_TOTAL bytes of UTF-8."""
     files = sorted(p for p in ws.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
@@ -209,6 +298,7 @@ def describe_workspace(ws: Path) -> str:
             return "\n".join(parts)
         parts.append(n)
         used += _nbytes(n) + 1
+    later = []   # HARNESS_RICH_PREVIEW: what is added goes after every text preview, so it never takes the room of one
     for p, n in zip(files, names):
         try:
             with open(p, "rb") as f:
@@ -216,6 +306,8 @@ def describe_workspace(ws: Path) -> str:
         except OSError:
             continue
         if not _is_text(raw):
+            if config.rich_preview():
+                later.append((p, n, raw))
             continue
         text = raw.decode("utf-8", errors="ignore")
         first = "\n".join(text.splitlines()[:PREVIEW_LINES])
@@ -223,6 +315,23 @@ def describe_workspace(ws: Path) -> str:
         block = f"--- {n} (first lines) ---\n{first}"
         if used + _nbytes(block) + 1 > PREVIEW_TOTAL:
             break
+        parts.append(block)
+        used += _nbytes(block) + 1
+        if config.rich_preview():
+            later.append((p, n, None))
+    for p, n, raw in later:
+        try:
+            if raw is None:
+                shape = _json_shape(p, "\n".join(p.read_text(encoding="utf-8", errors="ignore").splitlines()[:PREVIEW_LINES])
+                                    [:PREVIEW_FILE]) if p.suffix.lower() == ".json" else None
+                block = None if shape is None else f"--- {n} ---\n{shape}"
+            else:
+                inside = _binary_preview(p, raw)
+                block = None if inside is None else f"--- {n} ---\n{inside}"
+        except Exception:
+            block = None
+        if block is None or used + _nbytes(block) + 1 > PREVIEW_TOTAL:
+            continue
         parts.append(block)
         used += _nbytes(block) + 1
     return "\n".join(parts)
