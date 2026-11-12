@@ -201,8 +201,37 @@ def test_timeout_or_name_error_of_both_rewrites_is_no_evidence(monkeypatch):
     for exc in ("<exc:TimeoutError>", "<exc:NameError>", "<exc:MemoryError>", "<exc:Timeout>"):
         seq = iter([["1"] * n, ["1"] * (n - 2) + [exc] * 2, ["1"] * (n - 2) + [exc] * 2])
         monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
-        assert not review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb), exc
-    # a value-domain error both rewrites agree on, where ours returns a value, still counts as behaviour
-    seq = iter([["1"] * n, ["1"] * (n - 2) + ["<exc:ValueError>"] * 2, ["1"] * (n - 2) + ["<exc:ValueError>"] * 2])
+        assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb) == [], exc
+    # the same values with no exception: evidence, both rewrites may be stored
+    seq = iter([["1"] * n, ["1"] * (n - 2) + ["2"] * 2, ["1"] * (n - 2) + ["2"] * 2])
     monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
-    assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb)
+    assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb) == [fa, fb]
+
+
+# I2: of two agreeing rewrites, only one that raises nowhere ours returns a value is stored
+PROFIT = ("def max_profit(prices):\n"
+          "    \"\"\"Best profit from one buy then one later sell; 0 when no profit is possible.\"\"\"\n"
+          "    if not prices:\n        return 0\n    best = 0\n    lo = prices[0]\n    for p in prices:\n"
+          "        best = max(best, p - lo)\n        lo = max(lo, p)\n    return best\n")
+PROFIT_NOGUARD = PROFIT.replace("    if not prices:\n        return 0\n", "").replace("lo = max(lo, p)", "lo = min(lo, p)")
+PROFIT_FIXED = PROFIT.replace("lo = max(lo, p)", "lo = min(lo, p)")
+PROFIT_TESTS = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
+                "    def test_p(self):\n        self.assertEqual(m.max_profit([3, 5]), 2)\n")
+
+
+def _profit(task):
+    ns = {}
+    exec(_lib(task), ns)
+    return ns["max_profit"]
+
+
+def test_rewrite_that_drops_our_guard_is_not_stored(tmp_path):
+    task = _task(tmp_path, lib=PROFIT, tests=PROFIT_TESTS)
+    changed, _ = _go(task, Fake("FUNC max_profit\n" + PROFIT_NOGUARD, "FUNC max_profit\n" + PROFIT_FIXED))
+    assert changed == ["max_profit"] and _profit(task)([5, 1, 4]) == 3 and _profit(task)([]) == 0
+
+
+def test_both_rewrites_drop_our_guard_keeps_the_file(tmp_path):
+    task = _task(tmp_path, lib=PROFIT, tests=PROFIT_TESTS)
+    reply = "FUNC max_profit\n" + PROFIT_NOGUARD
+    assert _go(task, Fake(reply, reply.replace("best = 0", "best = 0 * 1")))[0] == [] and _lib(task) == PROFIT

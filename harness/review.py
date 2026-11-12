@@ -225,35 +225,39 @@ def _broken(ours: list, theirs: list) -> bool:
     return False
 
 
-def _evidence(src: str, tests: str, name: str, a: str, b: str) -> bool:
-    """The two rewrites of one function are one opinion and the file's function is shown wrong. Trial inputs: the
-    visible call and values of its shapes (or common shapes for a function the tests do not call). On every input
-    where the file's function returns a value the two rewrites must return the same value or both raise
+def _evidence(src: str, tests: str, name: str, a: str, b: str) -> list[str]:
+    """The rewrites of one function that may be stored, best first; [] keeps the file. The two rewrites are one
+    opinion and the file's function is shown wrong. Trial inputs: the visible call and values of its shapes (or
+    common shapes for a function the tests do not call). A rewrite that shows itself broken (`_broken`) ends it. On
+    every input where the file's function returns a value the two rewrites must return the same value or both raise
     (inputs where only one of them raises are set aside, at most half), and on at least one input their common
-    outcome must differ from what the file's function returns (a value, or an exception that is not a sign of a wrong
-    argument type). So a rewrite that only changes what happens where the function raises today (a guard for empty
-    input, another exception type) is no evidence. A method cannot be probed: kept."""
+    outcome must differ from what the file's function returns. So a rewrite that only changes what happens where the
+    function raises today (a guard for empty input, another exception type) is no evidence. Only a rewrite that
+    raises on no input where the file's function returns a value is stored: one that drops a guard of ours would
+    turn a hidden test of that input red. A method cannot be probed: kept."""
     if "." in name:
-        return False
+        return []
     call = visible_call(tests, name)
     try:
         inputs = _battery(call[0] if call else None, _arity(src, name))
     except (SyntaxError, ValueError, RecursionError, TypeError):
-        return False
+        return []
     fa, fb = _spliced(src, name, a), _spliced(src, name, b)
     if fa is None or fb is None or len(inputs) < 3:
-        return False
+        return []
     ours, ba, bb = (behaviour(f, name, inputs, timeout=10) for f in (src, fa, fb))
     if _broken(ours, ba) or _broken(ours, bb):
-        return False
+        return []
     valid = [i for i, o in enumerate(ours) if not o.startswith("<exc:")]
     # where one rewrite raises and the other returns, or they raise different exceptions, they differ on what to do
     # with a degenerate input ([5, 5] for "second largest distinct"): that is not a disagreement about the function
     raises = [(ba[i].startswith("<exc:"), bb[i].startswith("<exc:")) for i in range(len(inputs))]
     both = [i for i in valid if raises[i][0] == raises[i][1]]
     if len(both) < 3 or 2 * len(both) < len(valid) or any(ba[i] != bb[i] and not raises[i][0] for i in both):
-        return False
-    return any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both)
+        return []
+    if not any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
+        return []
+    return [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
 
 
 def _known(src: str, name: str) -> bool:
@@ -267,9 +271,9 @@ def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: di
     cur, changed = src, []
     targs = () if target == "mylib.py" else (target,)
     for name in sorted(set(first) & set(second)):
-        if _known(src, name) or not _evidence(src, tests, name, first[name], second[name]):
+        if _known(src, name):
             continue
-        for text in (first[name], second[name]):
+        for text in _evidence(src, tests, name, first[name], second[name]):
             cand = _spliced(cur, name, text)
             if cand is not None and _run_candidate(ws, cand, *targs).ok:
                 cur = cand
