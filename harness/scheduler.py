@@ -415,8 +415,10 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
                 proven_infeasible.add(task.task_id)
                 soft_infeasible.discard(task.task_id)
             elif (res.extra or {}).get("best_guess") is not None:
-                # a value that failed the shape check only fills an empty slot: it never replaces a stored guess
-                if task.task_id not in guesses or not (res.extra or {}).get("shape_mismatch"):
+                # a value that failed the shape check, or a second opinion on an IMPOSSIBLE (`fill_only`, task 86),
+                # only fills an empty slot: it never replaces a stored guess
+                if task.task_id not in guesses or not ((res.extra or {}).get("shape_mismatch")
+                                                       or (res.extra or {}).get("fill_only")):
                     guesses[task.task_id] = res
                     put_guess(task, res)
             status[task.task_id] = st

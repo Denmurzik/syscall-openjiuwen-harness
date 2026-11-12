@@ -48,15 +48,20 @@ def test_first_impossible():
 
 def test_second_opinion_takes_a_well_formed_answer_as_a_guess(tmp_path):
     t = _task(tmp_path)
-    c = Fake(["```python\nprint('Ann Lee')\n```"])
+    c = Fake(["```python\nborn = {'Ann Lee': 1970, 'Bo Chen': 1980}\nprint(min(born, key=born.get))\n```"])
     r = asyncio.run(L.second_opinion(t, c, IMP))
-    assert r.status == "unparsed" and r.extra == {"best_guess": "Ann Lee"} and MODEL_ALT in r.note
+    assert r.status == "unparsed" and r.extra == {"best_guess": "Ann Lee", "fill_only": True} and MODEL_ALT in r.note
     assert len(c.calls) == 1 and c.calls[0][0] == MODEL_ALT
     assert c.calls[0][1] == L._program_messages(t)   # the prompt FAST had
 
 
 @pytest.mark.parametrize("reply", ["print('IMPOSSIBLE')", "print('unknown')", "print(None)", "raise SystemExit(3)",
-                                   "print({'a': 1})", "print('')"])
+                                   "print({'a': 1})", "print('')",
+                                   # a hard-coded literal: FAST's route never takes one as it is either
+                                   "print('Ann Lee')", "print(1970 - 1)",
+                                   # a refusal in other words
+                                   "x = 'Cannot be determined'\nprint(x)", "x = 'IMPOSSIBLE: no data'\nprint(x)",
+                                   "x = 'Not enough information'\nprint(x)"])
 def test_second_opinion_keeps_the_verdict_on_anything_else(tmp_path, reply):
     t = _task(tmp_path)
     r = asyncio.run(L.second_opinion(t, Fake([f"```python\n{reply}\n```"]), IMP))
@@ -65,9 +70,9 @@ def test_second_opinion_keeps_the_verdict_on_anything_else(tmp_path, reply):
 
 def test_second_opinion_keeps_the_verdict_on_a_wrong_shape(tmp_path):
     t = _task(tmp_path, ttype="data_analysis", check="exact_int", instruction="How many rows are there?")
-    assert asyncio.run(L.second_opinion(t, Fake(["print('many')"]), IMP)) is IMP
-    r = asyncio.run(L.second_opinion(t, Fake(["print(7)"]), IMP))
-    assert r.extra == {"best_guess": "7"}
+    assert asyncio.run(L.second_opinion(t, Fake(["n = ['many']\nprint(n[0])"]), IMP)) is IMP
+    r = asyncio.run(L.second_opinion(t, Fake(["rows = [1] * 7\nprint(len(rows))"]), IMP))
+    assert r.extra == {"best_guess": "7", "fill_only": True}
 
 
 def test_second_opinion_model_unavailable(tmp_path):
@@ -81,7 +86,7 @@ def test_second_opinion_runs_the_kb_preamble(tmp_path):
     code = ("a, b = kb['Ann Lee'], kb['Bo Chen']\n"
             "print('Ann Lee' if int(a['Born']) < int(b['Born']) else 'Bo Chen')")
     r = asyncio.run(L.second_opinion(t, Fake([code]), KB_MISSING))
-    assert r.extra == {"best_guess": "Ann Lee"}
+    assert r.extra == {"best_guess": "Ann Lee", "fill_only": True}
 
 
 # the scheduler
@@ -177,3 +182,21 @@ def test_scheduler_a_failing_second_opinion_keeps_the_verdict(tmp_path, wired, m
     assert wired["program"] == ["search_a"] and not (tasks / "search_a" / "answer.txt").exists()
     rows = [json.loads(ln) for ln in (tmp_path / "logs" / "trajectory.jsonl").read_text().splitlines()]
     assert [r["note"] for r in rows if r.get("task_id") == "search_a" and r["phase"] == 2][0] == IMP.note
+
+
+def test_scheduler_second_opinion_never_replaces_a_stored_guess(tmp_path, wired, monkeypatch):
+    async def grp(ttype, template, members, client):   # 2a leaves a guess of its own
+        return {t.task_id: SolveResult("unparsed", note="2a guess", extra={"best_guess": "Bo Chen"})
+                for t, _ in members}
+
+    async def second(task, client, first):
+        wired["second"].append(task.task_id)
+        return SolveResult("unparsed", note="alt", extra={"best_guess": "Ann Lee", "fill_only": True})
+
+    monkeypatch.setattr(scheduler, "solve_group", grp)
+    monkeypatch.setattr(scheduler, "second_opinion", second)
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_a", "search")
+    scheduler.run(tasks, 100000, object())
+    assert wired["second"] == ["search_a"]
+    assert (tasks / "search_a" / "answer.txt").read_text(encoding="utf-8").strip() == "Bo Chen"

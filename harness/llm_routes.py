@@ -694,11 +694,18 @@ def first_impossible(res: SolveResult) -> bool:
             and (res.extra or {}).get("best_guess") is None)
 
 
+# a printed refusal in other words than IMPOSSIBLE ("Cannot be determined", "IMPOSSIBLE: no data")
+_REFUSAL = re.compile(r"\b(?:impossible|cannot|can't|can not|not enough|insufficient|undetermin\w*|"
+                      r"not (?:be )?determin\w*|no (?:such|data|information|answer))\b", re.I)
+
+
 async def second_opinion(task: Task, client, first: SolveResult) -> SolveResult:
     """HARNESS_SECOND_IMPOSSIBLE (task 86): after `first_impossible`, one MODEL_ALT program on the same prompt. A
-    well-formed answer (it ran, printed a value of the expected shape, not IMPOSSIBLE, a placeholder or a whole page)
-    comes back as a best guess: an answer to an infeasible task costs nothing and a wrong one is worth no answer,
-    while the final REASON pass may still take the task. Anything else returns `first` unchanged."""
+    well-formed answer (it ran, printed a value of the expected shape computed in code: not a hard-coded literal, not
+    IMPOSSIBLE or a refusal in other words, a placeholder or a whole page) comes back as a best guess: an answer to an
+    infeasible task costs nothing and a wrong one is worth no answer, while the final REASON pass may still take the
+    task. The guess only fills an empty slot (`fill_only`): it never replaces a guess stored before. Anything else
+    returns `first` unchanged."""
     try:
         r = await client.chat(MODEL_ALT, _program_messages(task), PROGRAM_MAX_TOKENS)
     except LLMUnavailable:
@@ -707,6 +714,8 @@ async def second_opinion(task: Task, client, first: SolveResult) -> SolveResult:
         return first
     use_kb = _is_kb_task(task)
     code = extract_code(r.text, join_all=False)
+    if is_bare_literal(code):   # a value worked out in the head: FAST's route never takes one as it is either
+        return first
     res = await call_tool("run_program", run_program, kb_program(code) if use_kb else code, task.workspace)
     if res.returncode != 0 or res.timed_out:
         return first
@@ -715,9 +724,11 @@ async def second_opinion(task: Task, client, first: SolveResult) -> SolveResult:
         return first
     answer = normalize_answer(res.stdout, task.check, task.instruction)
     if answer is None or answer == "IMPOSSIBLE" or _is_placeholder(answer) or _kb_placeholder(res, answer) \
-            or _is_container_repr(answer) or mismatch(task, answer) is not None:
+            or _is_container_repr(answer) or mismatch(task, answer) is not None or _REFUSAL.search(lines[-1]) \
+            or _REFUSAL.search(answer):
         return first
-    return SolveResult("unparsed", note=f"{first.note}; {MODEL_ALT} answered", extra={"best_guess": answer})
+    return SolveResult("unparsed", note=f"{first.note}; {MODEL_ALT} answered",
+                       extra={"best_guess": answer, "fill_only": True})
 
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
