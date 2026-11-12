@@ -40,3 +40,11 @@ def test_a_test_taking_a_fixture_still_gets_the_conftest(tmp_path):
         (ws / "mylib.py").write_text(BAD, encoding="utf-8")
         assert run_in_dir(ws, "test_mylib.py").ok is False
 
+
+
+def test_the_test_files_directory_stays_first_on_the_path(tmp_path):
+    conf = "import pytest\n\n\n@pytest.fixture\ndef dims():\n    return (2, 3)\n"
+    tests = ("from mylib import area\nimport helper\n\n\ndef test_a(dims):\n    assert helper.X == 2 and area(*dims) == 6\n")
+    ws = _ws(tmp_path, {"mylib.py": GOOD, "conftest.py": conf, "helper.py": "X = 1\n", "tests/helper.py": "X = 2\n",
+                        "tests/test_mylib.py": tests})
+    assert run_in_dir(ws, "tests/test_mylib.py").ok is True

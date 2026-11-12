@@ -552,7 +552,7 @@ if _need_stub:
                 continue
             _d = _os.path.dirname(_os.path.abspath(_c))
             if _d not in sys.path:
-                sys.path.insert(0, _d)
+                sys.path.insert(1 if _SUB else 0, _d)   # the test file's own directory stays first, as in pytest
             _spec = _ilu.spec_from_file_location("conftest", _c)
             _m = _ilu.module_from_spec(_spec)
             sys.modules["conftest"] = _m
