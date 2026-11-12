@@ -140,7 +140,7 @@ def test_string_variants():
     v = r._str_variants("2024-03-10T12:00+02:00")
     assert "2024-03-10T12:00-02:00" in v and len(v) <= 40
     v = r._str_variants(" 42 ")
-    assert {" 151 ", " -1 ", "42", "999"} <= set(v)
+    assert {" 429 ", " -1 ", "42", "-42"} <= set(v) and not {" 151 ", "151", "999"} & set(v)
     assert r._str_variants("hello") == [] and r._str_variants("") == []
 
 
