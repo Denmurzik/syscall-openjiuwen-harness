@@ -8,13 +8,15 @@ function returns a value, on one of them they differ from it, and the visible te
 text (the examples' functions, texts mined from the set) and a method are never replaced. Any doubt keeps the file."""
 import ast
 import asyncio
+import re
 import shutil
 import textwrap
 from pathlib import Path
 
 from harness.config import MODEL_ALT, MODEL_FAST
 from harness.llm import LLMUnavailable
-from harness.llm_routes import _cap, _run_candidate, _target_file, _test_file, apply_patch, write_mylib
+from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _first_def, _run_candidate, _target_file, _test_file,
+                                apply_patch, write_mylib)
 from harness.solvers import coding_solver as cs
 from harness.solvers.probe import behaviour, visible_call
 
@@ -60,15 +62,55 @@ def _messages(src: str, tests: str, target: str, test_name: str) -> list[dict]:
     return [{"role": "system", "content": REVIEW_SYSTEM}, {"role": "user", "content": user}]
 
 
+_EXTRA = re.compile(r"^[ \t]*(?:import[ \t]+\w|from[ \t]+[\w.]+[ \t]+import\b|(?:async[ \t]+)?def[ \t]+\w|class[ \t]+\w|@)")
+
+
+def _dropped(src: str, reply: str) -> set:
+    """Names whose FUNC block holds code `apply_patch` drops: an import before or after the function, a helper
+    function or class next to it. The kept function would call a name the file does not define. An import line the
+    file already has, or a helper the file already holds in the same text, is no loss."""
+    patch = _THINK.sub("", reply.replace("\r\n", "\n"))
+    heads = list(_FUNC_HEAD.finditer(patch))
+    have = {ln.strip() for ln in src.split("\n")}
+    try:
+        old = _texts(src)
+    except (SyntaxError, ValueError, RecursionError):
+        return {h.group(1) for h in heads}
+    out = set()
+    for i, h in enumerate(heads):
+        lines = patch[h.end():heads[i + 1].start() if i + 1 < len(heads) else len(patch)].split("\n")
+        found = _first_def("\n".join(lines))
+        if found is None:
+            continue
+        start = next(k for k, ln in enumerate(lines) if ln.lstrip().startswith(("def ", "async def ", "@")))
+        rest = lines[:start] + lines[start + len(found[0].split("\n")):]
+        for k, ln in enumerate(rest):
+            if not _EXTRA.match(ln):
+                continue
+            if ln.lstrip().startswith(("import", "from")) and ln.strip() in have:
+                continue
+            if ln.lstrip().startswith(("def ", "async def ")):
+                helper = _first_def("\n".join(rest[k:]))
+                if helper is not None:
+                    hname = helper[1].body[0].name
+                    if hname in old and cs._norm(old[hname]) == cs._norm(helper[0]):
+                        continue
+            out.add(h.group(1))
+            break
+    return out
+
+
 def _rewrites(src: str, reply: str) -> dict:
-    """qualname -> new text, for the functions of `reply` that differ from the file's (as code, not as spelling)."""
+    """qualname -> new text, for the functions of `reply` that differ from the file's (as code, not as spelling).
+    A function whose block carries code that would be dropped (`_dropped`) is left out."""
     if reply is None or reply.strip().strip(".`'\"").upper() == "NONE":
         return {}
     patched = apply_patch(src, reply)
     if patched is None:
         return {}
     old, new = _texts(src), _texts(patched)
-    return {n: t for n, t in new.items() if n in old and cs._norm(old[n]) != cs._norm(t)}
+    lost = _dropped(src, reply)
+    return {n: t for n, t in new.items() if n in old and n not in lost and cs._norm(old[n]) != cs._norm(t)}
 
 
 def _spliced(src: str, name: str, text: str) -> str | None:
@@ -158,7 +200,29 @@ def _arity(src: str, name: str) -> int:
     return -1
 
 
-_GARBAGE = ("<exc:TypeError>", "<exc:AttributeError>", "<exc:Timeout>", "<exc:Crash>", "<exc:RecursionError>")
+# exceptions a correct function raises on a value outside its domain: the only ones that count as behaviour
+_VALUE_EXC = frozenset({"ValueError", "KeyError", "IndexError", "ZeroDivisionError"})
+# a probe value of a type the function does not take: harmless where the file's function raises on it too
+_SHAPE_EXC = frozenset({"TypeError", "AttributeError"})
+
+
+def _exc(out: str) -> str | None:
+    return out[5:-1] if out.startswith("<exc:") and out.endswith(">") else None
+
+
+def _broken(ours: list, theirs: list) -> bool:
+    """The rewrite raises, where the file's function does not raise the same, an exception that shows the rewrite
+    broken rather than different: a name it does not define (an import or helper that was dropped), a timeout, a
+    crash, a recursion, anything but a value-domain error. A type error counts only where the file's function
+    returns a value (the probe value fits the function)."""
+    for o, t in zip(ours, theirs):
+        e = _exc(t)
+        if e is None or e in _VALUE_EXC or t == o:
+            continue
+        if e in _SHAPE_EXC and o.startswith("<exc:"):
+            continue
+        return True
+    return False
 
 
 def _evidence(src: str, tests: str, name: str, a: str, b: str) -> bool:
@@ -180,6 +244,8 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str) -> bool:
     if fa is None or fb is None or len(inputs) < 3:
         return False
     ours, ba, bb = (behaviour(f, name, inputs, timeout=10) for f in (src, fa, fb))
+    if _broken(ours, ba) or _broken(ours, bb):
+        return False
     valid = [i for i, o in enumerate(ours) if not o.startswith("<exc:")]
     # where one rewrite raises and the other returns, or they raise different exceptions, they differ on what to do
     # with a degenerate input ([5, 5] for "second largest distinct"): that is not a disagreement about the function
@@ -187,7 +253,7 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str) -> bool:
     both = [i for i in valid if raises[i][0] == raises[i][1]]
     if len(both) < 3 or 2 * len(both) < len(valid) or any(ba[i] != bb[i] and not raises[i][0] for i in both):
         return False
-    return any(ba[i] == bb[i] != ours[i] and ba[i] not in _GARBAGE for i in both)
+    return any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both)
 
 
 def _known(src: str, name: str) -> bool:

@@ -161,3 +161,48 @@ def test_stage_skips_unanswered_and_known_files(tmp_path):
                                         {"t": "unparsed"}, traj, {"stop": False, "traj": traj}))
     traj.close()
     assert c.calls == []
+
+
+# round 18 review, C1: a broken rewrite is no evidence
+LEAP_TESTS = TESTS.split("    def test_average")[0]
+ROOT = ("\n\ndef int_sqrt(n):\n    \"\"\"Floor of the square root of n >= 0.\"\"\"\n    r = int(n ** 0.5)\n"
+        "    while r * r > n:\n        r -= 1\n    while (r + 1) * (r + 1) <= n:\n        r += 1\n    return r\n")
+ISQRT = "def int_sqrt(n):\n    \"\"\"Floor of the square root of n >= 0.\"\"\"\n    return math.isqrt(n)\n"
+
+
+def test_rewrite_whose_import_is_dropped_keeps_the_file(tmp_path):
+    task = _task(tmp_path, lib=RIGHT + ROOT, tests=LEAP_TESTS)
+    fast = "FUNC int_sqrt\nimport math\n\n" + ISQRT       # the import line is dropped by apply_patch
+    alt = "FUNC int_sqrt\n" + ISQRT                        # forgets the import
+    assert _go(task, Fake(fast, alt))[0] == [] and _lib(task) == RIGHT + ROOT
+
+
+def test_rewrite_whose_helper_is_dropped_keeps_the_file(tmp_path):
+    task = _task(tmp_path, lib=RIGHT + ROOT, tests=LEAP_TESTS)
+    block = ("FUNC int_sqrt\ndef int_sqrt(n):\n    \"\"\"Floor of the square root of n >= 0.\"\"\"\n"
+             "    return _newton(n)\n\n"
+             "def _newton(n):\n    x = n\n    y = (x + 1) // 2\n    while y < x:\n        x, y = y, (y + n // y) // 2\n"
+             "    return x\n")
+    assert review._rewrites(RIGHT + ROOT, block) == {}
+    assert _go(task, Fake(block, block))[0] == [] and _lib(task) == RIGHT + ROOT
+
+
+def test_import_the_file_has_is_no_loss():
+    src = "import math\n\n\n" + RIGHT + ROOT
+    block = "FUNC int_sqrt\nimport math\n\n" + ISQRT
+    assert set(review._rewrites(src, block)) == {"int_sqrt"}
+
+
+def test_timeout_or_name_error_of_both_rewrites_is_no_evidence(monkeypatch):
+    src = RIGHT + ROOT
+    n = len(review._battery(None, 1))
+    fa = "def int_sqrt(n):\n    return 0\n"
+    fb = "def int_sqrt(n):\n    return 1\n"
+    for exc in ("<exc:TimeoutError>", "<exc:NameError>", "<exc:MemoryError>", "<exc:Timeout>"):
+        seq = iter([["1"] * n, ["1"] * (n - 2) + [exc] * 2, ["1"] * (n - 2) + [exc] * 2])
+        monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
+        assert not review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb), exc
+    # a value-domain error both rewrites agree on, where ours returns a value, still counts as behaviour
+    seq = iter([["1"] * n, ["1"] * (n - 2) + ["<exc:ValueError>"] * 2, ["1"] * (n - 2) + ["<exc:ValueError>"] * 2])
+    monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
+    assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb)
