@@ -155,3 +155,11 @@ def test_a_file_line_inside_a_closed_block_stays_in_the_body(tmp_path):
     assert rescue.parse(reply, tmp_path, set()) == {"report.py": body, "b.py": "y = 2\n"}
     # an empty block does not swallow the next one
     assert rescue.parse("FILE a.py\nEND FILE\nFILE b.py\ny = 2\nEND FILE\n", tmp_path, set()) == {"b.py": "y = 2\n"}
+
+
+def test_many_small_data_files_do_not_crowd_out_the_code(tmp_path):
+    for i in range(30):
+        (tmp_path / f"d{i:02d}.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "mylib.py").write_text("def f(x):\n    return x\n" * 5, encoding="utf-8")
+    names = [rel for rel, _ in rescue._files(tmp_path)]
+    assert names[0] == "mylib.py" and len(names) == rescue.MAX_FILES

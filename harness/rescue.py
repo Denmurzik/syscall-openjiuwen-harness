@@ -77,8 +77,8 @@ def _named_by_tests(ws: Path, rel: str) -> bool:
 
 
 def _files(ws: Path) -> list[tuple[str, str]]:
-    """(relative path, text) of the workspace's text files, the smallest first so that a large one cannot crowd out
-    the rest; at most MAX_FILES."""
+    """(relative path, text) of the workspace's text files, code before data and the smallest first so that a large
+    one cannot crowd out the rest; at most MAX_FILES."""
     out = []
     try:
         paths = sorted(p for p in ws.rglob("*") if p.is_file() and not (set(p.relative_to(ws).parts[:-1]) & _SKIP_DIRS))
@@ -94,7 +94,8 @@ def _files(ws: Path) -> list[tuple[str, str]]:
             out.append((rel, p.read_text(encoding="utf-8")))
         except (OSError, UnicodeDecodeError):
             continue
-    return sorted(out, key=lambda x: (len(x[1]), x[0]))[:MAX_FILES]
+    # code and tests first: thirty small data files must not crowd out the module to repair
+    return sorted(out, key=lambda x: (Path(x[0]).suffix.lower() not in _CODE_SUFFIXES, len(x[1]), x[0]))[:MAX_FILES]
 
 
 def messages(task, files: list[tuple[str, str]]) -> tuple[list[dict], set]:
