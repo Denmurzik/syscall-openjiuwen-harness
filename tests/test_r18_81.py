@@ -114,3 +114,170 @@ def test_plain_files_run_as_before(tmp_path):
     tests = "from mylib import double\n\n\ndef test_x():\n    assert double(3) == 6\n"
     assert run_tests(_ws(tmp_path, GOOD, tests, shim=False)).ok
     assert run_tests(_ws(tmp_path / "b", BAD, tests, shim=False)).failed == ["test_x"]
+
+
+# round 18 fix round: where the stand-in cannot follow pytest the file is red, never green
+LIB = GOOD + "\n\ndef big():\n    return 1000000.0\n"
+BADLIB = BAD + "\n\ndef big():\n    return 1000000.5\n"
+
+
+def _both(tmp_path, tests, shim=True):
+    """(report on the right mylib, report on the broken one)"""
+    return (run_tests(_ws(tmp_path / "good", LIB, tests, shim)), run_tests(_ws(tmp_path / "bad", BADLIB, tests, shim)))
+
+
+def _green_red(tmp_path, tests, shim=True):
+    good, bad = _both(tmp_path, tests, shim)
+    return good.ok and not bad.ok
+
+
+def test_approx_with_abs_alone_uses_abs_alone(tmp_path):
+    tests = "import pytest\nfrom mylib import big\n\n\ndef test_big():\n    assert big() == pytest.approx(1e6, abs=0.01)\n"
+    assert _green_red(tmp_path, tests)
+    tests = ("import pytest\n\n\ndef test_inf():\n    assert float('inf') == pytest.approx(float('inf'))\n"
+             "    assert 1.0 + 1e-7 == pytest.approx(1.0)\n    assert 1.0 + 1e-9 != pytest.approx(1.0, abs=1e-12)\n")
+    assert run_tests(_ws(tmp_path / "inf", LIB, tests)).ok
+
+
+def test_parametrize_on_a_class_runs_its_methods(tmp_path):
+    tests = ("import pytest\nfrom mylib import double\n\n\ndef test_ident():\n    assert True\n\n\n"
+             "@pytest.mark.parametrize('x', [1, 2])\nclass TestDouble:\n    def test_d(self, x):\n"
+             "        assert double(x) == 2 * x\n")
+    good, bad = _both(tmp_path, tests)
+    assert good.ok and not bad.ok and bad.failed == ["test_d"]
+
+
+def test_skip_and_xfail_on_a_class_apply_to_each_method(tmp_path):
+    tests = ("import pytest\nfrom mylib import double\n\n\ndef test_ok():\n    assert double(3) == 6\n\n\n"
+             "@pytest.mark.skip(reason='later')\nclass TestLater:\n    def test_a(self):\n        assert False\n\n\n"
+             "@pytest.mark.xfail(strict=True)\nclass TestKnown:\n    def test_b(self):\n        assert double(3) == 7\n")
+    assert run_tests(_ws(tmp_path, LIB, tests)).ok
+    xpass = tests.replace("double(3) == 7", "double(3) == 6")
+    assert run_tests(_ws(tmp_path / "x", LIB, xpass)).failed == ["test_b"]
+
+
+def test_xfail_with_a_false_condition_runs_the_test(tmp_path):
+    tests = ("import sys, pytest\nfrom mylib import double\n\n\n"
+             "@pytest.mark.xfail(sys.platform == 'no-such-os', reason='only there')\n"
+             "def test_double():\n    assert double(3) == 6\n")
+    assert _green_red(tmp_path, tests)
+
+
+def test_xfail_strict_and_not_strict(tmp_path):
+    head = "import pytest\nfrom mylib import double\n\n\n"
+    strict_xpass = head + "@pytest.mark.xfail(strict=True)\ndef test_k():\n    assert double(3) == 6\n"
+    assert not run_tests(_ws(tmp_path / "a", LIB, strict_xpass)).ok
+    loose_xpass = head + "@pytest.mark.xfail(reason='flaky')\ndef test_k():\n    assert double(3) == 6\n"
+    assert run_tests(_ws(tmp_path / "b", LIB, loose_xpass)).ok
+    loose_fail = head + "@pytest.mark.xfail\ndef test_k():\n    assert double(3) == 7\n"
+    assert run_tests(_ws(tmp_path / "c", LIB, loose_fail)).ok
+    wrong_raise = head + "@pytest.mark.xfail(raises=KeyError)\ndef test_k():\n    assert double(3) == 7\n"
+    assert not run_tests(_ws(tmp_path / "d", LIB, wrong_raise)).ok
+    ws = _ws(tmp_path / "e", LIB, loose_xpass)
+    (ws / "pytest.ini").write_text("[pytest]\nxfail_strict = true\n", encoding="utf-8")
+    assert not run_tests(ws).ok
+
+
+def test_skipif_with_a_string_condition(tmp_path):
+    head = "import pytest\nfrom mylib import double\n\n\n"
+    assert _green_red(tmp_path / "a", head + "@pytest.mark.skipif('sys.version_info < (3, 0)', reason='py2')\n"
+                      "def test_d():\n    assert double(3) == 6\n")
+    assert run_tests(_ws(tmp_path / "b", BADLIB, head + "@pytest.mark.skipif('sys.version_info > (3, 0)', reason='x')\n"
+                         "def test_d():\n    assert double(3) == 6\n")).ok
+    assert not run_tests(_ws(tmp_path / "c", LIB, head + "@pytest.mark.skipif('no_such_name', reason='x')\n"
+                             "def test_d():\n    assert double(3) == 6\n")).ok
+
+
+def test_yield_fixture_wraps_the_test(tmp_path):
+    tests = ("import os, pytest, tempfile\nfrom mylib import double\nEV = []\n\n\n@pytest.fixture\ndef d():\n"
+             "    with tempfile.TemporaryDirectory() as t:\n        EV.append('setup')\n        try:\n            yield t\n"
+             "        finally:\n            EV.append('teardown')\n\n\n"
+             "def test_a(d):\n    assert os.path.isdir(d) and EV == ['setup']\n    assert double(3) == 6\n\n\n"
+             "def test_b():\n    assert EV == ['setup', 'teardown']\n")
+    assert _green_red(tmp_path, tests)
+
+
+def test_error_in_fixture_teardown_fails_the_test(tmp_path):
+    tests = ("import pytest\n\n\n@pytest.fixture\ndef r():\n    yield 1\n    raise RuntimeError('teardown')\n\n\n"
+             "def test_r(r):\n    assert r == 1\n")
+    assert run_tests(_ws(tmp_path, LIB, tests)).failed == ["test_r"]
+
+
+def test_autouse_and_usefixtures_run(tmp_path):
+    autouse = ("import pytest\nfrom mylib import double\nSEEN = []\n\n\n@pytest.fixture(autouse=True)\ndef check():\n"
+               "    yield\n    assert SEEN and all(double(x) == 2 * x for x in SEEN)\n\n\n"
+               "def test_a():\n    SEEN.append(3)\n")
+    assert _green_red(tmp_path / "a", autouse)
+    use = ("import pytest\nfrom mylib import double\nSTATE = {}\n\n\n@pytest.fixture\ndef ready():\n"
+           "    STATE['x'] = double(3)\n\n\n@pytest.mark.usefixtures('ready')\ndef test_u():\n    assert STATE['x'] == 6\n")
+    assert _green_red(tmp_path / "b", use)
+
+
+def test_fixture_is_one_instance_per_test_and_module_scope_is_shared(tmp_path):
+    tests = ("import pytest\n\n\n@pytest.fixture\ndef store():\n    return []\n\n\n@pytest.fixture\n"
+             "def filled(store):\n    store.append(1)\n    return store\n\n\n"
+             "def test_same(filled, store):\n    assert filled is store and store == [1]\n\n\n"
+             "N = []\n\n\n@pytest.fixture(scope='module')\ndef once():\n    N.append(1)\n    return len(N)\n\n\n"
+             "def test_1(once):\n    assert once == 1\n\n\ndef test_2(once):\n    assert once == 1 and N == [1]\n")
+    assert run_tests(_ws(tmp_path, LIB, tests)).ok
+
+
+def test_fixture_with_parametrize(tmp_path):
+    tests = ("import pytest\nfrom mylib import double\n\n\n@pytest.fixture\ndef k():\n    return 2\n\n\n"
+             "@pytest.mark.parametrize('x', [1, 3])\ndef test_double(x, k):\n    assert double(x) == k * x\n")
+    assert _green_red(tmp_path, tests)
+
+
+def test_param_marks_skip_and_xfail(tmp_path):
+    tests = ("import pytest\nfrom mylib import double\n\n\n@pytest.mark.parametrize('x, want', [(1, 2), "
+             "pytest.param(3, 7, marks=pytest.mark.xfail), pytest.param(4, 0, marks=[pytest.mark.skip])])\n"
+             "def test_d(x, want):\n    assert double(x) == want\n")
+    assert _green_red(tmp_path, tests)
+
+
+def test_pytest_fail_is_not_swallowed_by_except_exception(tmp_path):
+    tests = ("import pytest\nfrom mylib import double\n\n\ndef test_f():\n    try:\n        if double(3) != 6:\n"
+             "            pytest.fail('wrong')\n    except Exception:\n        pytest.skip('no')\n")
+    assert _green_red(tmp_path, tests)
+
+
+def test_static_and_class_method_tests(tmp_path):
+    tests = ("from mylib import double\n\n\nclass TestS:\n    @staticmethod\n    def test_s():\n"
+             "        assert double(3) == 6\n\n    def test_m(self):\n        assert double(1) == 2\n")
+    assert _green_red(tmp_path / "plain", tests, shim=False)   # no pytest: as before the stand-in
+    with_pytest = "import pytest\n" + tests + "\n    @classmethod\n    def test_c(cls):\n        assert double(3) == 6\n"
+    assert _green_red(tmp_path / "pt", with_pytest)
+
+
+def test_guarded_import_gets_no_stand_in(tmp_path):
+    tests = ("import unittest\ntry:\n    import pytest\nexcept ImportError:\n    pytest = None\nimport mylib\n\n\n"
+             "class T(unittest.TestCase):\n    @unittest.skipIf(pytest is None, 'no pytest')\n    def test_w(self):\n"
+             "        with pytest.warns(UserWarning):\n            pass\n\n    def test_d(self):\n"
+             "        self.assertEqual(mylib.double(3), 6)\n")
+    assert _green_red(tmp_path, tests)
+
+
+def test_what_the_stand_in_cannot_follow_is_red(tmp_path):
+    head = "import pytest, unittest\nfrom mylib import double\n\n\n"
+    cases = {
+        "indirect": head + "@pytest.fixture\ndef v():\n    return 1\n\n\n"
+                    "@pytest.mark.parametrize('v', [1], indirect=True)\ndef test_v(v):\n    assert v\n",
+        "params": head + "@pytest.fixture(params=[1, 2])\ndef v(request):\n    return request.param\n\n\n"
+                  "def test_v(v):\n    assert v\n",
+        "cycle": head + "@pytest.fixture\ndef a(b):\n    return 1\n\n\n@pytest.fixture\ndef b(a):\n    return 1\n\n\n"
+                 "def test_x(a):\n    assert a\n",
+        "testcase_mark": head + "class T(unittest.TestCase):\n    @pytest.mark.skip(reason='x')\n    def test_a(self):\n"
+                         "        self.assertTrue(True)\n",
+        "setup_module": head + "def setup_module():\n    pass\n\n\ndef test_a():\n    assert double(3) == 6\n",
+    }
+    for name, tests in cases.items():
+        assert not run_tests(_ws(tmp_path / name, LIB, tests)).ok, name
+    ws = _ws(tmp_path / "conftest", LIB, head + "def test_a():\n    assert double(3) == 6\n")
+    (ws / "conftest.py").write_text("import pytest\n", encoding="utf-8")
+    assert not run_tests(ws).ok
+
+
+def test_module_pytestmark_applies(tmp_path):
+    tests = ("import pytest\nfrom mylib import double\npytestmark = [pytest.mark.slow, pytest.mark.skipif(True, "
+             "reason='x')]\n\n\ndef test_d():\n    assert double(2) == 5\n")
+    assert run_tests(_ws(tmp_path, LIB, tests)).ok   # every test skipped, as pytest
