@@ -95,6 +95,11 @@ PATCH_SYSTEM = ("You fix bugs in mylib.py so that the tests pass. Return only th
 PREVIEW_TOTAL = 4096  # bytes
 PREVIEW_FILE = 500    # bytes
 PREVIEW_LINES = 5
+RICH_JSON_MAX = 2_000_000   # bytes: a larger .json gets no structure line (it is parsed whole)
+RICH_XLSX_MAX = 1_000_000   # bytes: a larger workbook shows its sheet names only (openpyxl parses every shared string)
+RICH_SQL_STEPS = 200_000    # SQLite virtual-machine steps a statement of the preview may take
+RICH_ZIP_MEMBERS = 5000     # an archive with more members is not opened (its central directory is read whole)
+_RICH_CACHE: dict = {}      # (path, size, mtime_ns, text?, shown preview) -> the block added for it, or None
 FEEDBACK_LIMIT = 1024
 TEST_OUTPUT_LIMIT = 2048
 FILE_CAP = 12 * 1024
@@ -211,11 +216,14 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
             import sqlite3
             con = sqlite3.connect(f"file:{p.as_posix()}?mode=ro&immutable=1", uri=True, timeout=2)
             try:
+                con.set_progress_handler(lambda: 1, RICH_SQL_STEPS)   # a statement that runs long is interrupted
                 lines = ["(SQLite database: tables and first rows)"]
-                tables = con.execute("select name, sql from sqlite_master where type in ('table', 'view') "
+                tables = con.execute("select name, sql, type from sqlite_master where type in ('table', 'view') "
                                      "and name not like 'sqlite_%' order by name").fetchmany(8)
-                for name, sql in tables:
+                for name, sql, kind in tables:
                     lines.append(_clip(sql or name, 300))
+                    if kind != "table":   # the rows of a view may cost a whole query: its schema is enough
+                        continue
                     quoted = '"' + name.replace('"', '""') + '"'
                     lines += ["  " + _clip(repr(row)) for row in con.execute(f"select * from {quoted} limit 2")]
             finally:
@@ -223,9 +231,16 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
             return "\n".join(lines)
         if raw.startswith(b"PK\x03\x04"):
             import zipfile
+            count = _zip_members(p)
+            if count is None:   # damaged, or zip64: only named
+                return None
+            if count > RICH_ZIP_MEMBERS:
+                return f"(zip archive, {count} members)"
             with zipfile.ZipFile(p) as z:
                 names = z.namelist()
                 if any(n.startswith("xl/") for n in names):
+                    if p.stat().st_size > RICH_XLSX_MAX:
+                        return _xlsx_sheet_names(z)
                     import openpyxl
                     wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
                     try:
@@ -260,11 +275,41 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
     return None
 
 
+def _zip_members(p: Path) -> int | None:
+    """The member count of a zip archive from its end record (the last 64 KiB), None when it holds more than a
+    plain record can say (zip64) or no record is found."""
+    import struct
+    with open(p, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - 65_557))
+        tail = f.read()
+    i = tail.rfind(b"PK\x05\x06")
+    if i < 0 or len(tail) - i < 22:
+        return None
+    total = struct.unpack("<H", tail[i + 10:i + 12])[0]
+    return None if total == 0xFFFF else total
+
+
+def _xlsx_sheet_names(z) -> str | None:
+    """The sheet names of a workbook too large to open, from xl/workbook.xml alone."""
+    import html
+    try:
+        with z.open("xl/workbook.xml") as f:
+            xml = f.read(200_000).decode("utf-8", errors="ignore")
+    except (KeyError, OSError, RuntimeError):
+        return None
+    names = [html.unescape(m) for m in re.findall(r'<(?:\w+:)?sheet\b[^>]*?\bname="([^"]*)"', xml)][:12]
+    if not names:
+        return None
+    return _clip("(Excel workbook, too large to show rows here; sheets: " + ", ".join(map(repr, names)) + ")", 480)
+
+
 def _json_shape(p: Path, shown: str) -> str | None:
     """HARNESS_RICH_PREVIEW: one line on the top-level structure of a .json file longer than the preview shows."""
     try:
         import json
-        if p.suffix.lower() != ".json" or p.stat().st_size > 2_000_000:
+        if p.suffix.lower() != ".json" or p.stat().st_size > RICH_JSON_MAX:
             return None
         text = p.read_text(encoding="utf-8")
         if len(text.strip()) <= len(shown.strip()):
@@ -287,6 +332,32 @@ def _json_shape(p: Path, shown: str) -> str | None:
     return None
 
 
+def _rich_block(p: Path, n: str, raw: bytes | None, first: str | None) -> str | None:
+    """HARNESS_RICH_PREVIEW: the block added for one file (`raw`: the head of a file that is not text; `first`: the
+    preview shown of a .json file), remembered per path, size and modification time: the prompt is built several
+    times per task and the file does not change in between."""
+    try:
+        st = p.stat()
+        key = (str(p), st.st_size, st.st_mtime_ns, raw is None, first)
+    except OSError:
+        return None
+    if key in _RICH_CACHE:
+        return _RICH_CACHE[key]
+    try:
+        if raw is None:
+            shape = _json_shape(p, first or "")
+            block = None if shape is None else f"--- {n} ---\n{shape}"
+        else:
+            inside = _binary_preview(p, raw)
+            block = None if inside is None else f"--- {n} ---\n{inside}"
+    except Exception:
+        block = None
+    if len(_RICH_CACHE) >= 512:
+        _RICH_CACHE.clear()
+    _RICH_CACHE[key] = block
+    return block
+
+
 def describe_workspace(ws: Path) -> str:
     """File tree plus first lines of text files; at most PREVIEW_TOTAL bytes of UTF-8."""
     files = sorted(p for p in ws.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
@@ -307,7 +378,7 @@ def describe_workspace(ws: Path) -> str:
             continue
         if not _is_text(raw):
             if config.rich_preview():
-                later.append((p, n, raw))
+                later.append((p, n, raw, None))
             continue
         text = raw.decode("utf-8", errors="ignore")
         first = "\n".join(text.splitlines()[:PREVIEW_LINES])
@@ -317,19 +388,10 @@ def describe_workspace(ws: Path) -> str:
             break
         parts.append(block)
         used += _nbytes(block) + 1
-        if config.rich_preview():
-            later.append((p, n, None))
-    for p, n, raw in later:
-        try:
-            if raw is None:
-                shape = _json_shape(p, "\n".join(p.read_text(encoding="utf-8", errors="ignore").splitlines()[:PREVIEW_LINES])
-                                    [:PREVIEW_FILE]) if p.suffix.lower() == ".json" else None
-                block = None if shape is None else f"--- {n} ---\n{shape}"
-            else:
-                inside = _binary_preview(p, raw)
-                block = None if inside is None else f"--- {n} ---\n{inside}"
-        except Exception:
-            block = None
+        if config.rich_preview() and p.suffix.lower() == ".json":
+            later.append((p, n, None, first))
+    for p, n, raw, first in later:
+        block = _rich_block(p, n, raw, first)
         if block is None or used + _nbytes(block) + 1 > PREVIEW_TOTAL:
             continue
         parts.append(block)
