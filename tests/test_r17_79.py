@@ -126,9 +126,51 @@ def test_alt_answered_by_fasts_weights_is_no_vote(tmp_path):
     assert res.answer == "Lyon" and "no majority, reason's answer" in res.note
 
 
-def test_impossible_is_returned_as_it_is(tmp_path):
-    res, models = _agree(_task(tmp_path), {F: ["print('IMPOSSIBLE')"]})
-    assert res.status == "infeasible" and models == [F]
+def test_impossible_twice_is_infeasible_without_reason(tmp_path):
+    res, models = _agree(_task(tmp_path), {F: ["print('IMPOSSIBLE')"], A: ["print('IMPOSSIBLE')"]})
+    assert res.status == "infeasible" and models == [F, A] and "fast and alt IMPOSSIBLE" in res.note
+
+
+# ---------------------------------------------------------------- every way FAST ends without an answer goes on
+
+KB_MISSING = "print(pages['Dune Robotics Inc'][:4])"   # a wrong page title: the preamble raises KbMissing
+
+
+def test_r17b_search_8104_kb_missing_goes_on_to_alt_and_reason(tmp_path):
+    # ea064d3 in Docker: FAST printed a literal (rejected on a chain), then a program that looked up a page that
+    # does not exist -> "kb page or field not found" after two FAST calls, and no other attempt
+    task = _hop(tmp_path)
+    client = Fake({F: ["print(1975)", KB_MISSING]})
+    first = asyncio.run(L.solve_with_program(task, client))
+    assert first.status == "unparsed" and first.note == "kb page or field not found" and client.models == [F, F]
+    res, models = _agree(task, {F: ["print(1975)", KB_MISSING], A: [COMP], R: [COMP]})
+    assert models == [F, F, A, R] and res.status == "solved" and res.answer == "1999"
+    assert "alt and reason agree" in res.note
+
+
+@pytest.mark.parametrize("fast", [
+    ["print('IMPOSSIBLE')"],                 # IMPOSSIBLE
+    [KB_MISSING],                            # a page not found
+    ["print()", "print()"],                  # empty output, twice
+    [CRASH, CRASH],                          # exit code 1, twice
+])
+def test_every_failed_first_attempt_goes_on(tmp_path, fast):
+    res, models = _agree(_hop(tmp_path), {F: fast, A: [COMP], R: [COMP]})
+    assert models == [F] * len(fast) + [A, R]
+    assert res.status == "solved" and res.answer == "1999"
+
+
+def test_impossible_then_nothing_takes_reasons_verdict(tmp_path):
+    res, models = _agree(_task(tmp_path), {F: ["print('IMPOSSIBLE')"], A: [CRASH, CRASH], R: ["print('IMPOSSIBLE')"]})
+    assert models == [F, A, A, R] and res.status == "infeasible" and res.extra.get("reasoned")
+
+
+def test_the_proxy_and_the_budget_cut_end_it(tmp_path):
+    task = _task(tmp_path)
+    for first in (SolveResult("unparsed", note="llm unavailable: down"),
+                  SolveResult("unparsed", note="program cut by the budget limit")):
+        res = asyncio.run(L.prose_agreement(task, Fake({}), first, lambda reason: True))
+        assert res is first
 
 
 # ---------------------------------------------------------------- the budget gate
@@ -489,3 +531,38 @@ def test_a_crashing_agreement_keeps_fasts_answer(tmp_path, monkeypatch, run_env)
     monkeypatch.setattr(scheduler, "prose_agreement", agree)
     counts = scheduler.run(tasks, 100000, run_env)
     assert _answers(tasks) == {"search_p": "Graz"} and counts["solved"] == 1
+
+
+def test_a_raising_fast_route_is_a_failed_first_attempt(tmp_path, monkeypatch, run_env):
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_p", "search", BIO, Q)
+
+    async def prog(task, client):
+        raise RuntimeError("boom")
+    firsts = []
+
+    async def agree(task, client, first, may_call, keep=None):
+        firsts.append(first)
+        return SolveResult("solved", answer="Tartu College", note="alt and reason agree")
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(scheduler, "prose_agreement", agree)
+    scheduler.run(tasks, 100000, run_env)
+    assert [f.status for f in firsts] == ["unparsed"] and firsts[0].note.startswith("program route failed")
+    assert L._program_failed(firsts[0]) and _answers(tasks) == {"search_p": "Tartu College"}
+
+
+def test_a_raising_route_off_the_prose_path_is_as_before(tmp_path, monkeypatch, run_env):
+    monkeypatch.setenv("HARNESS_PROSE_AGREE", "0")
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_p", "search", BIO, Q)
+
+    async def prog(task, client):
+        raise RuntimeError("boom")
+
+    async def agree(task, client, first, may_call, keep=None):
+        raise AssertionError("no agreement with the knob off")
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(scheduler, "prose_agreement", agree)
+    scheduler.run(tasks, 100000, run_env)
+    rows = [json.loads(x) for x in (tmp_path / "logs" / "trajectory.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert any(r.get("task_id") == "search_p" and r.get("status") == "error" for r in rows)

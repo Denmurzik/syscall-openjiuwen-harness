@@ -581,15 +581,25 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                                           and (tentative[t.task_id].extra or {}).get("ambiguous"))]
     await _drive(units, t0, deadline_s, ledger, state)
 
-    async def agree_prose(task, first, start):
-        """A prose answer needs a second attempt that agrees (task 79). FAST's answer goes to disk before the extra
-        attempts: a deadline or a silent stop of the run in them keeps it."""
+    def prose_on(task) -> bool:
+        """The task takes the prose agreement (task 79): HARNESS_PROSE_AGREE on and a prose knowledge base."""
         try:
-            if not (config.prose_agree() and is_prose_task(task)):
-                return first
+            return task.task_type == "search" and config.prose_agree() and is_prose_task(task)
         except Exception:
             log.exception("prose check on %s failed", task.task_id)
-            return first
+            return False
+
+    async def agree_prose(task, start):
+        """A prose answer needs a second attempt that agrees (task 79). FAST's answer goes to disk before the extra
+        attempts: a deadline or a silent stop of the run in them keeps it. A FAST route that raised is a failed
+        first attempt: ALT and REASON still try."""
+        try:
+            first = await solve_with_program(task, client)
+        except BudgetExhausted:
+            raise
+        except Exception as e:
+            log.warning("program route on %s failed: %r", task.task_id, e)
+            first = SolveResult("unparsed", note=f"program route failed: {e!r}"[:200])
         more = lambda reason: _prose_more(ledger, task, t0, deadline_s, reason)  # noqa: E731
         try:
             if first.status == "solved" and more(False):
@@ -638,10 +648,10 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                     if (res.extra or {}).get("best_guess") is not None:
                         settle(2, task, res, time.monotonic() - start)
                     res = await solve_with_program(task, client)
+            elif prose_on(task):
+                res = await agree_prose(task, start)
             else:
                 res = await solve_with_program(task, client)
-                if task.task_type == "search":
-                    res = await agree_prose(task, res, start)
             settle(2, task, res, time.monotonic() - start)
             if (res.note or "").startswith(_LLM_UNAVAILABLE):
                 ladder = (res.extra or {}).get("ladder")

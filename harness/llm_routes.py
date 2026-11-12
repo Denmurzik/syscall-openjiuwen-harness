@@ -785,11 +785,19 @@ def _prose_vote(res: SolveResult | None) -> str | None:
 
 
 def _program_failed(res: SolveResult) -> bool:
-    """FAST's program gave nothing usable (exit code, timeout, wrong shape, no output): another model may still answer.
-    Not a page that does not exist, IMPOSSIBLE, the proxy or the budget: those say the same for any model."""
+    """FAST's attempt gave no answer that another model could not change: a program that failed (exit code, timeout,
+    wrong shape, no output, a placeholder, a route that raised), a page or field the program looked up and did not
+    find (on prose that is a wrong title or key in the model's code, not proof: ea064d3 in Docker, search_8104 ended
+    on KbMissing after two FAST calls), or IMPOSSIBLE. Not the proxy (the retry pass runs the unit again) and not
+    the budget cutting the call."""
     note = res.note or ""
-    return (res.status == "unparsed" and note != "program cut by the budget limit"
-            and note.startswith(("program ", "answer shape")))
+    if res.status == "infeasible":
+        return True
+    return (res.status == "unparsed" and not note.startswith(LLM_UNAVAILABLE)
+            and "cut by the budget limit" not in note)
+
+
+LLM_UNAVAILABLE = "llm unavailable"   # note prefix of a result whose model call never got an answer
 
 
 async def _prose_attempt(route, task: Task) -> tuple[SolveResult | None, set]:
@@ -862,7 +870,9 @@ async def prose_agreement(task: Task, client, first: SolveResult, may_call, keep
     attempt answered by FAST's weights (ALT failing, `chat_or_alt`) is no vote. `may_call(reason)` is the
     scheduler's gate (ledger, spend share, time) before the ALT (False) and the REASON (True) attempt: when it
     says no, the answers so far stand. `extra["reasoned"]`: REASON gave its verdict here, the final pass skips the
-    task. A first result that is no failed program (IMPOSSIBLE, a missing page, the proxy) is returned as it is.
+    task. A first attempt without an answer (`_program_failed`: a failed program, a page or field not found,
+    IMPOSSIBLE, a route that raised) goes on to ALT and REASON; only the proxy and the budget cut end it here. FAST
+    and ALT both printing IMPOSSIBLE agree: no REASON call.
     REASON's answer is no vote when no code computed it (a lone number, a printed constant) and the question is a
     count, a comparison or a chain (`_asks_aggregate`, `_asks_multihop`): the r16c search_8104 failure. `keep(res)`
     (the scheduler's settle) writes ALT's answer before the REASON attempt when FAST had none (FAST's own answer is
@@ -883,6 +893,9 @@ async def prose_agreement(task: Task, client, first: SolveResult, may_call, keep
         alt, alt_say = None, f"{alt!r} (answered by {MODEL_FAST}, no vote)"
     if fast is not None and alt is not None and same(fast, alt):
         return _agreed(_cleanest(first, alt_res), f"{head} fast and alt {fast!r}", False)
+    if (first.status == "infeasible" and alt_res is not None and alt_res.status == "infeasible"
+            and family(MODEL_FAST) not in alt_used):
+        return _agreed(first, f"{head} fast and alt IMPOSSIBLE", False)   # two agreeing attempts: no REASON call
     head = f"{head} fast {fast!r}, alt {alt_say}"
     if fast is None and alt is not None and keep is not None:
         keep(alt_res)
@@ -916,7 +929,11 @@ async def prose_agreement(task: Task, client, first: SolveResult, may_call, keep
         # stays open, and REASON's reply is no verdict, so the final pass may still ask it
         return SolveResult("unparsed", note=f"{head}: no answer; reason's constant kept as a guess",
                            extra={"best_guess": dropped})
-    return _agreed(first, f"{head}: no answer", reasoned)
+    # nothing answered: REASON's IMPOSSIBLE is its verdict (the final pass skips the task); else the first result,
+    # whose best guess, if it has one, the scheduler stores
+    last = (rsn_res if rsn_res is not None and rsn_res.status == "infeasible"
+            and (first.extra or {}).get("best_guess") is None else first)
+    return _agreed(last, f"{head}: no answer", reasoned)
 
 
 # ---------------------------------------------------------------- coding
