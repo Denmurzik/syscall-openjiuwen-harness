@@ -91,6 +91,9 @@ def test_the_pytest_stand_in_serves_a_file_below_the_root(tmp_path):
 
 # the file under repair
 
+A_TEST = "\n\ndef test_x():\n    pass\n"   # a test file defines a test (round 19, M2)
+
+
 def test_package_targets(tmp_path):
     cases = [
         ({"geom/__init__.py": "from .shapes import area\n", "geom/shapes.py": "def area(w, h):\n    return w * h\n"},
@@ -108,12 +111,33 @@ def test_package_targets(tmp_path):
          "from tests.helpers import slug\nfrom textkit.core import slug as s2\n", "textkit/core.py"),
     ]
     for i, (files, tests, want) in enumerate(cases):
-        ws = _ws(tmp_path, {**files, "tests/test_x.py": tests}, f"c{i}").workspace
+        ws = _ws(tmp_path, {**files, "tests/test_x.py": tests + A_TEST}, f"c{i}").workspace
         assert L._target_file(ws, tests) == want, (i, L._target_file(ws, tests))
     # a root module the tests import still comes first, and mylib.py whenever there is one
     ws = _ws(tmp_path, {"calc.py": "def f():\n    pass\n", "pkg/core.py": "def f():\n    pass\n",
-                        "tests/test_x.py": "from calc import f\n"}, "r").workspace
+                        "tests/test_x.py": "from calc import f\n" + A_TEST}, "r").workspace
     assert L._target_file(ws, "from calc import f\n") == "calc.py"
+
+
+def test_package_targets_plain_import_and_star(tmp_path):
+    # `import pkg` with pkg/__init__.py, and `from pkg import *` with an __init__ that re-exports `*` (round 19, M1)
+    files = {"geom/__init__.py": "from .shapes import *\n", "geom/shapes.py": "def area(w, h):\n    return w + h\n"}
+    for i, tests in enumerate(["import geom\n\n\ndef test_a():\n    assert geom.area(3, 4) == 12\n",
+                               "from geom import *\n\n\ndef test_a():\n    assert area(3, 4) == 12\n"]):
+        ws = _ws(tmp_path, {**files, "tests/test_g.py": tests}, f"m{i}").workspace
+        assert L._target_file(ws, tests) == "geom/shapes.py", i
+
+
+def test_deep_tests_skip_data_modules_and_samples(tmp_path):
+    # a data module named like a test, samples and fixtures are not the task's tests (round 19, M2)
+    ws = _ws(tmp_path, {"mylib.py": LIB_BAD, "tests/test_m.py": UNIT,
+                        "pkgdata/test_input.py": "CASES = [(1, 2), (3, 6)]\n",
+                        "tests/test_cases.py": "from mylib import double\n\nCASES = [(1, 2)]\n",
+                        "tests/test_nothing.py": "def helper():\n    return 1\n",
+                        "examples/test_demo.py": UNIT, "tests/fixtures/test_f.py": UNIT,
+                        "lib/test_script.py": "from mylib import double\nassert double(3) == 6\n",
+                        "other/test_free.py": "def test_a():\n    assert 1 + 1 == 2\n"}).workspace
+    assert L._deep_tests(ws) == ["lib/test_script.py", "tests/test_m.py"]
 
 
 # the ladder

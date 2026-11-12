@@ -1118,8 +1118,37 @@ def apply_patch(src: str, patch: str) -> str | None:
 
 
 # directories a test file below the root is never looked for in (besides hidden ones: `.git`, `.venv`)
-_DEEP_SKIP = frozenset({"__pycache__", "node_modules", "site-packages", "venv", "env", "build", "dist"})
+_DEEP_SKIP = frozenset({"__pycache__", "node_modules", "site-packages", "venv", "env", "build", "dist",
+                        # data and samples, not the task's tests (`fixtures/test_input.py`, `examples/test_demo.py`)
+                        "examples", "example", "docs", "doc", "fixtures", "data", "samples"})
 DEEP_MAX_FILES = 8   # test files below the root run per candidate; more are left out (each run takes a process)
+
+
+def _is_test_module(ws: Path, p: Path) -> bool:
+    """A file below the root is a test file when it imports unittest, pytest or a module of the workspace and
+    defines tests: a top-level `test*` function, a class with `test*` methods (`Test*` or a TestCase), or top-level
+    asserts of a script. A data module named like a test (`test_input.py` of cases) is not one."""
+    try:
+        tree = ast.parse(p.read_bytes())
+    except (OSError, SyntaxError, ValueError, RecursionError):
+        return False
+    funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
+    defines = any(
+        isinstance(n, funcs) and n.name.startswith("test")
+        or isinstance(n, ast.ClassDef) and any(isinstance(m, funcs) and m.name.startswith("test") for m in n.body)
+        and (n.name.startswith("Test") or any(getattr(b, "attr", getattr(b, "id", "")).endswith("TestCase")
+                                              for b in n.bases))
+        or isinstance(n, ast.Assert) for n in tree.body)
+    if not defines:
+        return False
+    for node in ast.walk(tree):
+        names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                 else [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
+        for m in names:
+            top = m.split(".")[0]
+            if top in ("unittest", "pytest") or _module_file(ws, m) is not None or _module_file(ws, top) is not None:
+                return True
+    return False
 
 
 def _deep_tests(ws: Path) -> list[str]:
@@ -1139,7 +1168,8 @@ def _deep_tests(ws: Path) -> list[str]:
                     continue
                 if any(part.startswith(".") or part in _DEEP_SKIP for part in rel.parts[:-1]):
                     continue
-                found.add(rel.as_posix())
+                if _is_test_module(ws, p):
+                    found.add(rel.as_posix())
     except (OSError, ValueError):
         return []
     return sorted(found, key=lambda r: (r.count("/"), r))[:DEEP_MAX_FILES]
@@ -1206,9 +1236,9 @@ def _package_target(ws: Path) -> str | None:
             except (OSError, SyntaxError, ValueError):
                 continue
             for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
+                if isinstance(node, ast.Import):   # `import pkg.core as c`, `import pkg` (pkg/__init__.py)
                     for a in node.names:
-                        reach(_module_file(ws, a.name) if "." in a.name else None)
+                        reach(_module_file(ws, a.name))
                 elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
                     for a in node.names:
                         sub = _module_file(ws, f"{node.module}.{a.name}") if a.name != "*" else None
@@ -1219,6 +1249,8 @@ def _package_target(ws: Path) -> str | None:
                             reach(_module_file(ws, node.module))
                 elif isinstance(node, ast.Attribute):
                     used.add(node.attr)
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    used.add(node.func.id)   # `from pkg import *`: the names come only from the calls
         # a package's __init__.py that takes its names from its own modules leads to them
         for rel in list(reached):
             if not rel.endswith("/__init__.py"):
