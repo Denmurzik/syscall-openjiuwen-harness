@@ -119,6 +119,16 @@ def review_coding() -> bool:
     return _env_bool("HARNESS_REVIEW_CODING", REVIEW_CODING)
 
 
+# default of HARNESS_REVIEW_REASON (round 19, task 82): where FAST and ALT both rewrote a function of the review but
+# their rewrites disagree, MODEL_REASON is asked the same; its rewrite and one of theirs must pass the same rules
+REVIEW_REASON = True
+
+
+def review_reason() -> bool:
+    """The review's third opinion on a disagreement. Off: round 18. Read at call time: HARNESS_REVIEW_REASON=1/0."""
+    return _env_bool("HARNESS_REVIEW_REASON", REVIEW_REASON)
+
+
 def verify_coding() -> bool:
     """A model checks green single coding fixes on its own. Read at call time: HARNESS_VERIFY_CODING=1/0."""
     return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)

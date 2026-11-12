@@ -5,7 +5,11 @@ bug that no visible assert reaches stays in the file. Here MODEL_FAST reads the 
 functions it finds wrong; a silent reply ("NONE") ends the review. A function is replaced only when MODEL_ALT, asked
 the same on its own, rewrote that function too, the two rewrites behave alike on trial inputs wherever the file's
 function returns a value, on one of them they differ from it, and the visible tests stay green (`_evidence`). A known
-text (the examples' functions, texts mined from the set) and a method are never replaced. Any doubt keeps the file."""
+text (the examples' functions, texts mined from the set) and a method are never replaced. Any doubt keeps the file.
+
+Round 19 (task 82, HARNESS_REVIEW_REASON): where FAST and ALT both rewrote a function and their rewrites disagree on
+the trial inputs, MODEL_REASON is asked the same, once per file; a function is replaced when its rewrite and one of
+theirs pass the same rules."""
 import ast
 import asyncio
 import re
@@ -15,7 +19,8 @@ import textwrap
 import time
 from pathlib import Path
 
-from harness.config import MODEL_ALT, MODEL_FAST
+from harness import config
+from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON
 from harness.llm import LLMUnavailable
 from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _first_def, _target_file, _test_file,
                                 apply_patch, write_mylib)
@@ -37,6 +42,8 @@ MAX_FILE_CHARS = 9000   # a larger file is not reviewed: the reply could not hol
 RUN_TIMEOUT = 20        # one run of one visible test file
 PROBE_TIMEOUT = 10      # the trial inputs of one version of the function
 MIN_LEFT_S = 60         # no model call with less time than this before the stop: its rewrite could not be checked
+REASON_TOKENS = 3000    # output limit of MODEL_REASON's third opinion (low reasoning effort, then the FUNC blocks)
+REASON_SPEND_LIMIT = 0.5   # no third opinion once this share of the budget is spent (the stage's own gate)
 
 
 def _left(stop: float | None, cap: float) -> float:
@@ -274,6 +281,90 @@ def _broken(ours: list, theirs: list) -> bool:
     return False
 
 
+class _Trial:
+    """Trial inputs of one function of the file and each version's outcomes on them, one subprocess a version,
+    remembered by the file's text (the third opinion probes the same versions again). `ok`: the function can be
+    probed (not a method, at least 3 inputs)."""
+
+    def __init__(self, src: str, tests: str, name: str):
+        self.src, self.name, self.memo = src, name, {}
+        self.inputs: list = []
+        if "." in name:
+            return
+        call = visible_call(tests, name)
+        try:
+            self.inputs = _battery(call[0] if call else None, _arity(src, name))
+        except (SyntaxError, ValueError, RecursionError, TypeError):
+            self.inputs = []
+
+    @property
+    def ok(self) -> bool:
+        return len(self.inputs) >= 3
+
+    def cut(self, out: str) -> bool:
+        """A value cut at the probe's repr limit: it shows neither agreement nor a difference."""
+        return len(out) >= _MAX_REPR
+
+    def outcomes(self, text: str | None, stop: float | None) -> list[str] | None:
+        """The outcomes of the file with `text` as the function (None: the file's own); None when out of time."""
+        full = self.src if text is None else _spliced(self.src, self.name, text)
+        if full is None:
+            return None
+        if full not in self.memo:
+            limit = _left(stop, PROBE_TIMEOUT)
+            if limit < PROBE_TIMEOUT / 2:
+                return None
+            self.memo[full] = behaviour(full, self.name, self.inputs, timeout=limit)
+        return self.memo[full]
+
+
+def _verdict(src: str, tests: str, name: str, a: str, b: str, stop: float | None = None,
+             trial: "_Trial | None" = None) -> tuple[list[str], bool]:
+    """(`_evidence`, disagree): disagree is True when the two rewrites are two opinions rather than one: one of them
+    shows itself broken and the other does not, they return different values where the file's function returns one,
+    or one raises where the other returns a value. Only then can a third opinion side with one of them."""
+    trial = trial if trial is not None else _Trial(src, tests, name)
+    if not trial.ok or _spliced(src, name, a) is None or _spliced(src, name, b) is None:
+        return [], False
+    outs = []
+    for text in (None, a, b):
+        o = trial.outcomes(text, stop)
+        if o is None:
+            return [], False
+        outs.append(o)
+    ours, ba, bb = outs
+    broken = _broken(ours, ba), _broken(ours, bb)
+    if broken[0] or broken[1]:
+        return [], broken[0] != broken[1]
+    valid = [i for i, o in enumerate(ours) if not o.startswith("<exc:")]
+    # where one rewrite raises and the other returns, or they raise different exceptions, they differ on what to do
+    # with a degenerate input ([5, 5] for "second largest distinct"): that is not a disagreement about the function
+    raises = [(ba[i].startswith("<exc:"), bb[i].startswith("<exc:")) for i in range(len(ours))]
+    # a value cut at the probe's repr limit can hide a difference after the cut: such an input shows neither
+    # agreement nor a difference, it is set aside too
+    both = [i for i in valid if raises[i][0] == raises[i][1] and not trial.cut(ba[i]) and not trial.cut(bb[i])]
+    if len(both) < 3 or 2 * len(both) < len(valid):
+        return [], len(valid) >= 3 and any(raises[i][0] != raises[i][1] for i in valid)
+    if any(ba[i] != bb[i] and not raises[i][0] for i in both):
+        return [], True
+    if not any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
+        return [], False
+    ok = [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
+    if ok:
+        return ok, False
+    # both rewrites raise where ours returns a value: stored only when they raise the same value-domain exception
+    # on every such input, each raises it explicitly, and the function's text or its visible tests name it
+    spots = [i for i in valid if raises[i][0] or raises[i][1]]
+    excs = {_exc(ba[i]) for i in spots}
+    if not all(ba[i] == bb[i] and _exc(ba[i]) in _VALUE_EXC for i in spots):
+        return [], False
+    seg = _texts(src).get(name, "")
+    named = [ln for ln in tests.splitlines() if name in ln]
+    if not all(e in seg or any(e in ln for ln in named) for e in excs):
+        return [], False
+    return [t for t in (a, b) if all(re.search(r"\braise\s+" + e + r"\b", t) for e in excs)], False
+
+
 def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | None = None) -> list[str]:
     """The rewrites of one function that may be stored, best first; [] keeps the file. The two rewrites are one
     opinion and the file's function is shown wrong. Trial inputs: the visible call and values of its shapes (or
@@ -287,51 +378,7 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | Non
     exception on every such input, the function's text or a visible test line naming it names that exception
     ("ValueError if the lengths differ"), and the stored text says `raise <Name>`. A method cannot be probed: kept.
     Out of time before `stop`: kept."""
-    if "." in name:
-        return []
-    call = visible_call(tests, name)
-    try:
-        inputs = _battery(call[0] if call else None, _arity(src, name))
-    except (SyntaxError, ValueError, RecursionError, TypeError):
-        return []
-    fa, fb = _spliced(src, name, a), _spliced(src, name, b)
-    if fa is None or fb is None or len(inputs) < 3:
-        return []
-    outs = []
-    for f in (src, fa, fb):
-        limit = _left(stop, PROBE_TIMEOUT)
-        if limit < PROBE_TIMEOUT / 2:
-            return []
-        outs.append(behaviour(f, name, inputs, timeout=limit))
-    ours, ba, bb = outs
-    if _broken(ours, ba) or _broken(ours, bb):
-        return []
-    valid = [i for i, o in enumerate(ours) if not o.startswith("<exc:")]
-    # where one rewrite raises and the other returns, or they raise different exceptions, they differ on what to do
-    # with a degenerate input ([5, 5] for "second largest distinct"): that is not a disagreement about the function
-    raises = [(ba[i].startswith("<exc:"), bb[i].startswith("<exc:")) for i in range(len(inputs))]
-    # a value cut at the probe's repr limit can hide a difference after the cut: such an input shows neither
-    # agreement nor a difference, it is set aside too
-    both = [i for i in valid if raises[i][0] == raises[i][1]
-            and len(ba[i]) < _MAX_REPR and len(bb[i]) < _MAX_REPR]
-    if len(both) < 3 or 2 * len(both) < len(valid) or any(ba[i] != bb[i] and not raises[i][0] for i in both):
-        return []
-    if not any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
-        return []
-    ok = [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
-    if ok:
-        return ok
-    # both rewrites raise where ours returns a value: stored only when they raise the same value-domain exception
-    # on every such input, each raises it explicitly, and the function's text or its visible tests name it
-    spots = [i for i in valid if raises[i][0] or raises[i][1]]
-    excs = {_exc(ba[i]) for i in spots}
-    if not all(ba[i] == bb[i] and _exc(ba[i]) in _VALUE_EXC for i in spots):
-        return []
-    seg = _texts(src).get(name, "")
-    named = [ln for ln in tests.splitlines() if name in ln]
-    if not all(e in seg or any(e in ln for ln in named) for e in excs):
-        return []
-    return [t for t in (a, b) if all(re.search(r"\braise\s+" + e + r"\b", t) for e in excs)]
+    return _verdict(src, tests, name, a, b, stop)[0]
 
 
 def _known(src: str, name: str, known: dict | None = None) -> bool:
@@ -341,22 +388,74 @@ def _known(src: str, name: str, known: dict | None = None) -> bool:
 
 
 def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: dict,
-            known: dict | None = None, stop: float | None = None) -> tuple[str, list[str]]:
+            known: dict | None = None, stop: float | None = None, disputed: list | None = None,
+            trials: dict | None = None) -> tuple[str, list[str]]:
     """The file with every agreed rewrite that keeps the visible tests green, and their names. No step starts after
-    the monotonic time `stop`."""
+    the monotonic time `stop`. `disputed` (if given) collects the names whose two rewrites disagree (`_verdict`);
+    `trials` (if given) keeps each name's `_Trial` for a later look at the same versions."""
     cur, changed = src, []
+    trials = {} if trials is None else trials
     for name in sorted(set(first) & set(second)):
         if stop is not None and time.monotonic() > stop:
             break
         if _known(src, name, known):
             continue
-        for text in _evidence(src, tests, name, first[name], second[name], stop):
+        trial = trials.setdefault(name, _Trial(src, tests, name))
+        texts, split = _verdict(src, tests, name, first[name], second[name], stop, trial)
+        for text in texts:
             cand = _spliced(cur, name, text)
             if cand is not None and _green(ws, cand, target, stop):
                 cur = cand
                 changed.append(name)
                 break
+        if split and disputed is not None:
+            disputed.append(name)
     return cur, changed
+
+
+def _settle(ws: Path, src: str, cur: str, tests: str, target: str, first: dict, second: dict, third: dict,
+            names: list, trials: dict, stop: float | None = None) -> tuple[str, list[str]]:
+    """The disputed functions (`names`) where the third rewrite and FAST's, else ALT's, pass `_verdict` as one
+    opinion: that pair's text goes into `cur` when the visible tests stay green."""
+    changed = []
+    for name in names:
+        if name not in third:
+            continue
+        for other in (first[name], second[name]):
+            if stop is not None and time.monotonic() > stop:
+                return cur, changed
+            texts, _ = _verdict(src, tests, name, third[name], other, stop, trials.get(name))
+            for text in texts:
+                cand = _spliced(cur, name, text)
+                if cand is not None and _green(ws, cand, target, stop):
+                    cur = cand
+                    changed.append(name)
+                    break
+            if name in changed:
+                break
+    return cur, changed
+
+
+def _may_reason(client, msgs: list[dict]) -> bool:
+    """The third opinion fits the stage's gates: under REASON_SPEND_LIMIT of the budget and affordable (a client
+    without a ledger, as in the tests, always may)."""
+    ledger = getattr(client, "ledger", None)
+    if ledger is None:
+        return True
+    est = sum(len(m["content"]) for m in msgs) // 40 + REASON_TOKENS
+    return not ledger.exhausted and ledger.spent < REASON_SPEND_LIMIT * ledger.budget and ledger.can_afford(est)
+
+
+async def _third(client, msgs: list[dict], src: str) -> tuple[dict, str]:
+    """MODEL_REASON's rewrites on the same prompt (no other reply shown), and a word for the note."""
+    try:
+        r = await client.chat(MODEL_REASON, msgs, REASON_TOKENS, reasoning_effort="low")
+    except LLMUnavailable:
+        return {}, "unavailable"
+    if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= REASON_TOKENS:
+        return {}, "hit the output limit"
+    third = _rewrites(src, r.text)
+    return third, str(sorted(third))
 
 
 async def review(task, client, known: dict | None = None, stop: float | None = None) -> tuple[list[str], str]:
@@ -391,11 +490,25 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
         return [], f"review: llm unavailable: {e}"[:200]
     if not set(first) & set(second):
         return [], f"review: no agreement ({sorted(first)} / {sorted(second)}), kept"[:200]
-    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known, stop)
+    disputed, trials = [], {}
+    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known, stop, disputed,
+                                           trials)
+    tail = ""
+    if disputed and config.review_reason():
+        if stop is not None and stop - time.monotonic() < MIN_LEFT_S:
+            tail = f"; {sorted(disputed)} disputed, too close to the stop for {MODEL_REASON}"
+        elif not _may_reason(client, msgs):
+            tail = f"; {sorted(disputed)} disputed, no room for {MODEL_REASON}"
+        else:
+            third, word = await _third(client, msgs, src)
+            new, more = await asyncio.to_thread(_settle, ws, src, new, tests, target, first, second, third,
+                                                sorted(disputed), trials, stop)
+            changed += more
+            tail = f"; {sorted(disputed)} disputed, {MODEL_REASON} {word}, sided {sorted(more)}"
     if not changed or new == src:
-        return [], f"review: no evidence against {sorted(set(first) & set(second))}, kept"[:200]
+        return [], f"review: no evidence against {sorted(set(first) & set(second))}{tail}, kept"[:300]
     if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it
         return [], "review: the file changed meanwhile, kept"
     write_mylib(path, new)
     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
-    return changed, f"review: replaced {changed} ({sorted(first)} / {sorted(second)})"[:200]
+    return changed, f"review: replaced {changed} ({sorted(first)} / {sorted(second)}){tail}"[:300]

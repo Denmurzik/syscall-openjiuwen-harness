@@ -43,7 +43,7 @@ class Fake:
 
     async def chat(self, model, messages, max_tokens, **extra):
         self.calls.append(model)
-        r = self.replies[model]
+        r = self.replies.get(model, "NONE")   # MODEL_REASON (round 19): silent unless a test gives it a reply
         if isinstance(r, BaseException):
             raise r
         return ChatResult(text=r, prompt_tokens=10, completion_tokens=1, cost=2)
