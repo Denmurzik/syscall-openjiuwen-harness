@@ -235,6 +235,19 @@ def deep_tests() -> bool:
     return _env_bool("HARNESS_DEEP_TESTS", DEEP_TESTS)
 
 
+# default of HARNESS_MINIMAL_PATCH. Round 20, task 88: a green model patch of the ladder is cut back to the
+# definitions the visible tests need. Each function or method it changed takes its original text back, one at a
+# time, while the visible tests stay green (far8 coding_8001: the model fixed `withdraw` and also rewrote the
+# correct `transfer`, dropping its history entries). Off: round 19
+MINIMAL_PATCH = True
+MINIMAL_PATCH_S = 20.0   # seconds of extra test runs per task; the restores not tried by then are skipped
+
+
+def minimal_patch() -> bool:
+    """The cut-back of a green ladder patch. Read at call time: HARNESS_MINIMAL_PATCH=1/0."""
+    return _env_bool("HARNESS_MINIMAL_PATCH", MINIMAL_PATCH)
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 

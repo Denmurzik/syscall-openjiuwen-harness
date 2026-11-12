@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 import textwrap
+import time
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
@@ -1363,6 +1364,69 @@ def _budget_is_free(client) -> bool:
         return False  # fake or foreign clients: keep the old reward threshold
 
 
+def _restored(src: str, original: str, name: str) -> str | None:
+    """`src` with the definition `name` (a top-level function or a method, as in `_locate`) given back its text in
+    `original`. None when `original` has no such definition, the texts are the same, the columns differ or the
+    result does not parse."""
+    here, there = _locate(src), _locate(original)
+    if name not in here or name not in there or here[name][2] != there[name][2]:
+        return None
+    lines, old_lines = io.StringIO(src).readlines(), io.StringIO(original).readlines()
+    (s0, e0, _), (s1, e1, _) = here[name], there[name]
+    old = "".join(old_lines[s1:e1])
+    if "".join(lines[s0:e0]) == old:
+        return None
+    if not old.endswith("\n"):
+        old += "\n"
+    lines[s0:e0] = [old]
+    out = "".join(lines)
+    try:
+        ast.parse(out)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    return out
+
+
+async def _cut_back(ws: Path, original: str | None, fixed: str, targs: tuple = ()) -> tuple[str, list[str]]:
+    """HARNESS_MINIMAL_PATCH (round 20, task 88): `fixed` is green on the visible tests. Every function or method
+    whose text differs from `original` (the task's file before phase 1 and the ladder) takes its original text back,
+    one at a time in file order, when the visible tests stay green; passes repeat while one restore is kept. A model
+    that also rewrote a correct function (far8 coding_8001: `transfer` inlined, its history entries lost) leaves
+    only the change the tests need; the definition that was the bug fails a test on its old text and stays fixed.
+    Definitions the model added stay. Returns (source, restored names); never raises: out of time
+    (`MINIMAL_PATCH_S`) or on any failure, what is done so far."""
+    done: list[str] = []
+    if not config.minimal_patch() or not original or original == fixed:
+        return fixed, done
+    deadline = time.monotonic() + config.MINIMAL_PATCH_S
+    try:
+        names = [n for n, _ in sorted(_locate(fixed).items(), key=lambda kv: kv[1][0])]
+        tried: set = set()   # (name, source) pairs already run: a red restore is not run again on the same file
+        progress = True
+        while progress:
+            progress = False
+            for name in names:
+                if name in done:
+                    continue
+                cand = _restored(fixed, original, name)
+                if cand is None or (name, fixed) in tried:
+                    continue
+                if time.monotonic() > deadline:
+                    return fixed, done
+                tried.add((name, fixed))
+                if (await call_tool("run_tests", _run_candidate, ws, cand, *targs)).ok:
+                    fixed = cand
+                    done.append(name)
+                    progress = True
+    except Exception:
+        log.exception("cut-back of a green patch failed; the patch stays as it is")
+    return fixed, done
+
+
+def _cut_note(note: str, names: list[str]) -> str:
+    return f"{note}, cut back to the original text: {names}" if names else note
+
+
 async def fix_coding(task: Task, client, resume: dict | None = None, restart: str | None = None) -> SolveResult:
     """`resume`: the `ladder` of an earlier result that found the LLM unavailable. Models answer the same at
     temperature 0, so only the rungs that got no answer are bought again, from the partial fix reached so far.
@@ -1391,6 +1455,7 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
         return SolveResult("infeasible", note=f"the tests import a module that does not exist: {missing}")
     output = _shown_output(base_report)
     restart = restart or resume.get("restart")
+    original = resume.get("original") or restart or base   # what a green patch is cut back to (task 88)
     restarted = bool(resume.get("restarted"))   # the restart call has answered already: never bought twice
     if restart and restart != base and not resume.get("answered") and not restarted:
         # phase 1 left a partial repair: mutations no one checked. One MODEL_FAST call for the whole repair from
@@ -1402,18 +1467,20 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
                 restarted = True
                 fixed = apply_patch(restart, r.text)
                 if fixed is not None and (await call_tool("run_tests", _run_candidate, ws, fixed, *targs)).ok:
+                    fixed, cut = await _cut_back(ws, original, fixed, targs)
                     write_mylib(mylib_path, fixed)
                     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                     shutil.rmtree(mylib_path.parent / "__pycache__", ignore_errors=True)   # a package's own
                     return SolveResult("solved", answer="DONE",
-                                       note=f"patched by {MODEL_FAST} from the file before mutations")
+                                       note=_cut_note(f"patched by {MODEL_FAST} from the file before mutations", cut))
         except ModelFailing:
             pass  # only MODEL_FAST is out: the ladder below goes on to the other models
         except LLMUnavailable as e:
             # the same proxy would cost the ladder a second timeout: stop here and keep the restart, so that the
             # retry pass asks it again
             return SolveResult("unparsed", note=f"llm unavailable: {e}",
-                               extra={"ladder": {"answered": [], "base": base, "restart": restart},
+                               extra={"ladder": {"answered": [], "base": base, "restart": restart,
+                                                 "original": original},
                                       "restart": restart})
     attempts = [(MODEL_FAST, 400, {}), (MODEL_ALT, 600, {})]
     if task.reward >= 3 or _budget_is_free(client):
@@ -1442,10 +1509,11 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
                 continue
             report = await call_tool("run_tests", _run_candidate, ws, fixed, *targs)
             if report.ok:
+                fixed, cut = await _cut_back(ws, original, fixed, targs)
                 write_mylib(mylib_path, fixed)
                 shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                 shutil.rmtree(mylib_path.parent / "__pycache__", ignore_errors=True)   # a package's own
-                return SolveResult("solved", answer="DONE", note=f"patched by {model}")
+                return SolveResult("solved", answer="DONE", note=_cut_note(f"patched by {model}", cut))
             note = f"{model}: tests still failing"
             # a candidate that hangs where the base did not: its empty run says nothing of the base asked next
             hung = "<timeout>" in report.failed and "<timeout>" not in base_report.failed
@@ -1462,6 +1530,8 @@ async def fix_coding(task: Task, client, resume: dict | None = None, restart: st
     if unavailable is None:
         return SolveResult("unparsed", note=note)
     ladder = {"answered": answered, "base": base}
+    if original != base:   # the partial fix of a rung is the base now: the cut-back still goes to the original
+        ladder["original"] = original
     if restarted:
         ladder["restarted"] = True
     return SolveResult("unparsed", note=f"llm unavailable: {unavailable}", extra={"ladder": ladder})
