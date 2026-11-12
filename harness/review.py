@@ -37,9 +37,22 @@ def _texts(src: str) -> dict:
     return {u.qualname: textwrap.dedent(cs._segment(src, u)).strip("\n") for u in cs._units(src)}
 
 
-def needs_review(src: str) -> bool:
-    """False for a file whose every function is a known text (the examples' six, the texts mined from the set):
-    their silent slips are phase 1's work, at no cost."""
+def known_texts(mined: dict | None = None) -> dict:
+    """name -> known text: the examples' and the texts mined from the set (`scheduler._mine_texts`: {"texts": ...,
+    "final": [...]}; a final name is among the texts). The main process never installs the mined texts (other
+    in-process code reads the known tables), so they come here as an argument. Example names keep their texts."""
+    out = dict(cs._CANON_TEXT)
+    texts = (mined or {}).get("texts") if isinstance(mined, dict) else None
+    for name, text in (texts or {}).items():
+        if isinstance(name, str) and isinstance(text, str) and name not in cs._EXAMPLE_NAMES:
+            out[name] = text
+    return out
+
+
+def needs_review(src: str, known: dict | None = None) -> bool:
+    """False for a file whose every function is a known text (`known_texts`: the examples' six, the texts mined from
+    the set): their silent slips are phase 1's work, at no cost."""
+    known = cs._CANON_TEXT if known is None else known
     try:
         units = cs._units(src)
     except (SyntaxError, ValueError, RecursionError):
@@ -47,8 +60,8 @@ def needs_review(src: str) -> bool:
     if not units or len(src) > MAX_FILE_CHARS:
         return False
     for u in units:
-        known = cs._CANON_TEXT.get(u.qualname)
-        if known is None or cs._norm(known) != cs._norm(cs._segment(src, u)):
+        text = known.get(u.qualname)
+        if text is None or cs._norm(text) != cs._norm(cs._segment(src, u)):
             return True
     return False
 
@@ -260,18 +273,19 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str) -> list[str]:
     return [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
 
 
-def _known(src: str, name: str) -> bool:
+def _known(src: str, name: str, known: dict | None = None) -> bool:
     """The file holds the known text of this function (an example's, or one mined from the set): never replaced."""
-    known = cs._CANON_TEXT.get(name)
-    return known is not None and cs._norm(known) == cs._norm(_texts(src).get(name, ""))
+    text = (cs._CANON_TEXT if known is None else known).get(name)
+    return text is not None and cs._norm(text) == cs._norm(_texts(src).get(name, ""))
 
 
-def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: dict) -> tuple[str, list[str]]:
+def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: dict,
+            known: dict | None = None) -> tuple[str, list[str]]:
     """The file with every agreed rewrite that keeps the visible tests green, and their names."""
     cur, changed = src, []
     targs = () if target == "mylib.py" else (target,)
     for name in sorted(set(first) & set(second)):
-        if _known(src, name):
+        if _known(src, name, known):
             continue
         for text in _evidence(src, tests, name, first[name], second[name]):
             cand = _spliced(cur, name, text)
@@ -282,8 +296,9 @@ def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: di
     return cur, changed
 
 
-async def review(task, client) -> tuple[list[str], str]:
-    """Names of the functions replaced in the task's file, and a note for the trajectory."""
+async def review(task, client, known: dict | None = None) -> tuple[list[str], str]:
+    """Names of the functions replaced in the task's file, and a note for the trajectory. `known`: `known_texts`
+    (default the examples' texts only)."""
     ws = Path(task.workspace)
     try:
         test_name = _test_file(ws)
@@ -312,7 +327,7 @@ async def review(task, client) -> tuple[list[str], str]:
         return [], f"review: llm unavailable: {e}"[:200]
     if not set(first) & set(second):
         return [], f"review: no agreement ({sorted(first)} / {sorted(second)}), kept"[:200]
-    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second)
+    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known)
     if not changed or new == src:
         return [], f"review: no evidence against {sorted(set(first) & set(second))}, kept"[:200]
     if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it

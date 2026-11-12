@@ -235,3 +235,50 @@ def test_both_rewrites_drop_our_guard_keeps_the_file(tmp_path):
     task = _task(tmp_path, lib=PROFIT, tests=PROFIT_TESTS)
     reply = "FUNC max_profit\n" + PROFIT_NOGUARD
     assert _go(task, Fake(reply, reply.replace("best = 0", "best = 0 * 1")))[0] == [] and _lib(task) == PROFIT
+
+
+# I1: texts mined from the set are known in the main process too: not reviewed, never replaced
+CLAMP = "def clamp(x, lo, hi):\n    \"\"\"x limited to [lo, hi].\"\"\"\n    return max(lo, min(x, hi))\n"
+CLAMP_TESTS = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
+               "    def test_c(self):\n        self.assertEqual(m.clamp({a}, 0, 10), {b})\n")
+
+
+def _clamp_tasks(tmp_path):
+    out = []
+    for i, (a, b) in enumerate([(5, 5), (-3, 0), (12, 10), (7, 7)]):
+        d = tmp_path / f"coding_{i}"
+        (d / "workspace").mkdir(parents=True)
+        (d / "workspace" / "mylib.py").write_text(CLAMP, encoding="utf-8")
+        (d / "workspace" / "test_mylib.py").write_text(CLAMP_TESTS.format(a=a, b=b), encoding="utf-8")
+        (d / "answer.txt").write_text("DONE", encoding="utf-8")
+        out.append(Task(d.name, "coding", "fix", 2.0, "unittest", d, d / "workspace"))
+    return out
+
+
+def test_mined_texts_cost_no_review_call(tmp_path):
+    tasks = _clamp_tasks(tmp_path)
+    mined = scheduler._mine_texts(tasks)
+    assert "clamp" in mined.get("texts", {})
+    assert review.needs_review(CLAMP) and not review.needs_review(CLAMP, review.known_texts(mined))
+    ledger = TokenLedger(1000, 50)
+    traj = Trajectory(tmp_path)
+    wrong = "def clamp(x, lo, hi):\n    \"\"\"x limited to [lo, hi].\"\"\"\n    return min(hi, max(x, lo + 0))\n"
+    c = Fake(_reply(wrong), _reply(wrong))
+    asyncio.run(scheduler._review_stage(tasks, c, ledger, __import__("time").monotonic(), 3300,
+                                        {t.task_id: "solved" for t in tasks}, traj, {"stop": False, "traj": traj},
+                                        mined))
+    traj.close()
+    assert c.calls == [] and all(_lib(t) == CLAMP for t in tasks)
+
+
+def test_mined_text_is_never_replaced(tmp_path):
+    task = _task(tmp_path, lib=SILENT + "\n\n" + CLAMP, tests=TESTS.split("    def test_average")[0])
+    known = review.known_texts({"texts": {"clamp": CLAMP.strip("\n")}, "final": ["clamp"]})
+    bad = "def clamp(x, lo, hi):\n    \"\"\"x limited to [lo, hi].\"\"\"\n    return x\n"
+    changed, _ = asyncio.run(review.review(task, Fake(_reply(RIGHT, bad), _reply(RIGHT2, bad)), known))
+    assert changed == ["is_leap_year"] and CLAMP.strip() in _lib(task)
+
+
+def test_mined_text_never_overrides_an_example_text():
+    known = review.known_texts({"texts": {"average": "def average(xs):\n    return 0\n"}})
+    assert known["average"] == review.cs._CANON_TEXT["average"]
