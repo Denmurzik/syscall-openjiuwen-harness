@@ -121,6 +121,7 @@ def review_coding() -> bool:
 
 # default of HARNESS_REVIEW_REASON (round 19, task 82): where FAST and ALT both rewrote a function of the review but
 # their rewrites disagree, MODEL_REASON is asked the same; its rewrite and one of theirs must pass the same rules
+# (task 87: also where only one of them rewrote it)
 REVIEW_REASON = True
 
 

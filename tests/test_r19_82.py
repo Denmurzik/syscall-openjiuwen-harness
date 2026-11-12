@@ -267,7 +267,8 @@ def test_third_opinions_have_a_cap_a_run(tmp_path):
 def test_a_failed_third_opinion_keeps_the_agreed_fix(tmp_path):
     from harness.llm import BudgetExhausted
     clamp = "\n\ndef clamp(x, lo, hi):\n    return max(lo, min(x, hi))\n"
-    tests = TESTS.replace("    def test_leap", "    def test_clamp(self):\n        self.assertEqual(m.clamp(5, 0, 9), 5)"
+    tests = TESTS.replace("    def test_leap", "    def test_clamp(self):\n"
+                                                "        self.assertEqual(m.clamp(5, 0, 9), 5)"
                                                 "\n\n    def test_leap")
     task = _task(tmp_path, lib=SILENT + clamp, tests=tests)
     c1 = "def clamp(x, lo, hi):\n    return min(hi, max(x, lo)) if lo <= hi else lo\n"
@@ -276,3 +277,78 @@ def test_a_failed_third_opinion_keeps_the_agreed_fix(tmp_path):
     with pytest.raises(BudgetExhausted):
         _go(task, c)
     assert c.calls == [MODEL_FAST, MODEL_ALT, MODEL_REASON] and "y % 400 == 0" in _lib(task)
+
+
+# task 87: a function only one of FAST and ALT rewrote (one-sided) goes to the third opinion too (trap1 coding_7024)
+SQ_LIB = ("def total(xs):\n    s = 0\n    for x in xs:\n        s += x\n    return s\n\n\n"
+          "def sum_squares(xs):\n    return sum(x * x for x in xs if x > 0)\n\n\n"
+          "def minimum(xs):\n    best = xs[0]\n    for x in xs:\n        if x < best:\n            best = x\n"
+          "    return best\n")
+SQ_TESTS = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
+            "    def test_total(self):\n        self.assertEqual(m.total([1, 2, 3]), 6)\n\n"
+            "    def test_sum_squares(self):\n        self.assertEqual(m.sum_squares([1, 2, 3]), 14)\n\n"
+            "    def test_minimum(self):\n        self.assertEqual(m.minimum([4, -1, 7]), -1)\n")
+SQ_FIX = "def sum_squares(xs):\n    return sum(x * x for x in xs)\n"
+SQ_FIX2 = "def sum_squares(xs):\n    return sum(x ** 2 for x in xs)\n"
+MIN_GUARD = ("def minimum(xs):\n    if not xs:\n        raise ValueError('empty')\n    best = xs[0]\n    for x in xs:\n"
+             "        if x < best:\n            best = x\n    return best\n")      # guard-only: no case
+
+
+def test_one_sided_rewrite_the_third_opinion_agrees_with_is_stored(tmp_path):
+    task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
+    c = Fake(_reply(SQ_FIX), _reply(MIN_GUARD), _reply(SQ_FIX2))
+    changed, note = _go(task, c)
+    assert changed == ["sum_squares"] and c.calls == [MODEL_FAST, MODEL_ALT, MODEL_REASON]
+    assert "['sum_squares'] one-sided" in note and note.endswith("sided ['sum_squares'] with FAST")
+    assert note.startswith("review: replaced ['sum_squares']")
+    assert c.msgs[MODEL_REASON][1]["content"].endswith("Look only at sum_squares: rewrite it if it is wrong, "
+                                                       "else reply NONE.")          # not the guard-only minimum
+    ns = {}
+    exec(_lib(task), ns)
+    assert ns["sum_squares"]([-2, 3]) == 13 and "best = xs[0]\n" in _lib(task) and "raise" not in _lib(task)
+
+
+def test_one_sided_rewrite_with_a_silent_third_opinion_is_kept(tmp_path):
+    task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
+    c = Fake(_reply(SQ_FIX), "NONE", "NONE")
+    changed, note = _go(task, c)
+    assert changed == [] and _lib(task) == SQ_LIB and c.calls == [MODEL_FAST, MODEL_ALT, MODEL_REASON]
+    assert note.startswith("review: no agreement (['sum_squares'] / [])") and "sided []" in note
+
+
+def test_one_sided_rewrite_the_third_opinion_differs_from_is_kept(tmp_path):
+    task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
+    other = "def sum_squares(xs):\n    return sum(abs(x) * x for x in xs)\n"
+    assert _go(task, Fake(_reply(SQ_FIX), "NONE", _reply(other)))[0] == [] and _lib(task) == SQ_LIB
+
+
+def test_guard_only_or_known_one_sided_rewrites_make_no_third_call(tmp_path):
+    task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
+    c = Fake(_reply(MIN_GUARD), "NONE", _reply(SQ_FIX))
+    changed, note = _go(task, c)
+    assert changed == [] and c.calls == [MODEL_FAST, MODEL_ALT]
+    assert note == "review: no agreement (['minimum'] / []), kept"
+    wrong_avg = "def average(xs):\n    return sum(xs) // len(xs)\n"           # the examples' known text
+    lib = "def average(xs):\n    return sum(xs) / len(xs)\n"
+    tests = SQ_TESTS.split("    def test_total")[0] + (
+        "    def test_a(self):\n        self.assertEqual(m.average([2, 4]), 3)\n")
+    c = Fake(_reply(wrong_avg), "NONE", _reply(wrong_avg))
+    assert _go(_task(tmp_path / "k", lib=lib, tests=tests), c)[0] == [] and MODEL_REASON not in c.calls
+
+
+def test_one_sided_switch_off_is_round_18(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_REVIEW_REASON", "0")
+    task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
+    c = Fake(_reply(SQ_FIX), _reply(MIN_GUARD), _reply(SQ_FIX2))
+    changed, note = _go(task, c)
+    assert changed == [] and c.calls == [MODEL_FAST, MODEL_ALT]
+    assert note == "review: no agreement (['sum_squares'] / ['minimum']), kept"
+
+
+def test_one_sided_only_files_leave_room_for_disputes():
+    c = Fake("NONE", "NONE")
+    c._review_reason = (review.REASON_MAX_CALLS - review.REASON_DISPUTE_CALLS, 0.0)
+    assert not review._may_reason(c, [{"content": "x"}], lone_only=True)
+    assert review._may_reason(c, [{"content": "x"}])
+    c._review_reason = (0, review.REASON_MAX_UNITS - review.REASON_DISPUTE_UNITS)
+    assert not review._may_reason(c, [{"content": "x"}], lone_only=True) and review._may_reason(c, [{"content": "x"}])

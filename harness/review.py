@@ -9,7 +9,8 @@ text (the examples' functions, texts mined from the set) and a method are never 
 
 Round 19 (task 82, HARNESS_REVIEW_REASON): where FAST and ALT both rewrote a function and their rewrites disagree on
 the trial inputs, MODEL_REASON is asked the same about those functions only (`_focus`), once per file; a function is
-replaced when its rewrite and one of theirs pass the same rules.
+replaced when its rewrite and one of theirs pass the same rules. Task 87: a function only one of them rewrote
+(one-sided) is asked about too, after the disputes, when that rewrite alone would pass the rules (`_lone`).
 
 Round 19 (task 84, HARNESS_REVIEW_METHODS): a method is checked too, on scenarios built from the visible tests that
 call it (`_scenes`): the objects are built and the methods called as the tests do, with other literal values, and the
@@ -55,6 +56,8 @@ REASON_TOKENS = 2000    # output limit of MODEL_REASON's third opinion (low reas
 REASON_SPEND_LIMIT = 0.5   # no third opinion once this share of the budget is spent (the stage's own gate)
 REASON_MAX_CALLS = 6       # third opinions a run, at most (1 to 2K units each: a set where every file disputes would
 REASON_MAX_UNITS = 8000    # otherwise be held back by the 50 % gate alone), and the units they may spend in all
+REASON_DISPUTE_CALLS = 2   # of the cap, kept for files with a dispute: a file with only one-sided cases (task 87)
+REASON_DISPUTE_UNITS = 2000  # may not take them
 
 
 def _left(stop: float | None, cap: float) -> float:
@@ -893,14 +896,16 @@ def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: di
 
 def _settle(ws: Path, src: str, cur: str, tests: str, target: str, first: dict, second: dict, third: dict,
             names: list, trials: dict, stop: float | None = None) -> tuple[str, list[str], dict]:
-    """The disputed functions (`names`) where the third rewrite and FAST's, else ALT's, pass `_verdict` as one
-    opinion: that pair's text goes into `cur` when the visible tests stay green. Also name -> the side taken
-    ("FAST" / "ALT"), for the note."""
+    """The disputed or one-sided functions (`names`) where the third rewrite and FAST's, else ALT's (whichever
+    rewrote it), pass `_verdict` as one opinion: that pair's text goes into `cur` when the visible tests stay green.
+    Also name -> the side taken ("FAST" / "ALT"), for the note."""
     changed, sides = [], {}
     for name in names:
         if name not in third:
             continue
-        for other, role, side in ((first[name], "first", "FAST"), (second[name], "second", "ALT")):
+        for other, role, side in ((first.get(name), "first", "FAST"), (second.get(name), "second", "ALT")):
+            if other is None:
+                continue
             if stop is not None and time.monotonic() > stop:
                 return cur, changed, sides
             texts, _ = _verdict(src, tests, name, third[name], other, stop, trials.get(name), ("third", role))
@@ -916,12 +921,36 @@ def _settle(ws: Path, src: str, cur: str, tests: str, target: str, first: dict, 
     return cur, changed, sides
 
 
-def _may_reason(client, msgs: list[dict]) -> bool:
+def _lone(ws: Path, src: str, tests: str, target: str, first: dict, second: dict, known: dict | None,
+          stop: float | None, trials: dict) -> list[str]:
+    """The one-sided functions (round 19, task 87): rewritten by only one of FAST and ALT, not known texts, whose
+    rewrite would pass every rule if a second opinion agreed with it (`_verdict` of the rewrite against a second run
+    of itself: a difference from ours where ours returns a value, nothing broken, the raise rule) and keeps the
+    visible tests green. A guard-only or a red rewrite is no case: asking MODEL_REASON about it could store nothing."""
+    out = []
+    for name in sorted(set(first) ^ set(second)):
+        if stop is not None and time.monotonic() > stop:
+            break
+        if _known(src, name, known):
+            continue
+        text, role = (first[name], "first") if name in first else (second[name], "second")
+        trial = trials.setdefault(name, _Trial(src, tests, name, target))
+        texts, _ = _verdict(src, tests, name, text, text, stop, trial, (role, role + " again"))
+        cand = _spliced(src, name, texts[0]) if texts else None
+        if cand is not None and _green(ws, cand, target, stop):
+            out.append(name)
+    return out
+
+
+def _may_reason(client, msgs: list[dict], lone_only: bool = False) -> bool:
     """The third opinion fits the stage's gates: under REASON_SPEND_LIMIT of the budget and affordable (a client
     without a ledger, as in the tests, passes this part), and under the run's cap: REASON_MAX_CALLS calls and
-    REASON_MAX_UNITS units, tallied on the client (one client a run). A True reserves one call."""
+    REASON_MAX_UNITS units, tallied on the client (one client a run). A True reserves one call. A file with only
+    one-sided cases (`lone_only`) leaves the last REASON_DISPUTE_CALLS calls and REASON_DISPUTE_UNITS units to
+    disputes: when the cap binds, a dispute goes first."""
     calls, units = getattr(client, "_review_reason", (0, 0.0))
-    if calls >= REASON_MAX_CALLS or units >= REASON_MAX_UNITS:
+    keep_calls, keep_units = (REASON_DISPUTE_CALLS, REASON_DISPUTE_UNITS) if lone_only else (0, 0)
+    if calls >= REASON_MAX_CALLS - keep_calls or units >= REASON_MAX_UNITS - keep_units:
         return False
     ledger = getattr(client, "ledger", None)
     if ledger is not None:
@@ -990,11 +1019,17 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
         second = _rewrites(src, r.text)
     except LLMUnavailable as e:
         return [], f"review: llm unavailable: {e}"[:200]
-    if not set(first) & set(second):
+    both = set(first) & set(second)
+    if not both and not config.review_reason():
         return [], f"review: no agreement ({sorted(first)} / {sorted(second)}), kept"[:200]
     disputed, trials = [], {}
-    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known, stop, disputed,
-                                           trials)
+    new, changed = src, []
+    if both:
+        new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known, stop,
+                                               disputed, trials)
+    # task 87: a function only one of them rewrote is asked about too, after the disputes
+    lone = await asyncio.to_thread(_lone, ws, src, tests, target, first, second, known, stop, trials) \
+        if config.review_reason() else []
     if changed and new != src:
         # the agreed fixes are written before the third opinion is asked: a failure or a cancel there keeps them
         if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it
@@ -1004,17 +1039,20 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
     else:
         changed, new = [], src
     tail = ""
-    if disputed and config.review_reason():
+    asks = sorted(disputed) + lone          # the disputes first
+    if asks and config.review_reason():
+        what = "; " + ", ".join(([f"{sorted(disputed)} disputed"] if disputed else [])
+                                + ([f"{lone} one-sided"] if lone else []))
         if stop is not None and stop - time.monotonic() < MIN_LEFT_S:
-            tail = f"; {sorted(disputed)} disputed, too close to the stop for {MODEL_REASON}"
-        elif not _may_reason(client, _focus(msgs, sorted(disputed))):
-            tail = f"; {sorted(disputed)} disputed, no room for {MODEL_REASON}"
+            tail = f"{what}, too close to the stop for {MODEL_REASON}"
+        elif not _may_reason(client, _focus(msgs, asks), lone_only=not disputed):
+            tail = f"{what}, no room for {MODEL_REASON}"
         else:
-            third, word = await _third(client, _focus(msgs, sorted(disputed)), src)
+            third, word = await _third(client, _focus(msgs, asks), src)
             cur, more, sides = await asyncio.to_thread(_settle, ws, src, new, tests, target, first, second, third,
-                                                       sorted(disputed), trials, stop)
+                                                       asks, trials, stop)
             side = (f" with {sides[more[0]]}" if len(more) == 1 else f" with {sides}") if more else ""
-            tail = f"; {sorted(disputed)} disputed, {MODEL_REASON} {word}, sided {sorted(more)}{side}"
+            tail = f"{what}, {MODEL_REASON} {word}, sided {sorted(more)}{side}"
             if more:
                 if path.read_text(encoding="utf-8") != new:
                     tail += ", the file changed meanwhile"
@@ -1023,5 +1061,7 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
                     shutil.rmtree(ws / "__pycache__", ignore_errors=True)
                     changed += more
     if not changed:
-        return [], f"review: no evidence against {sorted(set(first) & set(second))}{tail}, kept"[:300]
+        if not both:
+            return [], f"review: no agreement ({sorted(first)} / {sorted(second)}){tail}, kept"[:300]
+        return [], f"review: no evidence against {sorted(both)}{tail}, kept"[:300]
     return changed, f"review: replaced {changed} ({sorted(first)} / {sorted(second)}){tail}"[:300]
