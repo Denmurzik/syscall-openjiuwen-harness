@@ -51,6 +51,8 @@ REVIEW_MAX_TOKENS = 700
 MAX_FILE_CHARS = 9000   # a larger file is not reviewed: the reply could not hold its functions
 RUN_TIMEOUT = 20        # one run of one visible test file
 PROBE_TIMEOUT = 10      # the trial inputs of one version of the function
+HANG_CONFIRM_S = 5.0    # HARNESS_REVIEW_PROBES: the alarm of the run that confirms a hang of the file, per input
+HANG_CONFIRM_MAX = 2    # inputs confirmed at most (each may take HANG_CONFIRM_S)
 MIN_LEFT_S = 60         # no model call with less time than this before the stop: its rewrite could not be checked
 REASON_TOKENS = 2000    # output limit of MODEL_REASON's third opinion (low reasoning effort, then the FUNC blocks)
 REASON_SPEND_LIMIT = 0.5   # no third opinion once this share of the budget is spent (the stage's own gate)
@@ -934,6 +936,25 @@ class _Trial:
                               else behaviour(full, self.name, self.inputs, timeout=limit))
         return self.memo[key]
 
+    def hangs(self, idx: list[int], stop: float | None) -> list[int]:
+        """HARNESS_REVIEW_PROBES: the inputs among `idx` (where ours ran into the one-second alarm) on which ours,
+        run again alone in the review's own child, still runs into its alarm after HANG_CONFIRM_S seconds: a slow
+        but correct function, or a busy machine, returns there and is no evidence. At most HANG_CONFIRM_MAX inputs;
+        none when the time left cannot hold the run."""
+        idx = idx[:HANG_CONFIRM_MAX]
+        if not idx or self.method:
+            return []
+        texts = [self.inputs[i] if self.expr_head is not None else repr(tuple(self.inputs[i])) for i in idx]
+        key = ("ours hang", tuple(texts))
+        if key not in self.memo:
+            need = HANG_CONFIRM_S * len(texts) + 5
+            limit = _left(stop, need)
+            if limit < need:
+                return []
+            self.memo[key] = _expr_behaviour(self.src, self.name, self.expr_head or "", texts, limit,
+                                             alarm=HANG_CONFIRM_S)
+        return [i for i, o in zip(idx, self.memo[key]) if o == "<exc:ProbeAlarm>"]
+
     def steady(self, stop: float | None) -> list[bool] | None:
         """Per input: ours gives the same outcome on a second run. An input where it does not (random, time) shows
         neither agreement nor a difference. All True with every round-19 switch off (round 18: one run)."""
@@ -980,11 +1001,11 @@ def _verdict(src: str, tests: str, name: str, a: str, b: str, stop: float | None
         # hide chance, the rewrites' agreement there as well as their difference from ours (probe_memo: a wrong
         # `random.choice(xs[:-1] or xs)` "differs" on [1, 2] when ours drew 2 twice). Not judged, no third opinion
         return [], False
-    return _judge(src, tests, name, a, b, trial, trial.outcomes(None, stop), *outs)
+    return _judge(src, tests, name, a, b, trial, trial.outcomes(None, stop), *outs, stop=stop)
 
 
 def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", ours: list, ba: list,
-           bb: list) -> tuple[list[str], bool]:
+           bb: list, stop: float | None = None) -> tuple[list[str], bool]:
     """`_verdict`'s rules on the outcomes of ours and of the two rewrites."""
     broken = _broken(ours, ba), _broken(ours, bb)
     if broken[0] or broken[1]:
@@ -1000,11 +1021,12 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
         return [], len(valid) >= 3 and any(raises[i][0] != raises[i][1] for i in valid)
     if any(ba[i] != bb[i] and not raises[i][0] for i in both):
         return [], True
-    # HARNESS_REVIEW_PROBES: an input on which the file's function ran into the review's own alarm (not a TimeoutError
-    # it raises itself, which is a raise like any other: round 18, a change only where ours raises is no evidence)
-    # while both rewrites return the same value shows it wrong as well
-    hung = [i for i, o in enumerate(ours) if o == "<exc:ProbeAlarm>" and _exc(ba[i]) is None and ba[i] == bb[i]
-            and not trial.cut(ba[i])] if config.review_probes() and not trial.method else []
+    # HARNESS_REVIEW_PROBES: an input on which the file's function ran into the one-second alarm while both rewrites
+    # return the same value shows it wrong as well, once a second run of ours alone confirms the hang with the
+    # review's own alarm (`_Trial.hangs`): a TimeoutError it raises itself is a raise like any other (round 18, a
+    # change only where ours raises is no evidence), and a slow but correct function returns given more time
+    hung = [i for i, o in enumerate(ours) if o in ("<exc:TimeoutError>", "<exc:ProbeAlarm>") and _exc(ba[i]) is None
+            and ba[i] == bb[i] and not trial.cut(ba[i])] if config.review_probes() and not trial.method else []
     # HARNESS_REVIEW_PROBES: where the file's function raises a value-domain exception its own text does not name and
     # both rewrites raise another one that the text does name ("Raises ValueError when the second number is zero",
     # the file divides and lets ZeroDivisionError out), the file is shown wrong; the stored text must say `raise <Name>`
@@ -1012,9 +1034,10 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
     swap = {_exc(ba[i]) for i in range(len(ours))
             if _exc(ours[i]) in _VALUE_EXC and _exc(ba[i]) in _VALUE_EXC and ba[i] == bb[i] and ba[i] != ours[i]
             and _exc(ba[i]) in seg and _exc(ours[i]) not in seg} if config.review_probes() and not trial.method else set()
-    if not hung and not swap and not any(ba[i] == bb[i] and trial.public(ba[i]) != trial.public(ours[i])
-                                         and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
-        return [], False
+    if not swap and not any(ba[i] == bb[i] and trial.public(ba[i]) != trial.public(ours[i])
+                            and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
+        if not (hung and trial.hangs(hung, stop)):   # the confirming run only when nothing else shows ours wrong
+            return [], False
 
     def says(t):
         return all(re.search(r"\braise\s+" + e + r"\b", t) for e in swap)

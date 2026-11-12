@@ -41,3 +41,48 @@ def test_the_review_child_shows_its_own_alarm_apart_from_a_raise():
     assert out == ["<exc:TimeoutError>", "3"]
     if os.name != "nt":   # the alarm needs SIGALRM; the function's `except Exception` does not swallow it
         assert r._expr_behaviour(src, "f", "", ["(2,)"], timeout=20, alarm=0.3) == ["<exc:ProbeAlarm>"]
+
+
+TRI = '''def tri_sum(n):
+    """Sum of i*j over 1 <= i <= j <= n."""
+    if n >= 1900:
+        raise TimeoutError()     # stands for the one-second alarm on a slow, correct double loop
+    return sum(i * j for j in range(1, n + 1) for i in range(1, j + 1))
+'''
+TRI_NEW = '''def tri_sum(n):
+    """Sum of i*j over 1 <= i <= j <= n."""
+    if n <= 0:
+        return 0
+    if n > 1000:
+        return int(n * (n + 1) * (n + 2) * (3 * n + 1) / 24)
+    return n * (n + 1) * (n + 2) * (3 * n + 1) // 24
+'''
+TRI_TESTS = UT + '''from mylib import tri_sum
+
+
+class T(unittest.TestCase):
+    def test_small(self):
+        self.assertEqual(tri_sum(3), 25)
+'''
+
+
+def test_a_hang_counts_only_once_a_longer_run_of_ours_confirms_it(monkeypatch):
+    assert not accepted(TRI, TRI_TESTS, "tri_sum", TRI_NEW)     # the confirming run returns: slow, not hung
+    real, seen = r._expr_behaviour, []
+
+    def confirm(src, func, head, inputs, timeout, alarm=1.0):
+        if alarm == r.HANG_CONFIRM_S:   # the confirming run: ours still hangs
+            seen.append(len(inputs))
+            return ["<exc:ProbeAlarm>"] * len(inputs)
+        return real(src, func, head, inputs, timeout, alarm)
+
+    monkeypatch.setattr(r, "_expr_behaviour", confirm)
+    assert accepted(TRI, TRI_TESTS, "tri_sum", TRI_NEW) and seen and max(seen) <= r.HANG_CONFIRM_MAX
+
+
+def test_no_confirming_run_when_the_time_left_cannot_hold_it(monkeypatch):
+    import time
+
+    monkeypatch.setattr(r, "_expr_behaviour", lambda *a, **k: pytest.fail("ran"))
+    trial = r._Trial(TRI, TRI_TESTS, "tri_sum")
+    assert trial.hangs([0], time.monotonic() + 3) == []
