@@ -214,7 +214,8 @@ def _binary_preview(p: Path, raw: bytes) -> str | None:
     try:
         if raw.startswith(b"SQLite format 3\x00"):
             import sqlite3
-            con = sqlite3.connect(f"file:{p.as_posix()}?mode=ro&immutable=1", uri=True, timeout=2)
+            # as_uri escapes '#' and '?': unescaped, the name is cut there and sqlite creates the shorter file
+            con = sqlite3.connect(p.resolve().as_uri() + "?mode=ro&immutable=1", uri=True, timeout=2)
             try:
                 con.set_progress_handler(lambda: 1, RICH_SQL_STEPS)   # a statement that runs long is interrupted
                 lines = ["(SQLite database: tables and first rows)"]

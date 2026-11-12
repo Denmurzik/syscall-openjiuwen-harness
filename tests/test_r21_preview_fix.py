@@ -90,3 +90,16 @@ def test_an_archive_with_many_members_is_not_opened(tmp_path, monkeypatch):
     monkeypatch.setattr(zipfile, "ZipFile", lambda *a, **k: pytest.fail("opened"))
     out = L.describe_workspace(tmp_path)
     assert "--- kb.zip ---\n(zip archive, 30 members)" in out
+
+
+def test_a_database_name_with_a_hash_or_a_space_creates_no_file(tmp_path):
+    for name in ("c#d.db", "my data.db", "q%41.db"):
+        con = sqlite3.connect(tmp_path / name)
+        con.execute("create table t(x)")
+        con.execute("insert into t values (7)")
+        con.commit()
+        con.close()
+    before = sorted(p.name for p in tmp_path.iterdir())
+    out = L.describe_workspace(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    assert out.count("CREATE TABLE t(x)") == 3 and out.count("(7,)") == 3
