@@ -33,38 +33,62 @@ def _conftests():
     return [c for c in paths if os.path.exists(c)]
 
 
-def _wants_stub():
-    # the stand-in serves only a test file that imports pytest outside a try block: a file without pytest, or one
-    # that guards the import (`except ImportError: pytest = None`), runs exactly as before the stand-in existed
+def _imports_pytest(tree, skip=()):
     import ast
-    # expert 10 (HARNESS_CONFTEST): a conftest.py that imports pytest serves a test file that takes its fixtures
-    # without importing pytest itself
-    for c in _conftests():
-        try:
-            with open(c, encoding="utf-8") as fh:
-                if any(isinstance(n, (ast.Import, ast.ImportFrom)) and "pytest" in ast.dump(n)
-                       for n in ast.walk(ast.parse(fh.read()))):
-                    return True
-        except Exception:
-            pass
-    try:
-        with open(os.path.join(_SUB, sys.argv[1].split(".")[0] + ".py"), encoding="utf-8") as fh:
-            tree = ast.parse(fh.read())
-    except Exception:
-        return False
-    guarded = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Try):
-            for sub in node.body:
-                guarded.update(id(n) for n in ast.walk(sub))
-    for node in ast.walk(tree):
-        if id(node) in guarded:
+        if id(node) in skip:
             continue
         if isinstance(node, ast.Import) and any(a.name.split(".")[0] == "pytest" for a in node.names):
             return True
         if isinstance(node, ast.ImportFrom) and not node.level and (node.module or "").split(".")[0] == "pytest":
             return True
     return False
+
+
+def _takes_fixture(tree):
+    # a test that takes a parameter (a fixture): a top-level test function, or a test method beyond `self` of a
+    # Test* class that is not a TestCase
+    import ast
+    def params(f):  # noqa: E306
+        a = f.args
+        return len(a.posonlyargs) + len(a.args) + len(a.kwonlyargs) + bool(a.vararg) + bool(a.kwarg)
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test") and params(node):
+            return True
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test") and not any(
+                "TestCase" in ast.dump(b) for b in node.bases):
+            if any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) and m.name.startswith("test")
+                   and params(m) > 1 for m in node.body):
+                return True
+    return False
+
+
+def _wants_stub():
+    # the stand-in serves only a test file that imports pytest outside a try block: a file without pytest, or one
+    # that guards the import (`except ImportError: pytest = None`), runs exactly as before the stand-in existed
+    import ast
+    try:
+        with open(os.path.join(_SUB, sys.argv[1].split(".")[0] + ".py"), encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+    except Exception:
+        return False
+    # expert 10 (HARNESS_CONFTEST): a conftest.py that imports pytest serves a test file that takes its fixtures
+    # without importing pytest itself. Only such a file: a unittest file, or one whose tests take no parameter, runs
+    # exactly as before (a conftest with hooks, autouse fixtures or a missing import would make it red)
+    if _conftests() and not _imports_pytest(tree) and _takes_fixture(tree):
+        for c in _conftests():
+            try:
+                with open(c, encoding="utf-8") as fh:
+                    if _imports_pytest(ast.parse(fh.read())):
+                        return True
+            except Exception:
+                pass
+    guarded = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try):
+            for sub in node.body:
+                guarded.update(id(n) for n in ast.walk(sub))
+    return _imports_pytest(tree, guarded)
 
 
 _need_stub = False
