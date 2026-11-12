@@ -257,7 +257,16 @@ async def rescue_coding(task, client, why: str) -> SolveResult:
     if code > SOURCE_CHARS:   # a whole-file reply of that size would not fit MAX_TOKENS: two calls for nothing
         return SolveResult("unparsed", note=f"{why}; rescue: {code} chars of source, too long to rewrite whole"[:300])
     note = why
+    ledger = getattr(client, "ledger", None)
+    cost = sum(len(m["content"]) for m in msgs) / 30 + MAX_TOKENS   # prompt tokens / 10 + the whole reply
     for model in (MODEL_FAST, MODEL_ALT):
+        try:
+            affordable = ledger is None or ledger.can_afford(cost)
+        except Exception:   # a foreign client
+            affordable = True
+        if not affordable:   # the reply would be cut to what is left, and a cut reply is never stored
+            note = f"{why}; rescue: the budget left does not fit a whole-file reply"[:300]
+            break
         try:
             r = await client.chat(model, msgs, MAX_TOKENS)
         except ProxyDown as e:   # no model answers: the second would only wait for its own timeout

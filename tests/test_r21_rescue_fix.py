@@ -163,3 +163,16 @@ def test_many_small_data_files_do_not_crowd_out_the_code(tmp_path):
     (tmp_path / "mylib.py").write_text("def f(x):\n    return x\n" * 5, encoding="utf-8")
     names = [rel for rel, _ in rescue._files(tmp_path)]
     assert names[0] == "mylib.py" and len(names) == rescue.MAX_FILES
+
+
+def test_no_call_when_the_budget_left_cannot_hold_a_whole_reply(tmp_path):
+    from harness.budget import TokenLedger
+
+    t = _task(tmp_path, {"stats.js": "function f() {}\n"}, "`node test.js` fails. Fix stats.js.")
+    c = Fake(["FILE stats.js\nfunction f() { return 1; }\nEND FILE\n"])
+    c.ledger = TokenLedger(1000, 0)
+    r = asyncio.run(L.fix_coding(t, c))
+    assert r.status == "unparsed" and "budget left" in r.note and not c.calls
+    c.ledger = TokenLedger(100_000, 0)
+    r = asyncio.run(L.fix_coding(t, c))
+    assert r.status == "solved" and len(c.calls) == 1
