@@ -349,7 +349,18 @@ def _json_shape(p: Path, shown: str) -> str | None:
     if isinstance(data, dict):
         return _clip("(top-level keys: " + "; ".join(f"{k!r}: {kind(v)}" for k, v in list(data.items())[:10]) + ")", 480)
     if isinstance(data, list) and data and isinstance(data[0], dict):
-        return _clip(f"(a list of {len(data)} objects with keys {', '.join(map(repr, list(data[0])[:12]))})", 480)
+        # the keys of every object, in order of first use: an optional field may first appear in the 40th record
+        from collections import Counter
+        objs = [o for o in data if isinstance(o, dict)]
+        seen = Counter(k for o in objs for k in o)
+        keys = list(seen)
+        line = f"(a list of {len(data)} objects with keys {', '.join(map(repr, keys[:12]))}"
+        if len(keys) > 12:
+            line += f" and {len(keys) - 12} more"
+        partial = [k for k in keys if seen[k] < len(objs)]
+        if partial:
+            line += f"; not in every object: {', '.join(map(repr, partial[:6]))}"
+        return _clip(line + ")", 480)
     return None
 
 

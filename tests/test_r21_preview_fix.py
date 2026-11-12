@@ -126,3 +126,13 @@ def test_an_archive_member_that_cannot_be_read_keeps_the_listing(tmp_path, monke
     monkeypatch.setattr(zipfile.ZipFile, "open", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("encrypted")))
     out = L.describe_workspace(tmp_path)
     assert "(zip archive, 1 members)\na.md" in out and "first lines of" not in out
+
+
+def test_the_keys_of_every_object_are_listed(tmp_path):
+    rows = [{"sku": i, "qty": i} for i in range(50)]
+    rows[39]["discount"] = 5
+    (tmp_path / "rows.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    (tmp_path / "wide.json").write_text(json.dumps([{f"k{j}": j for j in range(15)}] * 3, indent=1), encoding="utf-8")
+    out = L.describe_workspace(tmp_path)
+    assert "(a list of 50 objects with keys 'sku', 'qty', 'discount'; not in every object: 'discount')" in out
+    assert "'k11' and 3 more)" in out
