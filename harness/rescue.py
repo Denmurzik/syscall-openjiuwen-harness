@@ -176,6 +176,8 @@ async def rescue_coding(task, client, why: str) -> SolveResult:
     files = await asyncio.to_thread(_files, ws)
     if not files:
         return SolveResult("unparsed", note=why)
+    if await asyncio.to_thread(_verify, task, ws, {}) is True:   # nothing to repair: the file stays as it is
+        return SolveResult("solved", answer="DONE", note=f"{why}; rescue: checks already pass, nothing written"[:300])
     msgs, whole = messages(task, files)
     note = why
     for model in (MODEL_FAST, MODEL_ALT):
