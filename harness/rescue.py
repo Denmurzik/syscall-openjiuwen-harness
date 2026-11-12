@@ -38,15 +38,38 @@ _TEXT_SUFFIXES = frozenset({".py", ".js", ".mjs", ".ts", ".sh", ".md", ".txt", "
 _BLOCK = re.compile(r"^FILE[ \t]+(\S[^\n]*?)[ \t]*\n(.*?)(?:\nEND FILE[ \t]*$|(?=\nFILE[ \t]+\S)|\Z)", re.M | re.S)
 _DOCTEST = re.compile(r"-m\s+doctest\s+(?:-v\s+)?([\w./-]+\.py)")
 _SKIP_DIRS = frozenset({"__pycache__", ".git", "node_modules", ".venv", "venv", ".pytest_cache"})
+# an existing file is rewritten only when it is code: data and configuration the tests read stay as they are
+_CODE_SUFFIXES = frozenset({".py", ".js", ".mjs", ".ts", ".go", ".java", ".rb", ".c", ".h", ".cpp", ".rs", ".sh"})
+# what configures or feeds a test run, here or in the hidden one: never written
+_RUN_CONFIG = frozenset({"pytest.ini", "setup.cfg", "tox.ini", "pyproject.toml", "sitecustomize.py",
+                         "usercustomize.py", "noxfile.py", "package.json", "run_tests.py", "run_tests.sh",
+                         "runtests.py", ".coveragerc", ".mocharc.json", ".mocharc.js", "jest.config.js",
+                         "jest.config.mjs", "vitest.config.js", "vitest.config.ts"})
+_DATA_DIRS = ("testdata", "test_data", "fixtures", "__fixtures__", "__snapshots__", "expected")
 
 
 def _protected(rel: str) -> bool:
-    """A file of the tests: never written."""
+    """A file of the tests or of their configuration: never written."""
     parts = rel.lower().split("/")
     name = parts[-1]
     stem = name.rsplit(".", 1)[0]
     return (stem.startswith("test_") or stem.endswith("_test") or stem in ("test", "tests", "conftest")
-            or ".test." in name or ".spec." in name or any(p in ("tests", "test", "__tests__", "spec") for p in parts[:-1]))
+            or ".test." in name or ".spec." in name or name in _RUN_CONFIG or name.endswith(".pth")
+            or any(p in ("tests", "test", "__tests__", "spec") + _DATA_DIRS for p in parts[:-1]))
+
+
+def _named_by_tests(ws: Path, rel: str) -> bool:
+    """A file name some test file of the workspace mentions (expected output, fixture data)."""
+    name = Path(rel).name
+    try:
+        for p in ws.rglob("*"):
+            if (p.is_file() and p.suffix.lower() in _CODE_SUFFIXES and _protected(p.relative_to(ws).as_posix())
+                    and not (set(p.relative_to(ws).parts[:-1]) & _SKIP_DIRS) and p.stat().st_size <= 200_000
+                    and name in p.read_text(encoding="utf-8", errors="ignore")):
+                return True
+    except OSError:
+        return True
+    return False
 
 
 def _files(ws: Path) -> list[tuple[str, str]]:
@@ -109,7 +132,9 @@ def parse(reply: str, ws: Path, whole: set) -> dict:
         if (not rel or p.is_absolute() or ".." in p.parts or rel.startswith("/") or ":" in rel or _protected(rel)
                 or p.suffix.lower() not in _TEXT_SUFFIXES or rel == "answer.txt" or not body.strip()):
             continue
-        if (ws / rel).exists() and rel not in whole:
+        if (ws / rel).exists() and (rel not in whole or p.suffix.lower() not in _CODE_SUFFIXES):
+            continue
+        if p.suffix.lower() not in _CODE_SUFFIXES and _named_by_tests(ws, rel):   # the tests' own data
             continue
         out[rel] = body
         if len(out) >= MAX_WRITES:
@@ -133,11 +158,54 @@ def _checks(task, ws: Path) -> tuple[list[str], str | None]:
     return tests, doc
 
 
+def _examples(text: str) -> list[tuple[str, str]] | None:
+    """(input, expected output) of every doctest example in the docstrings of `text`, whitespace folded; None when
+    the text does not parse or an example is malformed."""
+    import ast
+    import doctest
+    try:
+        tree = ast.parse(text)
+        out = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc:
+                    out += [(" ".join(e.source.split()), " ".join(e.want.split()))
+                            for e in doctest.DocTestParser().get_examples(doc)]
+        return out
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+
+
+def _prompts(text: str) -> list[str]:
+    return [" ".join(ln.split()) for ln in text.splitlines() if ln.lstrip().startswith(">>>")]
+
+
+def _examples_kept(ws: Path, doc: str, new: dict) -> bool:
+    """The doctest file keeps every example of the original, inputs and expected outputs alike, and has at least one:
+    `python -m doctest` is green on a file without examples. An original that does not parse (the defect may be a
+    syntax error) keeps at least every `>>>` line."""
+    from collections import Counter
+    try:
+        old = (ws / doc).read_text(encoding="utf-8") if (ws / doc).is_file() else ""
+    except (OSError, UnicodeDecodeError):
+        return False
+    text = new.get(doc, old)
+    before, after = _examples(old), _examples(text)
+    if not after:
+        return False
+    if before is None:
+        return not (Counter(_prompts(old)) - Counter(_prompts(text)))
+    return not (Counter(before) - Counter(after))
+
+
 def _verify(task, ws: Path, new: dict) -> bool | None:
     """True: every check that can be run is green with the new files; False: one is red; None: nothing can be run."""
     tests, doc = _checks(task, ws)
     if not tests and doc is None:
         return None
+    if doc is not None and not _examples_kept(ws, doc, new):
+        return False
     tmp = Path(tempfile.mkdtemp(prefix="rescue_"))
     try:
         cand = tmp / "ws"
