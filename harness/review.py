@@ -20,7 +20,7 @@ from harness.llm import LLMUnavailable
 from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _first_def, _target_file, _test_file,
                                 apply_patch, write_mylib)
 from harness.solvers import coding_solver as cs
-from harness.solvers.probe import behaviour, visible_call
+from harness.solvers.probe import _MAX_REPR, behaviour, visible_call
 from harness.solvers.testrun import run_in_dir
 
 REVIEW_SYSTEM = (
@@ -303,7 +303,10 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | Non
     # where one rewrite raises and the other returns, or they raise different exceptions, they differ on what to do
     # with a degenerate input ([5, 5] for "second largest distinct"): that is not a disagreement about the function
     raises = [(ba[i].startswith("<exc:"), bb[i].startswith("<exc:")) for i in range(len(inputs))]
-    both = [i for i in valid if raises[i][0] == raises[i][1]]
+    # a value cut at the probe's repr limit can hide a difference after the cut: such an input shows neither
+    # agreement nor a difference, it is set aside too
+    both = [i for i in valid if raises[i][0] == raises[i][1]
+            and len(ba[i]) < _MAX_REPR and len(bb[i]) < _MAX_REPR]
     if len(both) < 3 or 2 * len(both) < len(valid) or any(ba[i] != bb[i] and not raises[i][0] for i in both):
         return []
     if not any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):

@@ -301,3 +301,14 @@ def test_past_stop_time_keeps_the_file_without_calls(tmp_path):
     first, second = review._rewrites(SILENT + AVERAGE, _reply(RIGHT)), review._rewrites(SILENT + AVERAGE, _reply(RIGHT2))
     assert review._decide(task.workspace, SILENT + AVERAGE, TESTS, "mylib.py", first, second, None, stop) == \
         (SILENT + AVERAGE, [])
+
+
+def test_values_cut_at_the_repr_limit_are_no_evidence(monkeypatch):
+    src = RIGHT + ROOT
+    n = len(review._battery(None, 1))
+    fa = "def int_sqrt(n):\n    return 0\n"
+    fb = "def int_sqrt(n):\n    return 1\n"
+    long = "'" + "y" * (review._MAX_REPR - 1)
+    seq = iter([["1"] * n, ["1"] * (n - 2) + [long] * 2, ["1"] * (n - 2) + [long] * 2])
+    monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
+    assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb) == []
