@@ -265,6 +265,78 @@ def test_different_names_still_disagree():
     assert not L._same_vote(".", "!", "exact_str")
 
 
+# ---------------------------------------------------------------- fix round 2 (re-review 1 of task 79)
+
+def test_a_reason_constant_left_alone_is_a_guess_not_an_answer(tmp_path):
+    # FAST and ALT crash, REASON prints a constant on a chain: no vote, but a guess beats an empty slot
+    res, models = _agree(_hop(tmp_path), {F: [CRASH, CRASH], A: [CRASH, CRASH], R: ["print(1999)"]})
+    assert models == [F, F, A, A, R]
+    assert res.status == "unparsed" and res.answer is None and res.extra == {"best_guess": "1999"}
+    assert "kept as a guess" in res.note and not (res.extra or {}).get("reasoned")
+
+
+def test_a_reason_constant_never_beats_an_answer(tmp_path):
+    res, _ = _agree(_hop(tmp_path), {F: [CRASH, CRASH], A: [COMP], R: ["print(1975)"]})
+    assert res.status == "solved" and res.answer == "1999"
+
+
+@pytest.mark.parametrize("fast, alt, written", [
+    ("print('Arktika Labs.')", "print('Arktika Labs')", "Arktika Labs"),
+    ("print('Arktika Labs')", "print('Arktika Labs.')", "Arktika Labs"),
+    ("print('O\\u2019Brien Labs')", "print(\"O'Brien Labs\")", "O'Brien Labs"),
+    ("print('Arktika Labs.')", "print('Arktika Labs.')", "Arktika Labs."),   # no clean spelling: FAST's
+])
+def test_agreeing_spellings_write_the_clean_one(tmp_path, fast, alt, written):
+    files = {**BIO, "kb/x.md": "# X\n\nArktika Labs. O'Brien Labs. O’Brien Labs.\n"}
+    res, models = _agree(_task(tmp_path, files=files), {F: [fast], A: [alt]})
+    assert models == [F, A] and res.answer == written
+
+
+def test_agreeing_numbers_write_the_plain_integer():
+    # (on a year question the shape check already refuses 1999.0; other number questions can print it)
+    a, b = SolveResult("solved", answer="1999.0"), SolveResult("solved", answer="1999")
+    assert L._same_vote("1999.0", "1999", "exact_str") and L._cleanest(a, b) is b
+    c, d = SolveResult("solved", answer="12.50"), SolveResult("solved", answer="12.5")
+    assert L._cleanest(c, d) is c   # places may be the ones the task asks for: FAST's stand
+
+
+def test_reason_agreeing_after_normalisation_writes_the_clean_one(tmp_path):
+    files = {**BIO, "kb/x.md": "# X\n\nArktika Labs. Bluefin Systems.\n"}
+    res, _ = _agree(_task(tmp_path, files=files), {F: ["print('Arktika Labs.')"], A: ["print('Bluefin Systems')"],
+                                                   R: ["print('Arktika Labs')"]})
+    assert res.answer == "Arktika Labs" and "fast and reason agree" in res.note
+
+
+@pytest.mark.parametrize("answer, clean", [
+    ("Arktika Labs", True), ("Arktika Labs.", False), ("O’Brien", False), ("O'Brien", True),
+    ("Tartu  College", False), ("'Graz'", False), ("1999", True), ("1999.0", False), ("12.50", True), ("-3", True),
+])
+def test_is_clean(answer, clean):
+    assert L._is_clean(answer) is clean
+
+
+def test_the_guess_goes_to_disk_and_the_final_pass_still_asks(tmp_path, monkeypatch, run_env):
+    tasks = tmp_path / "tasks"
+    _make(tasks, "search_p", "search", BIO, HOP, check="exact_int")
+
+    async def prog(task, client):
+        return SolveResult("unparsed", note="program exit code 1")
+
+    async def agree(task, client, first, may_call, keep=None):
+        return SolveResult("unparsed", note="no answer; reason's constant kept as a guess", extra={"best_guess": "1975"})
+    on_disk, asked = [], []
+
+    async def reason(task, client):
+        on_disk.append(_answers(tasks).get("search_p"))
+        asked.append(task.task_id)
+        return SolveResult("solved", answer="1999", note="model reason program")
+    monkeypatch.setattr(scheduler, "solve_with_program", prog)
+    monkeypatch.setattr(scheduler, "prose_agreement", agree)
+    monkeypatch.setattr(scheduler, "solve_with_reason", reason)
+    scheduler.run(tasks, 100000, run_env)
+    assert on_disk == ["1975"] and asked == ["search_p"] and _answers(tasks) == {"search_p": "1999"}
+
+
 # ---------------------------------------------------------------- the multi-hop literal rule
 
 @pytest.mark.parametrize("q, hop", [

@@ -827,6 +827,27 @@ def _same_vote(a: str, b: str, check: str | None) -> bool:
     return check != "exact_int" and _vote_key(a) == _vote_key(b) != ""
 
 
+def _is_clean(answer: str) -> bool:
+    """The text is its own soft-check form, case aside: no extra spaces, quotes around it, closing punctuation or
+    curly apostrophe; a whole number written as a plain integer ("1999", not "1999.0"). Other numbers count as clean
+    (their places may be the ones the task asks for)."""
+    s = str(answer)
+    try:
+        d = Decimal(s.strip())
+        if d.is_finite():
+            whole = d.to_integral_value()
+            return d != whole or s == format(whole, "f")
+    except (InvalidOperation, ValueError):
+        pass
+    return s == " ".join(s.split()).translate(_APOSTROPHES).strip("\"' ").rstrip(".,;:!").strip()
+
+
+def _cleanest(*results: SolveResult) -> SolveResult:
+    """Of agreeing attempts (in order of preference), the first whose answer is clean (`_is_clean`), else the first:
+    answers equal only after normalisation are written in the form the checker reads as they are."""
+    return next((r for r in results if _is_clean(r.answer)), results[0])
+
+
 def _agreed(res: SolveResult, note: str, reasoned: bool) -> SolveResult:
     extra = {**(res.extra or {}), "reasoned": True} if reasoned else res.extra
     return SolveResult(res.status, answer=res.answer, note=note, extra=extra)
@@ -861,7 +882,7 @@ async def prose_agreement(task: Task, client, first: SolveResult, may_call, keep
     if alt is not None and family(MODEL_FAST) in alt_used:
         alt, alt_say = None, f"{alt!r} (answered by {MODEL_FAST}, no vote)"
     if fast is not None and alt is not None and same(fast, alt):
-        return _agreed(first, f"{head} fast and alt {fast!r}", False)
+        return _agreed(_cleanest(first, alt_res), f"{head} fast and alt {fast!r}", False)
     head = f"{head} fast {fast!r}, alt {alt_say}"
     if fast is None and alt is not None and keep is not None:
         keep(alt_res)
@@ -872,23 +893,29 @@ async def prose_agreement(task: Task, client, first: SolveResult, may_call, keep
     rsn_res, _ = await _prose_attempt(lambda: solve_with_reason(task, client), task)
     rsn = _prose_vote(rsn_res)
     rsn_say = repr(rsn)
+    dropped = None   # REASON's constant for a count or a chain: no vote, only a guess when nothing else answers
     if rsn is not None and (rsn_res.extra or {}).get("literal"):
         question = strip_boilerplate(task.instruction)
         if _asks_aggregate(question) or _asks_multihop(question):
-            rsn, rsn_say = None, f"{rsn!r} (a constant for a count or a chain, no vote)"
+            dropped, rsn, rsn_say = rsn, None, f"{rsn!r} (a constant for a count or a chain, no vote)"
     rnote = (rsn_res.note or "") if rsn_res is not None else ""
     reasoned = rsn_res is not None and not rnote.startswith("llm unavailable") and "cut by the budget" not in rnote
     head = f"{head}, reason {rsn_say}"
     if rsn is not None and fast is not None and same(rsn, fast):
-        return _agreed(first, f"{head}: fast and reason agree", reasoned)
+        return _agreed(_cleanest(first, rsn_res), f"{head}: fast and reason agree", reasoned)
     if rsn is not None and alt is not None and same(rsn, alt):
-        return _agreed(rsn_res, f"{head}: alt and reason agree", reasoned)
+        return _agreed(_cleanest(rsn_res, alt_res), f"{head}: alt and reason agree", reasoned)
     if rsn is not None:
         return _agreed(rsn_res, f"{head}: no majority, reason's answer", reasoned)
     if fast is not None:
         return _agreed(first, f"{head}: no majority, first kept", reasoned)
     if alt is not None:
         return _agreed(alt_res, f"{head}: alt's answer, the only one", reasoned)
+    if dropped is not None:
+        # a wrong answer scores the same as none: REASON's constant goes to disk as a guess (put_guess), the task
+        # stays open, and REASON's reply is no verdict, so the final pass may still ask it
+        return SolveResult("unparsed", note=f"{head}: no answer; reason's constant kept as a guess",
+                           extra={"best_guess": dropped})
     return _agreed(first, f"{head}: no answer", reasoned)
 
 
