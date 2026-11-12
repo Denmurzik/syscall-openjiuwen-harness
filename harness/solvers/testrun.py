@@ -14,6 +14,120 @@ _MARK = "@@HARNESS_RESULT@@"
 # names, so the verdict never depends on (8 KB-truncated) traceback output.
 _RUNNER = r'''
 import json, sys, unittest
+try:
+    import pytest  # the real one, when the image has it
+except Exception:
+    # The image has no pytest: a test file that says `import pytest` (for pytest.raises, approx, parametrize, a
+    # fixture) could not even load, so no repair of the task could ever turn green. A stand-in with the parts that
+    # plain tests use; `_fixtures` lets the loader below fill fixture parameters.
+    import re as _re, types as _types
+    _pt = _types.ModuleType("pytest")
+    _pt._fixtures = {}
+
+    class _Raises:
+        def __init__(self, exc, match=None):
+            self.exc, self.match, self.value, self.type = exc, match, None, None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, tp, val, tb):
+            if tp is None:
+                raise AssertionError("DID NOT RAISE %%r" %% (self.exc,))
+            if not issubclass(tp, self.exc):
+                return False
+            if self.match is not None and not _re.search(self.match, str(val)):
+                raise AssertionError("the exception message does not match %%r" %% (self.match,))
+            self.value, self.type = val, tp
+            return True
+
+    def _raises(exc, *args, match=None, **kw):
+        if args:
+            with _Raises(exc):
+                args[0](*args[1:], **kw)
+            return None
+        return _Raises(exc, match)
+
+    class _Approx:
+        def __init__(self, expected, rel=None, abs=None, nan_ok=False):
+            self.expected, self.rel, self.abs = expected, rel, abs
+
+        def _close(self, a, e):
+            if isinstance(e, (list, tuple)):
+                return isinstance(a, (list, tuple)) and len(a) == len(e) and all(self._close(x, y) for x, y in zip(a, e))
+            if isinstance(e, dict):
+                return isinstance(a, dict) and a.keys() == e.keys() and all(self._close(a[k], e[k]) for k in e)
+            try:
+                tol = max((1e-6 if self.rel is None else self.rel) * abs(e), 1e-12 if self.abs is None else self.abs)
+                return abs(a - e) <= tol
+            except TypeError:
+                return a == e
+
+        def __eq__(self, other):
+            return self._close(other, self.expected)
+
+        def __ne__(self, other):
+            return not self == other
+
+        def __repr__(self):
+            return "approx(%%r)" %% (self.expected,)
+
+    class _Param:
+        def __init__(self, *values, **kw):
+            self.values = values
+
+    def _parametrize(names, values, **_kw):
+        names = [n.strip() for n in names.split(",")] if isinstance(names, str) else list(names)
+
+        def deco(f):
+            def run(*a, **k):
+                for v in values:
+                    case = v.values if isinstance(v, _Param) else (v if len(names) > 1 else (v,))
+                    f(*a, **dict(zip(names, case)), **k)
+            run.__name__, run.__module__, run.__qualname__ = f.__name__, f.__module__, f.__qualname__
+            run._params = set(names) | getattr(f, "_params", set())
+            return run
+        return deco
+
+    def _skipping(*a, **k):
+        def skipped(*_a, **_k):
+            raise unittest.SkipTest("skipped")
+
+        def deco(f):
+            skipped.__name__, skipped.__module__ = f.__name__, f.__module__
+            return skipped
+        return deco(a[0]) if len(a) == 1 and callable(a[0]) and not k else deco
+
+    def _skipif(cond=False, *a, **k):
+        return _skipping if cond else (lambda f: f)
+
+    def _plain(*a, **k):
+        return a[0] if len(a) == 1 and callable(a[0]) and not k else (lambda f: f)
+
+    class _Mark:
+        parametrize = staticmethod(_parametrize)
+        skip = staticmethod(_skipping)
+        xfail = staticmethod(_skipping)
+        skipif = staticmethod(_skipif)
+
+        def __getattr__(self, name):
+            return _plain
+
+    def _fixture(*a, **k):
+        def deco(f):
+            _pt._fixtures[k.get("name") or f.__name__] = f
+            return f
+        return deco(a[0]) if len(a) == 1 and callable(a[0]) and not k else deco
+
+    def _fail(reason=""):
+        raise AssertionError(reason)
+
+    def _skip(reason=""):
+        raise unittest.SkipTest(reason)
+
+    _pt.raises, _pt.approx, _pt.param, _pt.mark, _pt.fixture = _raises, _Approx, _Param, _Mark(), _fixture
+    _pt.fail, _pt.skip = _fail, _skip
+    sys.modules["pytest"] = _pt
 suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[1:])
 script_ok = None
 if suite.countTestCases() == 0 and len(sys.argv) == 2 and "." not in sys.argv[1]:
@@ -24,6 +138,28 @@ if suite.countTestCases() == 0 and len(sys.argv) == 2 and "." not in sys.argv[1]
     def _free(f, skip=0):
         return not any(p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
                        for p in list(inspect.signature(f).parameters.values())[skip:])
+
+    def _filled(f, skip=0):
+        # the test with its fixture parameters filled from the stand-in's registry; None when it cannot be called
+        if _free(f, skip):
+            return f
+        reg = getattr(sys.modules.get("pytest"), "_fixtures", None)
+        need = [p.name for p in list(inspect.signature(f).parameters.values())[skip:]
+                if p.default is p.empty and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        if not reg or any(n not in reg for n in need):
+            return None
+
+        def value(name, depth=0):
+            g = _filled(reg[name]) if depth < 5 else None
+            if g is None:
+                raise RuntimeError("fixture %%r cannot be built" %% (name,))
+            v = g()
+            return next(v) if inspect.isgenerator(v) else v
+
+        def run(*a):
+            return f(*a, **{n: value(n) for n in need})
+        run.__name__, run.__module__ = f.__name__, f.__module__
+        return run
 
     def _sync(f):
         # an async or generator test returns without running its body when called: it can never pass here
@@ -36,7 +172,7 @@ if suite.countTestCases() == 0 and len(sys.argv) == 2 and "." not in sys.argv[1]
             if callable(hook):
                 hook(getattr(o, m))
             try:
-                getattr(o, m)()
+                _filled(getattr(c, m), 1)(o)
             finally:
                 hook = getattr(o, "teardown_method", None)
                 if callable(hook):
@@ -63,9 +199,9 @@ if suite.countTestCases() == 0 and len(sys.argv) == 2 and "." not in sys.argv[1]
                and c.__module__ == mod.__name__ and not issubclass(c, unittest.TestCase)
                and getattr(c, "__test__", True) is not False]
     methods = [(c, m) for c in classes for m in dir(c) if m.startswith("test") and inspect.isfunction(getattr(c, m))]
-    if (fns or methods) and all(_free(f) and _sync(f) for f in fns) and all(
-            _free(getattr(c, m), 1) and _sync(getattr(c, m)) for c, m in methods):
-        suite = unittest.TestSuite([unittest.FunctionTestCase(f) for f in fns]
+    if (fns or methods) and all(_filled(f) is not None and _sync(f) for f in fns) and all(
+            _filled(getattr(c, m), 1) is not None and _sync(getattr(c, m)) for c, m in methods):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(_filled(f)) for f in fns]
                                    + [_method_case(c, m) for c, m in methods])
     elif not fns and not methods and not _acts(mod.__file__):
         pass   # nothing in the file tests anything: no test ran, red
