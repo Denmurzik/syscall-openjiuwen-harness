@@ -305,18 +305,23 @@ _DATES = [(2024, 2, 29), (2023, 2, 28), (2024, 12, 31), (2023, 12, 1), (2024, 1,
           (2024, 5, 11), (2024, 5, 12), (2024, 5, 13), (2024, 3, 31), (2024, 11, 30), (2025, 6, 15), (2000, 2, 29),
           (1999, 12, 31)]
 _TIMES = [(12, 0), (23, 59), (0, 0), (6, 15), (18, 45)]
-# Reads {"src", "func", "head", "inputs"}: `head` is the test file's own imports of decimal, datetime and fractions,
-# each input the source of one argument tuple, evaluated with those names. Output as probe._CHILD's.
+# Reads {"src", "func", "head", "inputs", "alarm"}: `head` is the test file's own imports of decimal, datetime and
+# fractions, each input the source of one argument tuple, evaluated with those names; `alarm`: seconds per input
+# (1.0). Output as probe._CHILD's, except that the alarm is the review's own: a BaseException that the function's
+# `except Exception` does not swallow, shown as "<exc:ProbeAlarm>" (a `raise TimeoutError` of the function stays
+# "<exc:TimeoutError>")
 _EXPR_CHILD = r"""
 import copy, io, json, sys
 req = json.loads(sys.stdin.read())
 real = sys.stdout
 def emit(s):
     real.write("@@PROBE@@" + json.dumps(s) + "\n"); real.flush()
+class _ProbeAlarm(BaseException):
+    pass
 try:
     import signal
     def _alarm(*a):
-        raise TimeoutError()
+        raise _ProbeAlarm()
     signal.signal(signal.SIGALRM, _alarm)
     have_alarm = True
 except Exception:
@@ -335,8 +340,10 @@ for text in req["inputs"]:
     try:
         args = eval(text, env)
         if have_alarm:
-            signal.setitimer(signal.ITIMER_REAL, 1.0)
+            signal.setitimer(signal.ITIMER_REAL, float(req.get("alarm", 1.0)))
         out = repr(fn(*copy.deepcopy(args)))[:LIMIT]
+    except _ProbeAlarm:
+        out = "<exc:ProbeAlarm>"
     except BaseException as e:
         out = "<exc:%s>" % type(e).__name__
     finally:
@@ -347,11 +354,12 @@ for text in req["inputs"]:
 """.replace("LIMIT", str(_MAX_REPR))
 
 
-def _expr_behaviour(src: str, func: str, head: str, inputs: list[str], timeout: float) -> list[str]:
-    """`probe.behaviour` for inputs given as source text (`_visible_exprs`)."""
+def _expr_behaviour(src: str, func: str, head: str, inputs: list[str], timeout: float,
+                    alarm: float = 1.0) -> list[str]:
+    """`probe.behaviour` for inputs given as source text (`_visible_exprs`), `alarm` seconds per input."""
     if not inputs:
         return []
-    req = json.dumps({"src": src, "func": func, "head": head, "inputs": list(inputs)})
+    req = json.dumps({"src": src, "func": func, "head": head, "inputs": list(inputs), "alarm": alarm})
     with tempfile.TemporaryDirectory(prefix="probe_") as d:
         res = run_python(["-c", _EXPR_CHILD], cwd=Path(d), timeout=timeout, stdin=req, env={"PYTHONHASHSEED": "0"})
     out: list[str] = []
@@ -992,9 +1000,10 @@ def _judge(src: str, tests: str, name: str, a: str, b: str, trial: "_Trial", our
         return [], len(valid) >= 3 and any(raises[i][0] != raises[i][1] for i in valid)
     if any(ba[i] != bb[i] and not raises[i][0] for i in both):
         return [], True
-    # HARNESS_REVIEW_PROBES: an input on which the file's function ran into the probe's one-second alarm (not the fill
-    # after the whole run was stopped) while both rewrites return the same value shows it wrong as well
-    hung = [i for i, o in enumerate(ours) if o == "<exc:TimeoutError>" and _exc(ba[i]) is None and ba[i] == bb[i]
+    # HARNESS_REVIEW_PROBES: an input on which the file's function ran into the review's own alarm (not a TimeoutError
+    # it raises itself, which is a raise like any other: round 18, a change only where ours raises is no evidence)
+    # while both rewrites return the same value shows it wrong as well
+    hung = [i for i, o in enumerate(ours) if o == "<exc:ProbeAlarm>" and _exc(ba[i]) is None and ba[i] == bb[i]
             and not trial.cut(ba[i])] if config.review_probes() and not trial.method else []
     # HARNESS_REVIEW_PROBES: where the file's function raises a value-domain exception its own text does not name and
     # both rewrites raise another one that the text does name ("Raises ValueError when the second number is zero",
