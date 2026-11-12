@@ -109,6 +109,16 @@ def audit_forms() -> bool:
     return _env_bool("HARNESS_AUDIT_FORMS", AUDIT_FORMS)
 
 
+# default of HARNESS_REVIEW_CODING (expert 9, idea a): two models review every answered coding file for bugs the
+# visible tests do not catch (`harness.review`); no call for a file of known texts only
+REVIEW_CODING = True
+
+
+def review_coding() -> bool:
+    """The end-of-run review of answered coding files. Read at call time: HARNESS_REVIEW_CODING=1/0."""
+    return _env_bool("HARNESS_REVIEW_CODING", REVIEW_CODING)
+
+
 def verify_coding() -> bool:
     """A model checks green single coding fixes on its own. Read at call time: HARNESS_VERIFY_CODING=1/0."""
     return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)

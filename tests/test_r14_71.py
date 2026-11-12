@@ -14,6 +14,12 @@ from harness.result import SolveResult
 from harness.tasks import Task
 from harness.trajectory import record_call
 
+
+@pytest.fixture(autouse=True)
+def _no_review(monkeypatch):
+    """These tests pin the audit's own calls; the review stage of expert 9 (`harness.review`) has its own tests."""
+    monkeypatch.setenv("HARNESS_REVIEW_CODING", "0")
+
 _REAL_PHASE2 = scheduler._phase2
 
 GOOD = "def minimum(xs):\n    best = xs[0]\n    for x in xs:\n        if x < best:\n            best = x\n    return best\n"

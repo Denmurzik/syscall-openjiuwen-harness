@@ -427,10 +427,12 @@ def run(tasks_dir: Path, budget: float, client, deadline_s: float | None = None,
         # the audit of rival green forms (HARNESS_AUDIT_FORMS) runs at the very end of phase 2, even when phase 1
         # left nothing open. Off, or too few coding tasks: phase 2 is called exactly as in round 13
         audit_tasks = _audit_tasks(tasks) if client is not None else []
-        if client is not None and (left or audit_tasks):
+        review_tasks = _review_tasks(tasks) if client is not None else []
+        if client is not None and (left or audit_tasks or review_tasks):
             _phase2(left, client, ledger, t0, deadline_s, settle, status, traj, tentative,
                     [t.reward for t in tasks], soft_infeasible=soft_infeasible,
-                    **({"audit_tasks": audit_tasks} if audit_tasks else {}))
+                    **({"audit_tasks": audit_tasks} if audit_tasks else {}),
+                    **({"review_tasks": review_tasks} if review_tasks else {}))
         _write_guesses(by_id, guesses, tentative, status, written, proven_infeasible)
     except Exception:
         log.exception("scheduler failed")
@@ -478,7 +480,7 @@ def _phase2(*args, **kw) -> None:
 
 
 async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, traj,
-                        tentative=None, rewards=None, soft_infeasible=(), audit_tasks=()) -> None:
+                        tentative=None, rewards=None, soft_infeasible=(), audit_tasks=(), review_tasks=()) -> None:
     tentative = tentative if tentative is not None else {}
     try:
         os.chdir(_log_dir())  # openjiuwen writes ./logs relative to cwd
@@ -487,6 +489,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
     state = {"stop": False, "traj": traj}
     if not left:   # phase 1 settled everything: only the audit of rival green forms may have work
         await _audit_stage(audit_tasks, client, ledger, t0, deadline_s, status, traj, state)
+        await _review_stage(review_tasks, client, ledger, t0, deadline_s, status, traj, state)
         return
     _load_phase2()
     from harness.templates import group
@@ -732,6 +735,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
 
     # last of all: every answer of the run is on disk, the audit only rewrites mylib.py of answered coding tasks
     await _audit_stage(audit_tasks, client, ledger, t0, deadline_s, status, traj, state)
+    await _review_stage(review_tasks, client, ledger, t0, deadline_s, status, traj, state)
 
 
 AUDIT_MIN_TASKS = 3        # fewer coding tasks cannot show one function in rival forms worth a question
@@ -808,6 +812,60 @@ async def _audit_stage(tasks, client, ledger, t0, deadline_s, status, traj, stat
         await _drive(units[:AUDIT_MAX_FUNCS], t0, deadline_s, ledger, state)
     except Exception:
         log.exception("audit stage failed; the files stay as they are")
+
+
+REVIEW_SPEND_LIMIT = 0.5   # no review unit once this share of the budget is spent
+REVIEW_MIN_LEFT_S = 60     # the stage starts only with this much time left before new units stop
+
+
+def _review_tasks(tasks: list) -> list:
+    """The coding tasks the review stage looks at; [] when HARNESS_REVIEW_CODING is off."""
+    if not config.review_coding():
+        return []
+    return [t for t in tasks if t.task_type == "coding" and t.workspace is not None]
+
+
+async def _review_stage(tasks, client, ledger, t0, deadline_s, status, traj, state) -> None:
+    """HARNESS_REVIEW_CODING: every answered coding file that holds a function outside the known texts is read by
+    MODEL_FAST for bugs the visible tests do not catch; MODEL_ALT is asked only when FAST rewrote something, and a
+    function is replaced only on their agreement with the visible tests green (`harness.review`). After everything
+    else: the answers are on disk and a stop here loses nothing. Never fails the run."""
+    if not tasks or state["stop"] or ledger.exhausted or ledger.spent >= REVIEW_SPEND_LIMIT * ledger.budget:
+        return
+    try:
+        from harness import review
+        from harness.llm_routes import _target_file, _test_file
+
+        if deadline_s - config.stop_new_before_deadline_s() - (time.monotonic() - t0) < REVIEW_MIN_LEFT_S:
+            return
+        _load_phase2()
+        units = []
+        for task in tasks:
+            if status.get(task.task_id) != "solved" or not (task.dir / "answer.txt").exists():
+                continue
+            try:
+                ws = Path(task.workspace)
+                tests = (ws / _test_file(ws)).read_text(encoding="utf-8")
+                src = (ws / _target_file(ws, tests)).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if not review.needs_review(src):
+                continue
+
+            def unit(task=task, est=review.estimate(src, tests)):
+                async def go():
+                    if ledger.exhausted or ledger.spent >= REVIEW_SPEND_LIMIT * ledger.budget:
+                        return
+                    start = time.monotonic()
+                    changed, note = await review.review(task, client)
+                    traj.record({"phase": 2, "task_id": f"review:{task.task_id}", "status": "unit", **_take_calls(),
+                                 "elapsed": round(time.monotonic() - start, 3), "note": note[:300]})
+                return {"prio": task.reward / est, "estimate": est, "run": go, "name": f"review:{task.task_id}"}
+            units.append(unit())
+        units.sort(key=lambda u: -u["prio"])
+        await _drive(units, t0, deadline_s, ledger, state)
+    except Exception:
+        log.exception("review stage failed; the files stay as they are")
 
 
 def _reserve_2d(units: list) -> float:

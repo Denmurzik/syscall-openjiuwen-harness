@@ -1,0 +1,252 @@
+"""Review of answered coding tasks for bugs the visible tests do not catch (expert 9, idea a).
+
+The jury's hidden tests check inputs the visible tests do not. Phase 1 and the ladder stop at the first green run, so a
+bug that no visible assert reaches stays in the file. Here MODEL_FAST reads the green file once and rewrites the
+functions it finds wrong; a silent reply ("NONE") ends the review. A function is replaced only when MODEL_ALT, asked
+the same on its own, rewrote that function too, the two rewrites behave alike on trial inputs wherever the file's
+function returns a value, on one of them they differ from it, and the visible tests stay green (`_evidence`). A known
+text (the examples' functions, texts mined from the set) and a method are never replaced. Any doubt keeps the file."""
+import ast
+import asyncio
+import shutil
+import textwrap
+from pathlib import Path
+
+from harness.config import MODEL_ALT, MODEL_FAST
+from harness.llm import LLMUnavailable
+from harness.llm_routes import _cap, _run_candidate, _target_file, _test_file, apply_patch, write_mylib
+from harness.solvers import coding_solver as cs
+from harness.solvers.probe import behaviour, visible_call
+
+REVIEW_SYSTEM = (
+    "You review a Python file whose visible tests all pass. The tests are only examples: hidden tests call the same "
+    "functions with other inputs (edge cases, empty and repeated values, larger numbers, other branches). "
+    "For each function decide whether it does what its name, docstring and comments say for every valid input. "
+    "Return the corrected text of each function that is wrong, no explanations, in this format, one block per "
+    "function:\nFUNC <name>\n<complete new text of the function>\n"
+    "For a method use FUNC <Class.method>. Keep the signature and the docstring. Do not touch a function that is "
+    "right: no restyling, no renaming, no checks or behaviour the docstring does not ask for. "
+    "If every function is right, reply with the single word NONE.")
+REVIEW_MAX_TOKENS = 700
+MAX_FILE_CHARS = 9000   # a larger file is not reviewed: the reply could not hold its functions
+
+
+def _texts(src: str) -> dict:
+    return {u.qualname: textwrap.dedent(cs._segment(src, u)).strip("\n") for u in cs._units(src)}
+
+
+def needs_review(src: str) -> bool:
+    """False for a file whose every function is a known text (the examples' six, the texts mined from the set):
+    their silent slips are phase 1's work, at no cost."""
+    try:
+        units = cs._units(src)
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    if not units or len(src) > MAX_FILE_CHARS:
+        return False
+    for u in units:
+        known = cs._CANON_TEXT.get(u.qualname)
+        if known is None or cs._norm(known) != cs._norm(cs._segment(src, u)):
+            return True
+    return False
+
+
+def estimate(src: str, tests: str) -> int:
+    return (len(src) + len(tests) + len(REVIEW_SYSTEM)) // 30 + 150
+
+
+def _messages(src: str, tests: str, target: str, test_name: str) -> list[dict]:
+    user = f"{target}:\n{_cap(src)}\n\n{test_name} (all pass):\n{_cap(tests)}"
+    return [{"role": "system", "content": REVIEW_SYSTEM}, {"role": "user", "content": user}]
+
+
+def _rewrites(src: str, reply: str) -> dict:
+    """qualname -> new text, for the functions of `reply` that differ from the file's (as code, not as spelling)."""
+    if reply is None or reply.strip().strip(".`'\"").upper() == "NONE":
+        return {}
+    patched = apply_patch(src, reply)
+    if patched is None:
+        return {}
+    old, new = _texts(src), _texts(patched)
+    return {n: t for n, t in new.items() if n in old and cs._norm(old[n]) != cs._norm(t)}
+
+
+def _spliced(src: str, name: str, text: str) -> str | None:
+    for u in cs._units(src):
+        if u.qualname == name:
+            out = cs._splice(src, u, text)
+            try:
+                ast.parse(out)
+            except (SyntaxError, ValueError):
+                return None
+            return out
+    return None
+
+
+_INTS = [0, 1, 2, 3, 4, 5, 7, 9, 10, 12, 15, 25, 30, 45, 100, 400, 1900, 2000, 2023, 2024, -1, -7]
+_STRS = ["", "a", "abc", "Hello World", "a b a", "The the THE cat", "aab", "  two  spaces ", "xyz XYZ", "racecar",
+         "a=1; b = 2", "aaabcc", "listen", "Silent"]
+_INT_LISTS = [[], [1], [1, 2, 3], [3, 1, 2], [2, 2, 1], [5, 5, 3], [1, 2, 3, 4, 5], [-2, -5, -1], [3, 3, 1, 1], [0, 0],
+              [4, 1, 3, 2], [7, 7, 7, 6, 1], [10, -10, 10]]
+_STR_LISTS = [[], ["a"], ["b", "a", "b"], ["x", "Y", "x"], ["bb", "a", "ccc"]]
+_NESTED = [[], [[1, 2], [2, 3]], [[1, 5], [2, 3]], [[5, 8], [1, 3]], [1, [2, [3, [4]]]], [[1], [2, 3], []], [[3, 4], [1, 2]]]
+BATTERY_CAP = 400
+
+
+def _pool(v) -> list:
+    """Values of the shape of one visible argument."""
+    if isinstance(v, bool):
+        return [True, False]
+    if isinstance(v, int):
+        return _INTS + [v + 1, v - 1, v * 2, v + 7]
+    if isinstance(v, float):
+        return [0.0, 0.5, 1.0, 2.5, 10.0, -1.5, 100.0, v * 2]
+    if isinstance(v, str):
+        return _STRS + [v.upper(), v.title(), v[::-1], v + " " + v, v[:1]]
+    if isinstance(v, list):
+        own = [v[::-1], v + v[:1], v[:1], v + v]
+        if any(isinstance(x, (list, tuple)) for x in v):
+            return _NESTED + own
+        if v and all(isinstance(x, str) for x in v):
+            return _STR_LISTS + own
+        return _INT_LISTS + own
+    return [v]
+
+
+def _battery(args: tuple | None, arity: int) -> list[tuple]:
+    """Trial inputs: with a visible call, values of the same shapes (one argument varied at a time, then pairs of
+    positions together); without one, common shapes for the number of parameters."""
+    out: list[tuple] = []
+    if args is not None:
+        pools = [_pool(a) for a in args]
+        out.append(tuple(args))
+        for i, pool in enumerate(pools):
+            out += [tuple(args[:i]) + (x,) + tuple(args[i + 1:]) for x in pool]
+        for i in range(len(args)):
+            for j in range(i + 1, len(args)):
+                for x in pools[i][:22:2]:
+                    for y in pools[j][:22]:
+                        t = list(args)
+                        t[i], t[j] = x, y
+                        out.append(tuple(t))
+    elif arity == 1:
+        out = [(x,) for x in _INTS + _STRS + _INT_LISTS + _STR_LISTS + _NESTED]
+    elif arity == 2:
+        for xs, ys in ((_INTS, _INTS), (_INT_LISTS, _INTS[:10]), (_STRS, _INTS[:10]), (_STRS, _STRS),
+                       (_INT_LISTS, _INT_LISTS)):
+            out += [(x, y) for x in xs[:12] for y in ys[:12]]
+    elif 3 <= arity <= 4:
+        small = [0, 1, 2, 5, 10]
+        out = [tuple(small[(i >> (2 * k)) % 5] for k in range(arity)) for i in range(0, 5 ** arity, 3)]
+    seen, uniq = set(), []
+    for t in out:
+        key = repr(t)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(t)
+    return uniq[:BATTERY_CAP]
+
+
+def _arity(src: str, name: str) -> int:
+    """Positional parameters without defaults of a top-level function; -1 when it takes *args or keyword-only ones."""
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            a = node.args
+            if a.vararg or a.kwarg or a.kwonlyargs:
+                return -1
+            return len(a.posonlyargs) + len(a.args) - len(a.defaults)
+    return -1
+
+
+_GARBAGE = ("<exc:TypeError>", "<exc:AttributeError>", "<exc:Timeout>", "<exc:Crash>", "<exc:RecursionError>")
+
+
+def _evidence(src: str, tests: str, name: str, a: str, b: str) -> bool:
+    """The two rewrites of one function are one opinion and the file's function is shown wrong. Trial inputs: the
+    visible call and values of its shapes (or common shapes for a function the tests do not call). On every input
+    where the file's function returns a value the two rewrites must return the same value or both raise
+    (inputs where only one of them raises are set aside, at most half), and on at least one input their common
+    outcome must differ from what the file's function returns (a value, or an exception that is not a sign of a wrong
+    argument type). So a rewrite that only changes what happens where the function raises today (a guard for empty
+    input, another exception type) is no evidence. A method cannot be probed: kept."""
+    if "." in name:
+        return False
+    call = visible_call(tests, name)
+    try:
+        inputs = _battery(call[0] if call else None, _arity(src, name))
+    except (SyntaxError, ValueError, RecursionError, TypeError):
+        return False
+    fa, fb = _spliced(src, name, a), _spliced(src, name, b)
+    if fa is None or fb is None or len(inputs) < 3:
+        return False
+    ours, ba, bb = (behaviour(f, name, inputs, timeout=10) for f in (src, fa, fb))
+    valid = [i for i, o in enumerate(ours) if not o.startswith("<exc:")]
+    # where one rewrite raises and the other returns, or they raise different exceptions, they differ on what to do
+    # with a degenerate input ([5, 5] for "second largest distinct"): that is not a disagreement about the function
+    raises = [(ba[i].startswith("<exc:"), bb[i].startswith("<exc:")) for i in range(len(inputs))]
+    both = [i for i in valid if raises[i][0] == raises[i][1]]
+    if len(both) < 3 or 2 * len(both) < len(valid) or any(ba[i] != bb[i] and not raises[i][0] for i in both):
+        return False
+    return any(ba[i] == bb[i] != ours[i] and ba[i] not in _GARBAGE for i in both)
+
+
+def _known(src: str, name: str) -> bool:
+    """The file holds the known text of this function (an example's, or one mined from the set): never replaced."""
+    known = cs._CANON_TEXT.get(name)
+    return known is not None and cs._norm(known) == cs._norm(_texts(src).get(name, ""))
+
+
+def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: dict) -> tuple[str, list[str]]:
+    """The file with every agreed rewrite that keeps the visible tests green, and their names."""
+    cur, changed = src, []
+    targs = () if target == "mylib.py" else (target,)
+    for name in sorted(set(first) & set(second)):
+        if _known(src, name) or not _evidence(src, tests, name, first[name], second[name]):
+            continue
+        for text in (first[name], second[name]):
+            cand = _spliced(cur, name, text)
+            if cand is not None and _run_candidate(ws, cand, *targs).ok:
+                cur = cand
+                changed.append(name)
+                break
+    return cur, changed
+
+
+async def review(task, client) -> tuple[list[str], str]:
+    """Names of the functions replaced in the task's file, and a note for the trajectory."""
+    ws = Path(task.workspace)
+    try:
+        test_name = _test_file(ws)
+        tests = (ws / test_name).read_text(encoding="utf-8")
+        target = _target_file(ws, tests)
+        path = ws / target
+        src = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return [], f"review skipped: {e!r}"[:200]
+    targs = () if target == "mylib.py" else (target,)
+    if not (await asyncio.to_thread(_run_candidate, ws, src, *targs)).ok:
+        return [], "review skipped: the tests are not green"
+    msgs = _messages(src, tests, target, test_name)
+    try:
+        r = await client.chat(MODEL_FAST, msgs, REVIEW_MAX_TOKENS)
+        if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= REVIEW_MAX_TOKENS:
+            return [], "review: reply hit the output limit, kept"
+        first = _rewrites(src, r.text)
+        if not first:
+            return [], "review: nothing found"
+        r = await client.chat(MODEL_ALT, msgs, REVIEW_MAX_TOKENS)
+        if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= REVIEW_MAX_TOKENS:
+            return [], "review: second reply hit the output limit, kept"
+        second = _rewrites(src, r.text)
+    except LLMUnavailable as e:
+        return [], f"review: llm unavailable: {e}"[:200]
+    if not set(first) & set(second):
+        return [], f"review: no agreement ({sorted(first)} / {sorted(second)}), kept"[:200]
+    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second)
+    if not changed or new == src:
+        return [], f"review: no evidence against {sorted(set(first) & set(second))}, kept"[:200]
+    if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it
+        return [], "review: the file changed meanwhile, kept"
+    write_mylib(path, new)
+    shutil.rmtree(ws / "__pycache__", ignore_errors=True)
+    return changed, f"review: replaced {changed} ({sorted(first)} / {sorted(second)})"[:200]
