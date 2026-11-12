@@ -841,6 +841,8 @@ async def _review_stage(tasks, client, ledger, t0, deadline_s, status, traj, sta
         if deadline_s - config.stop_new_before_deadline_s() - (time.monotonic() - t0) < REVIEW_MIN_LEFT_S:
             return
         known = review.known_texts(mined)
+        # no probe or test run of the review after this: `_drive` cancels the unit, not its worker thread
+        stop = t0 + deadline_s - max(config.stop_new_before_deadline_s(), 10.0)
         units = []
         for task in tasks:
             if status.get(task.task_id) != "solved" or not (task.dir / "answer.txt").exists():
@@ -859,7 +861,7 @@ async def _review_stage(tasks, client, ledger, t0, deadline_s, status, traj, sta
                     if ledger.exhausted or ledger.spent >= REVIEW_SPEND_LIMIT * ledger.budget:
                         return
                     start = time.monotonic()
-                    changed, note = await review.review(task, client, known)
+                    changed, note = await review.review(task, client, known, stop)
                     traj.record({"phase": 2, "task_id": f"review:{task.task_id}", "status": "unit", **_take_calls(),
                                  "elapsed": round(time.monotonic() - start, 3), "note": note[:300]})
                 return {"prio": task.reward / est, "estimate": est, "run": go, "name": f"review:{task.task_id}"}

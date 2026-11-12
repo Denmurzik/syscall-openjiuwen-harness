@@ -282,3 +282,22 @@ def test_mined_text_is_never_replaced(tmp_path):
 def test_mined_text_never_overrides_an_example_text():
     known = review.known_texts({"texts": {"average": "def average(xs):\n    return 0\n"}})
     assert known["average"] == review.cs._CANON_TEXT["average"]
+
+
+# M2: every visible test file must stay green; M1: no probe or run after the stop time
+def test_rewrite_red_on_a_second_test_file_keeps_the_file(tmp_path):
+    task = _task(tmp_path)
+    (task.workspace / "test_extra.py").write_text(
+        "import unittest\nimport mylib as m\n\n\nclass E(unittest.TestCase):\n"
+        "    def test_2000(self):\n        self.assertFalse(m.is_leap_year(2000))\n", encoding="utf-8")
+    assert _go(task, Fake(_reply(RIGHT), _reply(RIGHT2)))[0] == [] and _lib(task) == SILENT + AVERAGE
+
+
+def test_past_stop_time_keeps_the_file_without_calls(tmp_path):
+    task = _task(tmp_path)
+    c = Fake(_reply(RIGHT), _reply(RIGHT2))
+    stop = __import__("time").monotonic() - 1
+    assert asyncio.run(review.review(task, c, None, stop))[0] == [] and c.calls == [] and _lib(task) == SILENT + AVERAGE
+    first, second = review._rewrites(SILENT + AVERAGE, _reply(RIGHT)), review._rewrites(SILENT + AVERAGE, _reply(RIGHT2))
+    assert review._decide(task.workspace, SILENT + AVERAGE, TESTS, "mylib.py", first, second, None, stop) == \
+        (SILENT + AVERAGE, [])

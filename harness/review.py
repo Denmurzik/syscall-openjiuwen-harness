@@ -10,15 +10,18 @@ import ast
 import asyncio
 import re
 import shutil
+import tempfile
 import textwrap
+import time
 from pathlib import Path
 
 from harness.config import MODEL_ALT, MODEL_FAST
 from harness.llm import LLMUnavailable
-from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _first_def, _run_candidate, _target_file, _test_file,
+from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _first_def, _target_file, _test_file,
                                 apply_patch, write_mylib)
 from harness.solvers import coding_solver as cs
 from harness.solvers.probe import behaviour, visible_call
+from harness.solvers.testrun import run_in_dir
 
 REVIEW_SYSTEM = (
     "You review a Python file whose visible tests all pass. The tests are only examples: hidden tests call the same "
@@ -31,6 +34,35 @@ REVIEW_SYSTEM = (
     "If every function is right, reply with the single word NONE.")
 REVIEW_MAX_TOKENS = 700
 MAX_FILE_CHARS = 9000   # a larger file is not reviewed: the reply could not hold its functions
+RUN_TIMEOUT = 20        # one run of one visible test file
+PROBE_TIMEOUT = 10      # the trial inputs of one version of the function
+
+
+def _left(stop: float | None, cap: float) -> float:
+    """Seconds a step may take: `cap`, cut to what is left before the monotonic time `stop`."""
+    return cap if stop is None else min(cap, stop - time.monotonic())
+
+
+def _test_files(ws: Path) -> list[str]:
+    """Every visible test file of the workspace (as the audit runs them), else phase 1's one."""
+    names = sorted({p.name for p in ws.glob("test_*.py")} | {p.name for p in ws.glob("*_test.py")})
+    return names or [_test_file(ws)]
+
+
+def _green(ws: Path, text: str, target: str, stop: float | None = None) -> bool:
+    """Every visible test file passes with `text` as the target file, run in a throw-away copy; out of time is
+    not green."""
+    tmp = Path(tempfile.mkdtemp(prefix="review_"))
+    try:
+        shutil.copytree(ws, tmp / "ws", ignore=shutil.ignore_patterns("__pycache__"))
+        (tmp / "ws" / target).write_text(text, encoding="utf-8", newline="\n")
+        for f in _test_files(ws):
+            limit = _left(stop, RUN_TIMEOUT)
+            if limit <= 1 or not run_in_dir(tmp / "ws", f, limit).ok:
+                return False
+        return True
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _texts(src: str) -> dict:
@@ -238,7 +270,7 @@ def _broken(ours: list, theirs: list) -> bool:
     return False
 
 
-def _evidence(src: str, tests: str, name: str, a: str, b: str) -> list[str]:
+def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | None = None) -> list[str]:
     """The rewrites of one function that may be stored, best first; [] keeps the file. The two rewrites are one
     opinion and the file's function is shown wrong. Trial inputs: the visible call and values of its shapes (or
     common shapes for a function the tests do not call). A rewrite that shows itself broken (`_broken`) ends it. On
@@ -247,7 +279,7 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str) -> list[str]:
     outcome must differ from what the file's function returns. So a rewrite that only changes what happens where the
     function raises today (a guard for empty input, another exception type) is no evidence. Only a rewrite that
     raises on no input where the file's function returns a value is stored: one that drops a guard of ours would
-    turn a hidden test of that input red. A method cannot be probed: kept."""
+    turn a hidden test of that input red. A method cannot be probed: kept. Out of time before `stop`: kept."""
     if "." in name:
         return []
     call = visible_call(tests, name)
@@ -258,7 +290,13 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str) -> list[str]:
     fa, fb = _spliced(src, name, a), _spliced(src, name, b)
     if fa is None or fb is None or len(inputs) < 3:
         return []
-    ours, ba, bb = (behaviour(f, name, inputs, timeout=10) for f in (src, fa, fb))
+    outs = []
+    for f in (src, fa, fb):
+        limit = _left(stop, PROBE_TIMEOUT)
+        if limit < PROBE_TIMEOUT / 2:
+            return []
+        outs.append(behaviour(f, name, inputs, timeout=limit))
+    ours, ba, bb = outs
     if _broken(ours, ba) or _broken(ours, bb):
         return []
     valid = [i for i, o in enumerate(ours) if not o.startswith("<exc:")]
@@ -280,25 +318,27 @@ def _known(src: str, name: str, known: dict | None = None) -> bool:
 
 
 def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: dict,
-            known: dict | None = None) -> tuple[str, list[str]]:
-    """The file with every agreed rewrite that keeps the visible tests green, and their names."""
+            known: dict | None = None, stop: float | None = None) -> tuple[str, list[str]]:
+    """The file with every agreed rewrite that keeps the visible tests green, and their names. No step starts after
+    the monotonic time `stop`."""
     cur, changed = src, []
-    targs = () if target == "mylib.py" else (target,)
     for name in sorted(set(first) & set(second)):
+        if stop is not None and time.monotonic() > stop:
+            break
         if _known(src, name, known):
             continue
-        for text in _evidence(src, tests, name, first[name], second[name]):
+        for text in _evidence(src, tests, name, first[name], second[name], stop):
             cand = _spliced(cur, name, text)
-            if cand is not None and _run_candidate(ws, cand, *targs).ok:
+            if cand is not None and _green(ws, cand, target, stop):
                 cur = cand
                 changed.append(name)
                 break
     return cur, changed
 
 
-async def review(task, client, known: dict | None = None) -> tuple[list[str], str]:
+async def review(task, client, known: dict | None = None, stop: float | None = None) -> tuple[list[str], str]:
     """Names of the functions replaced in the task's file, and a note for the trajectory. `known`: `known_texts`
-    (default the examples' texts only)."""
+    (default the examples' texts only). `stop`: the monotonic time after which no probe or test run starts."""
     ws = Path(task.workspace)
     try:
         test_name = _test_file(ws)
@@ -308,8 +348,7 @@ async def review(task, client, known: dict | None = None) -> tuple[list[str], st
         src = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
         return [], f"review skipped: {e!r}"[:200]
-    targs = () if target == "mylib.py" else (target,)
-    if not (await asyncio.to_thread(_run_candidate, ws, src, *targs)).ok:
+    if not await asyncio.to_thread(_green, ws, src, target, stop):
         return [], "review skipped: the tests are not green"
     msgs = _messages(src, tests, target, test_name)
     try:
@@ -327,7 +366,7 @@ async def review(task, client, known: dict | None = None) -> tuple[list[str], st
         return [], f"review: llm unavailable: {e}"[:200]
     if not set(first) & set(second):
         return [], f"review: no agreement ({sorted(first)} / {sorted(second)}), kept"[:200]
-    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known)
+    new, changed = await asyncio.to_thread(_decide, ws, src, tests, target, first, second, known, stop)
     if not changed or new == src:
         return [], f"review: no evidence against {sorted(set(first) & set(second))}, kept"[:200]
     if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it
