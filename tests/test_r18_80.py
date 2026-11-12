@@ -105,7 +105,8 @@ def test_known_text_is_never_replaced(tmp_path):
     assert _go(task, Fake(_reply(wrong), _reply(wrong)))[0] == [] and _lib(task) == SILENT + AVERAGE
 
 
-def test_method_is_never_replaced(tmp_path):
+def test_method_is_never_replaced(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_REVIEW_METHODS", "0")     # round 19 reviews methods; this is round 18
     lib = "class A:\n    def f(self, x):\n        return x + 1\n"
     tests = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
              "    def test_f(self):\n        self.assertEqual(m.A().f(1), 2)\n")

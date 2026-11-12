@@ -9,9 +9,17 @@ text (the examples' functions, texts mined from the set) and a method are never 
 
 Round 19 (task 82, HARNESS_REVIEW_REASON): where FAST and ALT both rewrote a function and their rewrites disagree on
 the trial inputs, MODEL_REASON is asked the same, once per file; a function is replaced when its rewrite and one of
-theirs pass the same rules."""
+theirs pass the same rules.
+
+Round 19 (task 84, HARNESS_REVIEW_METHODS): a method is checked too, on scenarios built from the visible tests that
+call it (`_scenes`): the objects are built and the methods called as the tests do, with other literal values, and the
+values the tests look at, the calls' results and the objects' public attributes are compared under the same rules. A
+method no visible test calls has no scenario: it is dropped before MODEL_ALT is asked."""
 import ast
 import asyncio
+import copy
+import itertools
+import json
 import re
 import shutil
 import tempfile
@@ -25,7 +33,8 @@ from harness.llm import LLMUnavailable
 from harness.llm_routes import (_FUNC_HEAD, _THINK, _cap, _first_def, _target_file, _test_file,
                                 apply_patch, write_mylib)
 from harness.solvers import coding_solver as cs
-from harness.solvers.probe import _MAX_REPR, behaviour, visible_call
+from harness.proc import run_python
+from harness.solvers.probe import _ADDR, _MAX_REPR, behaviour, visible_call
 from harness.solvers.testrun import run_in_dir
 
 REVIEW_SYSTEM = (
@@ -281,15 +290,340 @@ def _broken(ours: list, theirs: list) -> bool:
     return False
 
 
+# ---- class methods (round 19, task 84): scenarios built from the visible tests ----
+# Reads {"src", "mod", "head", "scenes", "out"} from stdin. Each scene is the body of one visible test (setUp first)
+# with other literal values: the target file is loaded afresh as module `mod`, the test file's own preamble `head`
+# runs, then the scene. Its outcome: the values the asserts look at and the calls' return values in order, then the
+# state of what the scene left bound (objects of the module by their public attributes); an exception that escapes
+# the scene is its outcome "<exc:Type>". One JSON line per scene goes to the file `out`, so a hang keeps the rest.
+_SCENE_CHILD = r'''
+import contextlib, io, json, sys, types
+req = json.loads(sys.stdin.read())
+LIM, MOD = %d, req["mod"]
+
+
+class _Alarm(BaseException):
+    pass
+
+
+try:
+    import signal
+
+    def _ring(*a):
+        raise _Alarm()
+    signal.signal(signal.SIGALRM, _ring)
+    have_alarm = True
+except Exception:
+    have_alarm = False
+
+
+def _ours(t):
+    return getattr(t, "__module__", None) == MOD
+
+
+def scene(code):
+    trace, cut = [], []
+
+    def show(v, d=0):
+        t = type(v)
+        if d < 3 and _ours(t) and t.__repr__ is object.__repr__ and hasattr(v, "__dict__"):
+            return t.__name__ + "{" + ", ".join("%%s=%%s" %% (k, show(x, d + 1)) for k, x in sorted(vars(v).items())
+                                                if not k.startswith("_")) + "}"
+        if d < 3 and isinstance(v, (list, tuple)) and any(_ours(type(x)) for x in v):
+            inner = ", ".join(show(x, d + 1) for x in v)
+            return ("[%%s]" if isinstance(v, list) else "(%%s)") %% inner
+        try:
+            s = repr(v)
+        except _Alarm:
+            raise
+        except BaseException as e:
+            s = "<repr:%%s>" %% type(e).__name__
+        if len(s) >= LIM:
+            cut.append(1)
+            s = s[:LIM]
+        return s
+
+    def rec(*vals, **kw):
+        for v in vals:
+            trace.append(show(v))
+        return vals[0] if vals else None
+
+    class Raises:
+        exception = value = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, t, v, tb):
+            if t is not None and issubclass(t, _Alarm):
+                return False
+            trace.append("<raised:%%s>" %% (t.__name__ if t else "none"))
+            self.exception = self.value = v
+            return True
+
+    def raises(exc=None, fn=None, *a, **k):
+        if fn is None:
+            return Raises()
+        k.pop("msg", None)
+        try:
+            r = fn(*a, **k)
+        except _Alarm:
+            raise
+        except BaseException as e:
+            trace.append("<raised:%%s>" %% type(e).__name__)
+            return None
+        trace.append("<raised:none>")
+        trace.append(show(r))
+
+    class Self:
+        def __getattr__(self, n):
+            if n in ("assertRaises", "assertWarns"):
+                return raises
+            if n in ("assertRaisesRegex", "assertWarnsRegex"):
+                return lambda exc, rx=None, fn=None, *a, **k: raises(exc, fn, *a, **k)
+            if n.startswith("assert") or n == "fail":
+                return rec
+            if n == "subTest":
+                return lambda *a, **k: contextlib.nullcontext()
+            raise AttributeError(n)
+
+    class Pytest:
+        @staticmethod
+        def raises(exc, *a, **k):
+            k.pop("match", None)
+            return raises(exc, *a, **k) if a else Raises()
+
+        @staticmethod
+        def approx(x, *a, **k):
+            return x
+
+    mod = types.ModuleType(MOD)
+    mod.__file__ = MOD + ".py"
+    sys.modules[MOD] = mod
+    me = Self()
+    try:
+        exec(compile(req["src"], MOD + ".py", "exec"), mod.__dict__)
+        ns = {"__name__": "__scene__", "_rec": rec, "pytest": Pytest}
+        exec(compile(req["head"], "head", "exec"), ns)
+        ns["self"] = me
+        base = set(ns)
+        if have_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 1.0)
+        exec(compile(code, "scene", "exec"), ns)
+        if have_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        left = [k for k in sorted(ns) if k not in base and not k.startswith("_")
+                and not isinstance(ns[k], (types.ModuleType, type, types.FunctionType))]
+        state = ["%%s=%%s" %% (k, show(ns[k])) for k in left]
+        state += ["self.%%s=%%s" %% (k, show(v)) for k, v in sorted(vars(me).items()) if not k.startswith("_")]
+        out = json.dumps(trace + state) + ("<cut>" if cut else "")
+    except BaseException as e:
+        out = "<exc:%%s>" %% ("TimeoutError" if isinstance(e, _Alarm) else type(e).__name__)
+    finally:
+        if have_alarm:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+    return out
+
+
+real = sys.stdout
+with open(req["out"], "w", encoding="utf-8") as f:
+    for code in req["scenes"]:
+        sys.stdout = io.StringIO()
+        try:
+            out = scene(code)
+        except BaseException as e:
+            out = "<exc:%%s>" %% type(e).__name__
+        sys.stdout = real
+        f.write(json.dumps(out) + "\n")
+        f.flush()
+''' % _MAX_REPR
+SCENE_CAP = 8           # visible tests a method's scenarios come from
+
+
+def _scene_outcomes(src: str, mod: str, head: str, scenes: list[str], timeout: float) -> list[str]:
+    """The outcome of each scene (`_SCENE_CHILD`) with `src` as the module `mod`, all in one subprocess; the scenes a
+    hang or a crash left unrun are "<exc:Timeout>" / "<exc:Crash>"."""
+    if not scenes:
+        return []
+    with tempfile.TemporaryDirectory(prefix="scene_") as d:
+        out = Path(d) / "out.jsonl"
+        req = json.dumps({"src": src, "mod": mod, "head": head, "scenes": scenes, "out": str(out)})
+        res = run_python(["-c", _SCENE_CHILD], cwd=Path(d), timeout=timeout, stdin=req, env={"PYTHONHASHSEED": "0"})
+        got = []
+        try:
+            lines = out.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            lines = []
+        for line in lines:
+            try:
+                got.append(_ADDR.sub("", str(json.loads(line))))
+            except ValueError:
+                break
+    fill = "<exc:Timeout>" if res.timed_out else "<exc:Crash>"
+    return (got + [fill] * len(scenes))[:len(scenes)]
+
+
+class _Scene(ast.NodeTransformer):
+    """A test body as a scene: `assert a == b` records both sides, a bare call records what it returns (the
+    `self.assert*` calls record their arguments in the child)."""
+
+    def visit_Assert(self, node):
+        test = node.test
+        vals = [test.left, *test.comparators] if isinstance(test, ast.Compare) else [test]
+        return ast.copy_location(ast.Expr(ast.Call(ast.Name("_rec", ast.Load()), vals, [])), node)
+
+    def visit_Expr(self, node):
+        v = node.value
+        if isinstance(v, ast.Call) and not (isinstance(v.func, ast.Attribute) and isinstance(v.func.value, ast.Name)
+                                            and v.func.value.id == "self"):
+            node.value = ast.Call(ast.Name("_rec", ast.Load()), [self.generic_visit(v)], [])
+            return node
+        return self.generic_visit(node)
+
+
+def _literal(node) -> bool:
+    try:
+        ast.literal_eval(node)
+        return True
+    except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
+        return False
+
+
+def _slots(body: list) -> list:
+    """The literal values of a scene that are inputs: constants and literal lists, not the expected values (direct
+    literal arguments of an assert, of `_rec` from an `assert`, of `approx`), not f-string parts or None."""
+    out, skip = [], set()
+    for node in (n for stmt in body for n in ast.walk(stmt)):
+        if isinstance(node, ast.Call):
+            name = _callee(node)
+            if name == "_rec" or name == "approx" or (name or "").startswith("assert") and name not in _RAISES:
+                skip.update(id(a) for a in node.args if _literal(a))
+        elif isinstance(node, ast.JoinedStr):
+            skip.update(id(v) for v in node.values)
+    seen = set()
+
+    def walk(node):
+        if id(node) in skip or id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, (ast.List, ast.Tuple)) and isinstance(getattr(node, "ctx", None), ast.Load) \
+                and node.elts and _literal(node):
+            out.append(node)
+            return
+        if isinstance(node, ast.Constant) and node.value is not None and not isinstance(node.value, bytes) \
+                and not isinstance(node.value, complex) and not (isinstance(node.value, str) and len(node.value) > 40):
+            out.append(node)
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+    for stmt in body:
+        walk(stmt)
+    return out
+
+
+class _Put(ast.NodeTransformer):
+    def __init__(self, subs: dict):
+        self.subs = subs
+
+    def visit(self, node):
+        k = getattr(node, "_slot", None)
+        if k is not None and k in self.subs:
+            return ast.copy_location(ast.parse(repr(self.subs[k]), mode="eval").body, node)
+        return super().visit(node)
+
+
+def _refers(body: list, cls: str, meth: str) -> bool:
+    nodes = [n for stmt in body for n in ast.walk(stmt)]
+    names = {getattr(n, "id", None) for n in nodes if isinstance(n, ast.Name)} | \
+            {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+    if cls not in names:
+        return False
+    if meth == "__init__":
+        return any(isinstance(n, ast.Call) and _callee(n) == cls for n in nodes)
+    return meth in {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+
+
+def _scenes(tests: str, name: str) -> tuple[str, list[str]]:
+    """(preamble, scenes) for the method `name` ("Class.method"): the visible tests that build the class and call
+    the method (setUp first), as they are and with other values of the same types in their literal inputs (one at a
+    time, then two together), at most BATTERY_CAP scenes. A test that takes arguments (fixtures, parametrize) is
+    left out; a dunder other than __init__ has no scene."""
+    cls, _, meth = name.partition(".")
+    if not cls or not meth or "." in meth or (meth.startswith("__") and meth != "__init__"):
+        return "", []
+    try:
+        tree = ast.parse(tests)
+    except (SyntaxError, ValueError, RecursionError):
+        return "", []
+
+    def is_test(f):
+        return isinstance(f, ast.FunctionDef) and f.name.startswith("test")
+
+    head, bodies = [], []
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and any(is_test(f) for f in node.body):
+            setup = next((f.body for f in node.body if isinstance(f, ast.FunctionDef) and f.name == "setUp"), [])
+            for f in node.body:
+                a = f.args if is_test(f) else None
+                if a is not None and len(a.args) == 1 and not (a.vararg or a.kwarg or a.kwonlyargs or a.posonlyargs):
+                    bodies.append(setup + f.body)
+        elif is_test(node):
+            a = node.args
+            if not (a.args or a.vararg or a.kwarg or a.kwonlyargs or a.posonlyargs):
+                bodies.append(node.body)
+        elif isinstance(node, ast.Expr) or isinstance(node, ast.If) and "__main__" in ast.dump(node.test):
+            continue    # `unittest.main()`, a docstring, the main guard: not the tests' setting
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                (a.name.split(".")[0] if isinstance(node, ast.Import) else (node.module or "").split(".")[0])
+                == "pytest" for a in node.names):
+            continue
+        elif not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.decorator_list):
+            head.append(node)
+    per = []
+    for body in [b for b in bodies if _refers(b, cls, meth)][:SCENE_CAP]:
+        mod = ast.Module(body=[_Scene().visit(copy.deepcopy(s)) for s in body], type_ignores=[])
+        ast.fix_missing_locations(mod)
+        slots = _slots(mod.body)
+        for k, node in enumerate(slots):
+            node._slot = k
+        values = [ast.literal_eval(n) for n in slots]
+        pools = [_pool(v) for v in values]
+        subs = itertools.chain(
+            [{}], ({i: x} for i, pool in enumerate(pools) for x in pool if x != values[i]),
+            ({i: x, j: y} for i in range(len(pools)) for j in range(i + 1, len(pools))
+             for x in pools[i][:12:2] for y in pools[j][:12] if x != values[i] and y != values[j]))
+        texts = []
+        for sub in subs:
+            if len(texts) >= BATTERY_CAP:
+                break
+            try:
+                texts.append(ast.unparse(_Put(sub).visit(copy.deepcopy(mod))))
+            except (ValueError, TypeError, SyntaxError, RecursionError):
+                continue
+        per.append(texts)
+    scenes, seen = [], set()
+    for row in itertools.zip_longest(*per):      # every test gets its share of the cap
+        for t in row:
+            if t is not None and t not in seen and len(scenes) < BATTERY_CAP:
+                seen.add(t)
+                scenes.append(t)
+    if not scenes:
+        return "", []
+    return ast.unparse(ast.Module(body=head, type_ignores=[])), scenes
+
+
 class _Trial:
     """Trial inputs of one function of the file and each version's outcomes on them, one subprocess a version,
-    remembered by the file's text (the third opinion probes the same versions again). `ok`: the function can be
-    probed (not a method, at least 3 inputs)."""
+    remembered by the file's text (the third opinion probes the same versions again). A method (with
+    HARNESS_REVIEW_METHODS) has scenes for inputs (`_scenes`). `ok`: it can be probed (at least 3 inputs)."""
 
-    def __init__(self, src: str, tests: str, name: str):
+    def __init__(self, src: str, tests: str, name: str, target: str = "mylib.py"):
         self.src, self.name, self.memo = src, name, {}
         self.inputs: list = []
-        if "." in name:
+        self.method, self.mod, self.head = "." in name, Path(target).stem, ""
+        if self.method:
+            if config.review_methods():
+                self.head, self.inputs = _scenes(tests, name)
             return
         call = visible_call(tests, name)
         try:
@@ -303,7 +637,7 @@ class _Trial:
 
     def cut(self, out: str) -> bool:
         """A value cut at the probe's repr limit: it shows neither agreement nor a difference."""
-        return len(out) >= _MAX_REPR
+        return out.endswith("<cut>") if self.method else len(out) >= _MAX_REPR
 
     def outcomes(self, text: str | None, stop: float | None) -> list[str] | None:
         """The outcomes of the file with `text` as the function (None: the file's own); None when out of time."""
@@ -314,7 +648,8 @@ class _Trial:
             limit = _left(stop, PROBE_TIMEOUT)
             if limit < PROBE_TIMEOUT / 2:
                 return None
-            self.memo[full] = behaviour(full, self.name, self.inputs, timeout=limit)
+            self.memo[full] = (_scene_outcomes(full, self.mod, self.head, self.inputs, limit) if self.method
+                               else behaviour(full, self.name, self.inputs, timeout=limit))
         return self.memo[full]
 
 
@@ -440,7 +775,7 @@ def _decide(ws: Path, src: str, tests: str, target: str, first: dict, second: di
             break
         if _known(src, name, known):
             continue
-        trial = trials.setdefault(name, _Trial(src, tests, name))
+        trial = trials.setdefault(name, _Trial(src, tests, name, target))
         texts, split = _verdict(src, tests, name, first[name], second[name], stop, trial)
         for text in texts:
             cand = _spliced(cur, name, text)
@@ -522,6 +857,11 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
         first = _rewrites(src, r.text)
         if not first:
             return [], "review: nothing found"
+        if config.review_methods():
+            blind = sorted(n for n in first if "." in n and not _Trial(src, tests, n, target).ok)
+            first = {n: t for n, t in first.items() if n not in blind}
+            if not first:
+                return [], f"review: no visible test calls {blind}, kept"[:200]
         r = await client.chat(MODEL_ALT, msgs, REVIEW_MAX_TOKENS)
         if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= REVIEW_MAX_TOKENS:
             return [], "review: second reply hit the output limit, kept"

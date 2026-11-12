@@ -141,6 +141,17 @@ def review_named() -> bool:
     return _env_bool("HARNESS_REVIEW_NAMED", REVIEW_NAMED)
 
 
+# default of HARNESS_REVIEW_METHODS (round 19, task 84): the review also checks methods of classes, on scenarios
+# built from the visible tests (construct the objects, call the methods as the tests do, with other values)
+REVIEW_METHODS = True
+
+
+def review_methods() -> bool:
+    """The review of class methods. Off: round 18 (a method is never replaced). Read at call time:
+    HARNESS_REVIEW_METHODS=1/0."""
+    return _env_bool("HARNESS_REVIEW_METHODS", REVIEW_METHODS)
+
+
 def verify_coding() -> bool:
     """A model checks green single coding fixes on its own. Read at call time: HARNESS_VERIFY_CODING=1/0."""
     return _env_bool("HARNESS_VERIFY_CODING", VERIFY_CODING)
