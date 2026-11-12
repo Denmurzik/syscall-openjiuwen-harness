@@ -403,6 +403,15 @@ def scene(code):
     mod = types.ModuleType(MOD)
     mod.__file__ = MOD + ".py"
     sys.modules[MOD] = mod
+    # a module of a package (`pkg.core`, as the tests import it): its parent packages, empty, lead to it
+    parts = MOD.split(".")
+    for i in range(len(parts) - 1, 0, -1):
+        name = ".".join(parts[:i])
+        if name not in sys.modules:
+            pkg = types.ModuleType(name)
+            pkg.__path__ = []
+            sys.modules[name] = pkg
+        setattr(sys.modules[name], parts[i], sys.modules[".".join(parts[:i + 1])])
     me = Self()
     try:
         exec(compile(req["src"], MOD + ".py", "exec"), mod.__dict__)
@@ -621,6 +630,39 @@ def _scenes(tests: str, name: str) -> tuple[str, list[str]]:
     return ast.unparse(ast.Module(body=head, type_ignores=[])), scenes
 
 
+def _module_name(target: str) -> str:
+    """The name the tests import the target by: `mylib` for mylib.py, `pkg.core` for pkg/core.py, `pkg` for
+    pkg/__init__.py, `wallet.ledger` for src/wallet/ledger.py (HARNESS_DEEP_TESTS layouts)."""
+    parts = list(Path(target).with_suffix("").parts)
+    if len(parts) > 1 and parts[0] == "src":
+        parts = parts[1:]
+    if len(parts) > 1 and parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _loads_alone(ws: Path, target: str, src: str) -> bool:
+    """The target file loads on its own, as the probes and scenes run it (a throw-away directory, nothing of the
+    workspace beside it): no relative import, no import of another module or package of the workspace. A file in the
+    root always counts (round 18: its review is never skipped)."""
+    if "/" not in target:
+        return True
+    try:
+        tree = ast.parse(src)
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level:
+            return False
+        names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                 else [node.module] if isinstance(node, ast.ImportFrom) and node.module else [])
+        for m in names:
+            top = m.split(".")[0]
+            if any((base / top).is_dir() or (base / f"{top}.py").is_file() for base in (ws, ws / "src")):
+                return False
+    return True
+
+
 class _Trial:
     """Trial inputs of one function of the file and each version's outcomes on them, one subprocess a version,
     remembered by the file's text (the third opinion probes the same versions again). A method (with
@@ -629,7 +671,7 @@ class _Trial:
     def __init__(self, src: str, tests: str, name: str, target: str = "mylib.py"):
         self.src, self.name, self.memo = src, name, {}
         self.inputs: list = []
-        self.method, self.mod, self.head = "." in name, Path(target).stem, ""
+        self.method, self.mod, self.head = "." in name, _module_name(target), ""
         # round 19: ours is probed twice and an input where it differs from itself is set aside (`steady`). Every
         # round-19 switch off: one run of ours, as in round 18
         self.twice = config.review_reason() or config.review_methods()
@@ -925,6 +967,8 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
         return [], f"review skipped: {e!r}"[:200]
     if not await asyncio.to_thread(_green, ws, src, target, stop):
         return [], "review skipped: the tests are not green"
+    if not _loads_alone(ws, target, src):   # no probe or scene could load it: every rewrite would be "no evidence"
+        return [], "review skipped: the package module imports what a probe cannot load"
     if stop is not None and stop - time.monotonic() < MIN_LEFT_S:
         return [], "review: too close to the stop to check a rewrite, kept"
     msgs = _messages(src, tests, target, test_name)
