@@ -86,3 +86,12 @@ def test_no_confirming_run_when_the_time_left_cannot_hold_it(monkeypatch):
     monkeypatch.setattr(r, "_expr_behaviour", lambda *a, **k: pytest.fail("ran"))
     trial = r._Trial(TRI, TRI_TESTS, "tri_sum")
     assert trial.hangs([0], time.monotonic() + 3) == []
+
+
+def test_string_variants_never_push_pairs_out_of_the_cap(monkeypatch):
+    args = ('2024-03-10T12:00+02:00', 'x 42 y', 'a-b 7')
+    on = r._battery(args, 3)
+    monkeypatch.setenv("HARNESS_REVIEW_PROBES", "0")
+    off = r._battery(args, 3)
+    assert len(off) == r.BATTERY_CAP and on[:r.BATTERY_CAP] == off     # the variants come after, in their own room
+    assert "2024-03-10T12:00-02:00" in {t[0] for t in on[r.BATTERY_CAP:]}

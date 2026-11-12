@@ -245,8 +245,9 @@ def _str_variants(v: str) -> list:
     return uniq[:40]
 
 
-def _pool(v) -> list:
-    """Values of the shape of one visible argument."""
+def _pool(v, variants: bool = True) -> list:
+    """Values of the shape of one visible argument; `variants`: with `_str_variants` of a string (the scenes of a
+    method take them here, `_battery` after its pairs)."""
     if isinstance(v, bool):
         return [True, False]
     if isinstance(v, int):
@@ -254,7 +255,7 @@ def _pool(v) -> list:
     if isinstance(v, float):
         return [0.0, 0.5, 1.0, 2.5, 10.0, -1.5, 100.0, v * 2]
     if isinstance(v, str):
-        return _STRS + [v.upper(), v.title(), v[::-1], v + " " + v, v[:1]] + _str_variants(v)
+        return _STRS + [v.upper(), v.title(), v[::-1], v + " " + v, v[:1]] + (_str_variants(v) if variants else [])
     if isinstance(v, list):
         own = [v[::-1], v + v[:1], v[:1], v + v]
         if any(isinstance(x, (list, tuple)) for x in v):
@@ -267,10 +268,22 @@ def _pool(v) -> list:
 
 def _battery(args: tuple | None, arity: int) -> list[tuple]:
     """Trial inputs: with a visible call, values of the same shapes (one argument varied at a time, then pairs of
-    positions together); without one, common shapes for the number of parameters."""
+    positions together); without one, common shapes for the number of parameters. Then the string variants."""
+    main, extra = _battery_parts(args, arity)
+    return main + extra
+
+
+def _battery_parts(args: tuple | None, arity: int) -> tuple[list[tuple], list[tuple]]:
+    """(at most BATTERY_CAP inputs as `_battery` describes them, HARNESS_REVIEW_PROBES' string variants of the visible
+    call, one argument at a time): the variants have their own room, at most 40 per argument, so they never push the
+    pairs of visible arguments out of the cap."""
     out: list[tuple] = []
+    extra: list[tuple] = []
     if args is not None:
-        pools = [_pool(a) for a in args]
+        pools = [_pool(a, variants=False) for a in args]
+        for i, a in enumerate(args):
+            if isinstance(a, str) and not isinstance(a, bool):
+                extra += [tuple(args[:i]) + (x,) + tuple(args[i + 1:]) for x in _str_variants(a)]
         out.append(tuple(args))
         for i, pool in enumerate(pools):
             out += [tuple(args[:i]) + (x,) + tuple(args[i + 1:]) for x in pool]
@@ -296,7 +309,15 @@ def _battery(args: tuple | None, arity: int) -> list[tuple]:
         if key not in seen:
             seen.add(key)
             uniq.append(t)
-    return uniq[:BATTERY_CAP]
+    uniq = uniq[:BATTERY_CAP]
+    seen = {repr(t) for t in uniq}
+    more = []
+    for t in extra:
+        key = repr(t)
+        if key not in seen:
+            seen.add(key)
+            more.append(t)
+    return uniq, more
 
 
 # ---- HARNESS_REVIEW_PROBES: visible arguments that are not literals (Decimal("10.00"), date(2024, 2, 10)) ----
@@ -890,14 +911,15 @@ class _Trial:
             return
         call = visible_call(tests, name)
         try:
-            self.inputs = _battery(call[0] if call else None, _arity(src, name))
+            main, extra = _battery_parts(call[0] if call else None, _arity(src, name))
+            self.inputs = main + extra
             if config.review_probes() and call:
                 # a parameter with a default: calls that leave it out, one after another in the same process, so a
                 # mutable default that keeps what earlier calls put in it shows
                 need, args = _arity(src, name), call[0]
                 if 1 <= need < len(args):
                     short = [tuple(args[:need])] + [(x,) + tuple(args[1:need]) for x in _pool(args[0])[:6]]
-                    self.inputs = self.inputs[:BATTERY_CAP - len(short)] + short
+                    self.inputs = main[:BATTERY_CAP - len(short)] + extra + short
             elif config.review_probes():
                 found = _visible_exprs(tests, name)
                 if found is not None:
