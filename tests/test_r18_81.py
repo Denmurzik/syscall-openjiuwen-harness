@@ -281,3 +281,11 @@ def test_module_pytestmark_applies(tmp_path):
     tests = ("import pytest\nfrom mylib import double\npytestmark = [pytest.mark.slow, pytest.mark.skipif(True, "
              "reason='x')]\n\n\ndef test_d():\n    assert double(2) == 5\n")
     assert run_tests(_ws(tmp_path, LIB, tests)).ok   # every test skipped, as pytest
+
+
+def test_nested_test_class_makes_the_file_red(tmp_path):
+    tests = ("import pytest\nfrom mylib import double\n\n\nclass TestOuter:\n    def test_a(self):\n"
+             "        assert double(0) == 0 or True\n\n    class TestInner:\n        def test_b(self):\n"
+             "            assert double(3) == 6\n")
+    good, bad = _both(tmp_path, tests)
+    assert not good.ok and not bad.ok   # pytest would run test_b too: not followed, never green

@@ -422,6 +422,9 @@ if _need_stub:
             for f in fns:
                 items.append((f.__name__, f, None, 0))
             for c in classes:
+                # pytest collects a nested Test* class too; not followed here: red
+                if any(n.startswith("Test") and _inspect.isclass(v) for n, v in vars(c).items()):
+                    return red
                 for m in dir(c):
                     if not m.startswith("test"):
                         continue
