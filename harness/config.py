@@ -155,6 +155,18 @@ def confirm_2a() -> bool:
     return _env_bool("HARNESS_CONFIRM_2A", CONFIRM_2A)
 
 
+# default of HARNESS_PROSE_AGREE. Round 17, task 79: a 2b answer on a prose knowledge base stands when a MODEL_ALT
+# program gives it too; else a MODEL_REASON program is the third attempt (llm_routes.prose_agreement). Round 16 gave
+# other answers to byte-identical prompts (runs/r16b, r16c prose2: 26 and 23 of 31). Off: round 16
+PROSE_AGREE = True
+
+
+def prose_agree() -> bool:
+    """Two agreeing attempts on prose answers. Read at call time: HARNESS_PROSE_AGREE=1/0 (the multi-hop literal
+    rule stays on either way)."""
+    return _env_bool("HARNESS_PROSE_AGREE", PROSE_AGREE)
+
+
 def llm_timeout() -> float:
     return _env_float("HARNESS_LLM_TIMEOUT", LLM_TIMEOUT, 0.001)
 

@@ -33,6 +33,8 @@ fix_coding = None
 arbitrate = None
 verify_fix = None
 confirm_program = None   # the program route of a confirmation vote (task 40); tests may pre-set it
+prose_agreement = None   # the second and third attempts on a prose answer (task 79); tests may pre-set it
+is_prose_task = None
 BudgetExhausted = None
 
 REASON_PASS_MAX_CALLS = 10      # hard cap of the final reasoning pass, whatever the ledger shows
@@ -58,6 +60,16 @@ def _reason_2b(ledger: TokenLedger, task: Task, t0: float, deadline_s: float) ->
         return False
     left_s = deadline_s - config.stop_new_before_deadline_s() - (time.monotonic() - t0)
     return left_s >= config.llm_timeout() + REASON_FAST_MARGIN_S and _reason_fits(ledger, task)
+
+
+def _prose_more(ledger: TokenLedger, task: Task, t0: float, deadline_s: float, reason: bool) -> bool:
+    """One more attempt on a prose answer (task 79) may start: less than REASON_PASS_SPEND_LIMIT of the budget is
+    spent, new units are not stopped yet, and the ledger holds the attempt (a REASON call whole, see _reason_fits)."""
+    if ledger.spent >= REASON_PASS_SPEND_LIMIT * ledger.budget:
+        return False
+    if time.monotonic() - t0 > deadline_s - config.stop_new_before_deadline_s():
+        return False
+    return _reason_fits(ledger, task) if reason else ledger.can_afford(estimate_tokens(task))
 
 
 def _reason_verdict(res: SolveResult) -> bool:
@@ -255,7 +267,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result, 
 
 
 def _load_phase2() -> None:
-    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, verify_fix, confirm_program, BudgetExhausted
+    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, verify_fix, confirm_program, prose_agreement, is_prose_task, BudgetExhausted
     from harness import arbitrate as arbitrate_mod, json_route, llm, llm_routes
     if solve_group is None:
         solve_group = json_route.solve_group
@@ -277,6 +289,10 @@ def _load_phase2() -> None:
         verify_fix = arbitrate_mod.verify_fix
     if confirm_program is None:
         confirm_program = llm_routes.solve_with_program
+    if prose_agreement is None:
+        prose_agreement = llm_routes.prose_agreement
+    if is_prose_task is None:
+        is_prose_task = llm_routes._is_prose_task
     BudgetExhausted = llm.BudgetExhausted
 
 
@@ -562,6 +578,29 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                                           and (tentative[t.task_id].extra or {}).get("ambiguous"))]
     await _drive(units, t0, deadline_s, ledger, state)
 
+    async def agree_prose(task, first, start):
+        """A prose answer needs a second attempt that agrees (task 79). FAST's answer goes to disk before the extra
+        attempts: a deadline or a silent stop of the run in them keeps it."""
+        try:
+            if not (config.prose_agree() and is_prose_task(task)):
+                return first
+        except Exception:
+            log.exception("prose check on %s failed", task.task_id)
+            return first
+        more = lambda reason: _prose_more(ledger, task, t0, deadline_s, reason)  # noqa: E731
+        try:
+            if first.status == "solved" and more(False):
+                settle(2, task, first, time.monotonic() - start)
+            res = await prose_agreement(task, client, first, more)
+        except BudgetExhausted:
+            raise
+        except Exception:   # the extra attempts are lost, FAST's answer is not
+            log.exception("prose agreement on %s failed", task.task_id)
+            return first
+        if (res.extra or {}).get("reasoned"):
+            reasoned.add(task.task_id)   # REASON gave its verdict: the final pass does not ask again
+        return res
+
     # 2b: per-task routes for whatever is still unparsed or only tentatively answered
     # (arbitrated tasks are final; tentative ones with candidates wait for 2c above)
     def unit_2b(task, resume=None):
@@ -597,6 +636,8 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                     res = await solve_with_program(task, client)
             else:
                 res = await solve_with_program(task, client)
+                if task.task_type == "search":
+                    res = await agree_prose(task, res, start)
             settle(2, task, res, time.monotonic() - start)
             if (res.note or "").startswith(_LLM_UNAVAILABLE):
                 ladder = (res.extra or {}).get("ladder")

@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import io
+import logging
 import re
 import shutil
 import tempfile
@@ -20,8 +21,11 @@ from harness.solvers.coding_solver import _write_mylib as write_mylib  # atomic 
 from harness.solvers.coding_solver import missing_test_import, provable_contradiction
 from harness.solvers.testrun import TestReport, run_in_dir
 from harness.tasks import Task
+from harness.trajectory import CALLS
 
 from harness.config import MODEL_ALT, MODEL_FAST, MODEL_REASON, PROGRAM_MAX_TOKENS  # noqa: E402,F401
+
+log = logging.getLogger("harness")
 
 PROGRAM_SYSTEM = ("Write a Python 3 program that prints only the final answer to stdout. "
                   "Never write answer.txt or any file: the task text mentions answer.txt, ignore that, "
@@ -459,6 +463,20 @@ def _asks_aggregate(question: str) -> bool:
     return bool(_PROSE_AGGREGATE_ASK.search(question))
 
 
+# a relation chain over pages ("the employer of the mentor of X", "X's mentor's employer", "the employer of X's
+# mentor"): a constant printed for it was followed across pages in the head (r16c search_8104: 1975, a whole word on
+# another page, for 1973). One relation ("the mentor of X", "the company where X works") is read from the shown pages
+_PROSE_MULTIHOP_ASK = re.compile(
+    r"\b[Tt]he (?!(?:name|year|date|city|country|place|title)\b)[a-z]+(?: [a-z]+)? of the [a-z]+(?: [a-z]+)? of\b"
+    r"|\w['\u2019]s [a-z]+(?: [a-z]+)?['\u2019]s\b"
+    r"|\bof (?:the )?[A-Z][\w-]*(?: [A-Z][\w-]*)*['\u2019]s [a-z]+")
+
+
+def _asks_multihop(question: str) -> bool:
+    """A chain of two relations or more: like an aggregate, answered by a program over pages, never a printed constant."""
+    return bool(_PROSE_MULTIHOP_ASK.search(question))
+
+
 def _is_prose_task(task: Task) -> bool:
     return _is_kb_task(task) and _kb_is_prose(task.workspace)
 
@@ -585,7 +603,8 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
             break
         code = extract_code(r.text, join_all=False)
         quoted = False
-        if prose and is_bare_literal(code) and not _asks_aggregate(strip_boilerplate(task.instruction)):
+        question = strip_boilerplate(task.instruction) if prose else ""
+        if prose and is_bare_literal(code) and not _asks_aggregate(question) and not _asks_multihop(question):
             # a fact copied from a shown page: taken when a page really holds it
             probe = await asyncio.to_thread(run_program, kb_program(code), task.workspace)
             said = normalize_answer(probe.stdout, task.check, task.instruction) if probe.returncode == 0 else None
@@ -749,6 +768,95 @@ async def solve_with_reason(task: Task, client) -> SolveResult:
         return SolveResult("unparsed", note=f"answer shape: {bad}",
                            extra={"best_guess": answer, "shape_mismatch": True})
     return SolveResult("solved", answer=answer, note="model reason program")
+
+
+# ---------------------------------------------------------------- prose agreement (round 17, task 79)
+
+def _prose_vote(res: SolveResult | None) -> str | None:
+    """The answer an attempt gives: solved, of the right shape (both routes check it). A crash, a timeout,
+    IMPOSSIBLE, a placeholder or a wrong shape is no answer, not a vote."""
+    if res is None or res.status != "solved" or res.answer is None:
+        return None
+    a = str(res.answer).strip()
+    return a if a and a != "IMPOSSIBLE" else None
+
+
+def _program_failed(res: SolveResult) -> bool:
+    """FAST's program gave nothing usable (exit code, timeout, wrong shape, no output): another model may still answer.
+    Not a page that does not exist, IMPOSSIBLE, the proxy or the budget: those say the same for any model."""
+    note = res.note or ""
+    return (res.status == "unparsed" and note != "program cut by the budget limit"
+            and note.startswith(("program ", "answer shape")))
+
+
+async def _prose_attempt(route, task: Task) -> tuple[SolveResult | None, set]:
+    """One attempt (`route()`): its result, None when it crashed, and the weights that answered its calls."""
+    from harness.confirm import family
+    from harness.llm import BudgetExhausted
+    calls = CALLS.get()
+    start = len(calls) if calls is not None else 0
+    try:
+        res = await route()
+    except BudgetExhausted:
+        raise
+    except Exception as e:  # the attempt is lost, the answers so far are not
+        log.warning("prose attempt on %s failed: %r", task.task_id, e)
+        res = None
+    used = {family(c.get("model")) for c in (calls[start:] if calls is not None else []) if not c.get("error")}
+    return res, used
+
+
+def _agreed(res: SolveResult, note: str, reasoned: bool) -> SolveResult:
+    extra = {**(res.extra or {}), "reasoned": True} if reasoned else res.extra
+    return SolveResult(res.status, answer=res.answer, note=note, extra=extra)
+
+
+async def prose_agreement(task: Task, client, first: SolveResult, may_call) -> SolveResult:
+    """A prose answer stands when two independent attempts give it (round 17, task 79). `first` is the FAST program
+    route's result (`solve_with_program`). A MODEL_ALT program on the same prompt follows; equal answers (`same_answer`:
+    numbers as numbers, text without case and extra spaces, as the soft check) settle it. Different, or one gave
+    nothing: one MODEL_REASON program (`solve_with_reason`) is the third, and an answer two attempts share wins;
+    without one, REASON's answer, else the first, else ALT's (a wrong answer scores the same as none). An ALT
+    attempt answered by FAST's weights (ALT failing, `chat_or_alt`) is no vote. `may_call(reason)` is the
+    scheduler's gate (ledger, spend share, time) before the ALT (False) and the REASON (True) attempt: when it
+    says no, the answers so far stand. `extra["reasoned"]`: REASON gave its verdict here, the final pass skips the
+    task. A first result that is no failed program (IMPOSSIBLE, a missing page, the proxy) is returned as it is."""
+    from harness.confirm import family, same_answer
+    fast = _prose_vote(first)
+    if fast is None and not _program_failed(first):
+        return first
+    head = f"{first.note}; agree:"
+    if not may_call(False):
+        return _agreed(first, f"{head} no budget for a second attempt", False)
+    alt_res, alt_used = await _prose_attempt(
+        lambda: solve_with_program(task, client, model=MODEL_ALT, shape_model=MODEL_ALT), task)
+    alt = _prose_vote(alt_res)
+    alt_say = repr(alt)
+    if alt is not None and family(MODEL_FAST) in alt_used:
+        alt, alt_say = None, f"{alt!r} (answered by {MODEL_FAST}, no vote)"
+    if fast is not None and alt is not None and same_answer(fast, alt):
+        return _agreed(first, f"{head} fast and alt {fast!r}", False)
+    head = f"{head} fast {fast!r}, alt {alt_say}"
+    if not may_call(True):
+        if fast is None and alt is not None:
+            return _agreed(alt_res, f"{head}; no budget for {MODEL_REASON}: alt's answer", False)
+        return _agreed(first, f"{head}; no budget for {MODEL_REASON}: first kept", False)
+    rsn_res, _ = await _prose_attempt(lambda: solve_with_reason(task, client), task)
+    rsn = _prose_vote(rsn_res)
+    rnote = (rsn_res.note or "") if rsn_res is not None else ""
+    reasoned = rsn_res is not None and not rnote.startswith("llm unavailable") and "cut by the budget" not in rnote
+    head = f"{head}, reason {rsn!r}"
+    if rsn is not None and fast is not None and same_answer(rsn, fast):
+        return _agreed(first, f"{head}: fast and reason agree", reasoned)
+    if rsn is not None and alt is not None and same_answer(rsn, alt):
+        return _agreed(rsn_res, f"{head}: alt and reason agree", reasoned)
+    if rsn is not None:
+        return _agreed(rsn_res, f"{head}: no majority, reason's answer", reasoned)
+    if fast is not None:
+        return _agreed(first, f"{head}: no majority, first kept", reasoned)
+    if alt is not None:
+        return _agreed(alt_res, f"{head}: alt's answer, the only one", reasoned)
+    return _agreed(first, f"{head}: no answer", reasoned)
 
 
 # ---------------------------------------------------------------- coding
