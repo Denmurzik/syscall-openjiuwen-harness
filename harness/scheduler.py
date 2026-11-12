@@ -35,6 +35,7 @@ verify_fix = None
 confirm_program = None   # the program route of a confirmation vote (task 40); tests may pre-set it
 prose_agreement = None   # the second and third attempts on a prose answer (task 79); tests may pre-set it
 is_prose_task = None
+second_opinion = None
 BudgetExhausted = None
 
 REASON_PASS_MAX_CALLS = 10      # hard cap of the final reasoning pass, whatever the ledger shows
@@ -87,6 +88,9 @@ def _reason_votes(task: Task) -> bool:
     (HARNESS_CONFIRM_MATH); HARNESS_REASON_MATH=0 turns it off too (round 9)."""
     return (task.task_type not in config.CONFIRM_TYPES and task.task_type in config.CONFIRM_REASON_TYPES
             and config.reason_math() and config.confirm_math())
+
+
+SECOND_TYPES = ("search", "data_analysis")   # 2b types whose first IMPOSSIBLE gets a MODEL_ALT opinion (task 86)
 
 
 # infeasible notes that do not depend on the model's reading of the question
@@ -270,7 +274,7 @@ def _phase1(tasks: list, workers: int, t0: float, deadline_s: float, on_result, 
 
 
 def _load_phase2() -> None:
-    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, verify_fix, confirm_program, prose_agreement, is_prose_task, BudgetExhausted
+    global solve_group, solve_batch, json_route_batchable, json_route_batch_max, solve_with_program, solve_with_reason, fix_coding, arbitrate, verify_fix, confirm_program, prose_agreement, is_prose_task, second_opinion, BudgetExhausted
     from harness import arbitrate as arbitrate_mod, json_route, llm, llm_routes
     if solve_group is None:
         solve_group = json_route.solve_group
@@ -296,6 +300,8 @@ def _load_phase2() -> None:
         prose_agreement = llm_routes.prose_agreement
     if is_prose_task is None:
         is_prose_task = llm_routes._is_prose_task
+    if second_opinion is None:
+        second_opinion = llm_routes.second_opinion
     BudgetExhausted = llm.BudgetExhausted
 
 
@@ -619,6 +625,19 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
             reasoned.add(task.task_id)   # REASON gave its verdict: the final pass does not ask again
         return res
 
+    def second_due(task, res) -> bool:
+        """HARNESS_SECOND_IMPOSSIBLE (task 86): FAST's program on a search or data task that is not a prose one found
+        it infeasible by its own reading (`first_impossible`), and the gates of another attempt hold (less than half
+        of the budget spent, new units not stopped, the ledger holds the call)."""
+        try:
+            from harness.llm_routes import first_impossible
+            return (config.second_impossible() and task.task_type in SECOND_TYPES
+                    and first_impossible(res) and not is_prose_task(task)
+                    and _prose_more(ledger, task, t0, deadline_s, False))
+        except Exception:
+            log.exception("second-opinion check on %s failed", task.task_id)
+            return False
+
     # 2b: per-task routes for whatever is still unparsed or only tentatively answered
     # (arbitrated tasks are final; tentative ones with candidates wait for 2c above)
     def unit_2b(task, resume=None):
@@ -656,6 +675,13 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
                 res = await agree_prose(task, start)
             else:
                 res = await solve_with_program(task, client)
+                if second_due(task, res):
+                    try:
+                        res = await second_opinion(task, client, res)
+                    except BudgetExhausted:
+                        raise
+                    except Exception:   # the second opinion is lost, FAST's verdict is not
+                        log.exception("second opinion on %s failed", task.task_id)
             settle(2, task, res, time.monotonic() - start)
             if (res.note or "").startswith(_LLM_UNAVAILABLE):
                 ladder = (res.extra or {}).get("ladder")

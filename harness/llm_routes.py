@@ -683,6 +683,43 @@ async def solve_with_program(task: Task, client, model: str = MODEL_FAST, shape_
                        extra=None if guess is None or field_retried else {"best_guess": guess, "shape_mismatch": True})
 
 
+# notes of solve_with_program for a FAST verdict "this cannot be answered" that comes from the model's own program
+_IMPOSSIBLE_NOTES = ("program printed IMPOSSIBLE", "kb page or field not found")
+
+
+def first_impossible(res: SolveResult) -> bool:
+    """`solve_with_program` ended in the model's own verdict that the task cannot be answered: its program printed
+    IMPOSSIBLE, or asked the knowledge base for a page or field that is not there. No guess came with it."""
+    return (res.status in ("infeasible", "unparsed") and res.note in _IMPOSSIBLE_NOTES
+            and (res.extra or {}).get("best_guess") is None)
+
+
+async def second_opinion(task: Task, client, first: SolveResult) -> SolveResult:
+    """HARNESS_SECOND_IMPOSSIBLE (task 86): after `first_impossible`, one MODEL_ALT program on the same prompt. A
+    well-formed answer (it ran, printed a value of the expected shape, not IMPOSSIBLE, a placeholder or a whole page)
+    comes back as a best guess: an answer to an infeasible task costs nothing and a wrong one is worth no answer,
+    while the final REASON pass may still take the task. Anything else returns `first` unchanged."""
+    try:
+        r = await client.chat(MODEL_ALT, _program_messages(task), PROGRAM_MAX_TOKENS)
+    except LLMUnavailable:
+        return first
+    if getattr(r, "truncated", False):
+        return first
+    use_kb = _is_kb_task(task)
+    code = extract_code(r.text, join_all=False)
+    res = await call_tool("run_program", run_program, kb_program(code) if use_kb else code, task.workspace)
+    if res.returncode != 0 or res.timed_out:
+        return first
+    lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+    if not lines or lines[-1] == "IMPOSSIBLE":
+        return first
+    answer = normalize_answer(res.stdout, task.check, task.instruction)
+    if answer is None or answer == "IMPOSSIBLE" or _is_placeholder(answer) or _kb_placeholder(res, answer) \
+            or _is_container_repr(answer) or mismatch(task, answer) is not None:
+        return first
+    return SolveResult("unparsed", note=f"{first.note}; {MODEL_ALT} answered", extra={"best_guess": answer})
+
+
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
 _BARE_NUMBER = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
 _BARE_NAME = re.compile(r"[^\W\d_][\w.,'&-]*(?: [^\W\d_][\w.,'&-]*){0,4}")

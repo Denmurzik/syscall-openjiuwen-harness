@@ -211,6 +211,18 @@ def prose_agree() -> bool:
     return _env_bool("HARNESS_PROSE_AGREE", PROSE_AGREE)
 
 
+# default of HARNESS_SECOND_IMPOSSIBLE. Round 19, task 86: MODEL_FAST's 2b program on a search or data task printed
+# IMPOSSIBLE (or asked the knowledge base for a page or field it lacks); one MODEL_ALT program on the same prompt, and a
+# well-formed answer of it is stored as a guess (far8 search_8002: FAST printed IMPOSSIBLE in 1 run of 9). An answer
+# to an infeasible task is not counted and costs nothing but the call
+SECOND_IMPOSSIBLE = True
+
+
+def second_impossible() -> bool:
+    """A second opinion on FAST's first IMPOSSIBLE in 2b. Read at call time: HARNESS_SECOND_IMPOSSIBLE=1/0."""
+    return _env_bool("HARNESS_SECOND_IMPOSSIBLE", SECOND_IMPOSSIBLE)
+
+
 # default of HARNESS_DEEP_TESTS. Round 19, task 85: a coding workspace whose test files sit below the root
 # (`tests/test_x.py`, `test/...`, `tests/unit/x_test.py`) or whose code under test is a package (`pkg/core.py`,
 # `src/pkg/...`) goes to the ladder and the review; off, such a task ends "cannot read workspace" with no call (round 18)
