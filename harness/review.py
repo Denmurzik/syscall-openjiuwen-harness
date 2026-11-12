@@ -36,6 +36,7 @@ REVIEW_MAX_TOKENS = 700
 MAX_FILE_CHARS = 9000   # a larger file is not reviewed: the reply could not hold its functions
 RUN_TIMEOUT = 20        # one run of one visible test file
 PROBE_TIMEOUT = 10      # the trial inputs of one version of the function
+MIN_LEFT_S = 60         # no model call with less time than this before the stop: its rewrite could not be checked
 
 
 def _left(stop: float | None, cap: float) -> float:
@@ -70,13 +71,16 @@ def _texts(src: str) -> dict:
 
 
 def known_texts(mined: dict | None = None) -> dict:
-    """name -> known text: the examples' and the texts mined from the set (`scheduler._mine_texts`: {"texts": ...,
-    "final": [...]}; a final name is among the texts). The main process never installs the mined texts (other
-    in-process code reads the known tables), so they come here as an argument. Example names keep their texts."""
+    """name -> known text: the examples' and the final texts mined from the set (`scheduler._mine_texts`:
+    {"texts": ..., "final": [...]}). A mined text that is not final can be the silent bug the set's tasks share
+    (`sorted(set(xs))` for an order-keeping dedupe): it stays open to the review. The main process never installs the
+    mined texts (other in-process code reads the known tables), so they come here as an argument. Example names keep
+    their texts."""
     out = dict(cs._CANON_TEXT)
     texts = (mined or {}).get("texts") if isinstance(mined, dict) else None
+    final = set((mined or {}).get("final") or ()) if isinstance(mined, dict) else set()
     for name, text in (texts or {}).items():
-        if isinstance(name, str) and isinstance(text, str) and name not in cs._EXAMPLE_NAMES:
+        if isinstance(name, str) and isinstance(text, str) and name in final and name not in cs._EXAMPLE_NAMES:
             out[name] = text
     return out
 
@@ -279,7 +283,10 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | Non
     outcome must differ from what the file's function returns. So a rewrite that only changes what happens where the
     function raises today (a guard for empty input, another exception type) is no evidence. Only a rewrite that
     raises on no input where the file's function returns a value is stored: one that drops a guard of ours would
-    turn a hidden test of that input red. A method cannot be probed: kept. Out of time before `stop`: kept."""
+    turn a hidden test of that input red. The one exception: where both rewrites raise the same value-domain
+    exception on every such input, the function's text or a visible test line naming it names that exception
+    ("ValueError if the lengths differ"), and the stored text says `raise <Name>`. A method cannot be probed: kept.
+    Out of time before `stop`: kept."""
     if "." in name:
         return []
     call = visible_call(tests, name)
@@ -311,7 +318,20 @@ def _evidence(src: str, tests: str, name: str, a: str, b: str, stop: float | Non
         return []
     if not any(ba[i] == bb[i] != ours[i] and (_exc(ba[i]) is None or _exc(ba[i]) in _VALUE_EXC) for i in both):
         return []
-    return [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
+    ok = [t for t, k in ((a, 0), (b, 1)) if not any(raises[i][k] for i in valid)]
+    if ok:
+        return ok
+    # both rewrites raise where ours returns a value: stored only when they raise the same value-domain exception
+    # on every such input, each raises it explicitly, and the function's text or its visible tests name it
+    spots = [i for i in valid if raises[i][0] or raises[i][1]]
+    excs = {_exc(ba[i]) for i in spots}
+    if not all(ba[i] == bb[i] and _exc(ba[i]) in _VALUE_EXC for i in spots):
+        return []
+    seg = _texts(src).get(name, "")
+    named = [ln for ln in tests.splitlines() if name in ln]
+    if not all(e in seg or any(e in ln for ln in named) for e in excs):
+        return []
+    return [t for t in (a, b) if all(re.search(r"\braise\s+" + e + r"\b", t) for e in excs)]
 
 
 def _known(src: str, name: str, known: dict | None = None) -> bool:
@@ -353,6 +373,8 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
         return [], f"review skipped: {e!r}"[:200]
     if not await asyncio.to_thread(_green, ws, src, target, stop):
         return [], "review skipped: the tests are not green"
+    if stop is not None and stop - time.monotonic() < MIN_LEFT_S:
+        return [], "review: too close to the stop to check a rewrite, kept"
     msgs = _messages(src, tests, target, test_name)
     try:
         r = await client.chat(MODEL_FAST, msgs, REVIEW_MAX_TOKENS)

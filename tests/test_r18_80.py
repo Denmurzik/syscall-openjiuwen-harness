@@ -312,3 +312,50 @@ def test_values_cut_at_the_repr_limit_are_no_evidence(monkeypatch):
     seq = iter([["1"] * n, ["1"] * (n - 2) + [long] * 2, ["1"] * (n - 2) + [long] * 2])
     monkeypatch.setattr(review, "behaviour", lambda *a, **k: next(seq))
     assert review._evidence(src, LEAP_TESTS, "int_sqrt", fa, fb) == []
+
+
+# re-review 1: R1 only final mined texts are protected; R2 a raise the docstring names is behaviour; R3 no late call
+def test_only_final_mined_texts_are_known():
+    dedupe = "def dedupe(xs):\n    return sorted(set(xs))\n"
+    known = review.known_texts({"texts": {"clamp": CLAMP.strip("\n"), "dedupe": dedupe}, "final": ["clamp"]})
+    assert "clamp" in known and "dedupe" not in known
+    assert review.needs_review(dedupe, known) and not review.needs_review(CLAMP, known)
+
+
+HAMMING = ("def hamming(a, b):\n    \"\"\"Positions where a and b differ; ValueError if their lengths differ.\"\"\"\n"
+           "    return sum(x != y for x, y in zip(a, b))\n")
+HAMMING_FIX = ("def hamming(a, b):\n    \"\"\"Positions where a and b differ; ValueError if their lengths differ.\"\"\"\n"
+               "    if len(a) != len(b):\n        raise ValueError('lengths differ')\n"
+               "    return sum(x != y for x, y in zip(a, b))\n")
+HAMMING_FIX2 = HAMMING_FIX.replace("    return sum(x != y for x, y in zip(a, b))\n",
+                                   "    return sum(1 for x, y in zip(a, b) if x != y)\n")
+HAMMING_TESTS = ("import unittest\nimport mylib as m\n\n\nclass T(unittest.TestCase):\n"
+                 "    def test_h(self):\n        self.assertEqual(m.hamming('abc', 'abd'), 1)\n")
+
+
+def test_raise_the_docstring_names_is_stored(tmp_path):
+    task = _task(tmp_path, lib=HAMMING, tests=HAMMING_TESTS)
+    changed, _ = _go(task, Fake(_reply(HAMMING_FIX), _reply(HAMMING_FIX2)))
+    assert changed == ["hamming"]
+    ns = {}
+    exec(_lib(task), ns)
+    assert ns["hamming"]("abc", "abd") == 1
+    try:
+        ns["hamming"]("ab", "abc")
+        raise AssertionError("no raise")
+    except ValueError:
+        pass
+
+
+def test_raise_nobody_names_is_not_stored(tmp_path):
+    lib = HAMMING.replace("; ValueError if their lengths differ", "")
+    fix, fix2 = (t.replace("; ValueError if their lengths differ", "") for t in (HAMMING_FIX, HAMMING_FIX2))
+    task = _task(tmp_path, lib=lib, tests=HAMMING_TESTS)
+    assert _go(task, Fake(_reply(fix), _reply(fix2)))[0] == [] and _lib(task) == lib
+
+
+def test_no_model_call_close_to_the_stop(tmp_path):
+    task = _task(tmp_path)
+    c = Fake(_reply(RIGHT), _reply(RIGHT2))
+    changed, note = asyncio.run(review.review(task, c, None, __import__("time").monotonic() + 30))
+    assert changed == [] and c.calls == [] and "too close" in note and _lib(task) == SILENT + AVERAGE
