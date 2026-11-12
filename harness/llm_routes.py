@@ -1,6 +1,7 @@
 """Model fallbacks: program synthesis for answer tasks, function patches for coding tasks."""
 import ast
 import asyncio
+import difflib
 import io
 import logging
 import re
@@ -1387,6 +1388,68 @@ def _restored(src: str, original: str, name: str) -> str | None:
     return out
 
 
+LINE_SIMILAR = 0.5   # a line of a rewritten block is given back the most similar original line of it from this ratio
+
+
+def _simple(line: str) -> ast.stmt | None:
+    """The one simple statement a stripped line holds (no `if`/`for` header, no block); None otherwise."""
+    try:
+        body = ast.parse(line.strip()).body
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    if len(body) != 1 or isinstance(body[0], (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith,
+                                              ast.Try, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return None
+    return body[0]
+
+
+def _own_call(line: str, names: set) -> bool:
+    """The line is a bare call of a function or method the file defines (`other.deposit(amount)`, `log(x)`)."""
+    st = _simple(line)
+    if not isinstance(st, ast.Expr) or not isinstance(st.value, ast.Call):
+        return False
+    f = st.value.func
+    return (f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None) in names
+
+
+def _line_restores(src: str, original: str, name: str) -> list[tuple[tuple, str]]:
+    """(key, `src` with one line of the definition `name` given back an original line) for each line of a block the
+    model rewrote (a `replace` of difflib) that is a simple statement standing where the original called a function
+    or method of its own file: the most similar such original line of that block, of the same indent and a
+    similarity of at least LINE_SIMILAR (`other.balance += amount` -> `other.deposit(amount)`: an inlined call drops
+    what the callee does besides). Never a condition or any other line: a mix of the model's block and the old
+    condition (`if left <= 0:` -> `if left < 0:`, deep19 coding_9707) is neither text and can hide a bug the visible
+    tests do not catch. In order of the lines; only the ones that parse."""
+    here, there = _locate(src), _locate(original)
+    if name not in here or name not in there or here[name][2] != there[name][2]:
+        return []
+    own = {q.rsplit(".", 1)[-1] for q in there}
+    lines, old_lines = io.StringIO(src).readlines(), io.StringIO(original).readlines()
+    (s0, e0, _), (s1, e1, _) = here[name], there[name]
+    new, old = lines[s0:e0], old_lines[s1:e1]
+    indent = lambda ln: ln[:len(ln) - len(ln.lstrip())]   # noqa: E731
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag != "replace":
+            continue
+        for j in range(j1, j2):
+            if _simple(new[j]) is None:
+                continue
+            cands = [(difflib.SequenceMatcher(None, old[k].strip(), new[j].strip()).ratio(), -k) for k in range(i1, i2)
+                     if indent(old[k]) == indent(new[j]) and _own_call(old[k], own)]
+            if not cands or max(cands)[0] < LINE_SIMILAR:
+                continue
+            k = -max(cands)[1]
+            text = old[k] if old[k].endswith("\n") else old[k] + "\n"
+            cand = "".join(lines[:s0 + j] + [text] + lines[s0 + j + 1:])
+            try:
+                ast.parse(cand)
+            except (SyntaxError, ValueError, RecursionError):
+                continue
+            out.append(((name, new[j], text), cand))
+    return out
+
+
 async def _cut_back(ws: Path, original: str | None, fixed: str, targs: tuple = ()) -> tuple[str, list[str]]:
     """HARNESS_MINIMAL_PATCH (round 20, task 88): `fixed` is green on the visible tests. Every function or method
     whose text differs from `original` (the task's file before phase 1 and the ladder) takes its original text back,
@@ -1418,6 +1481,28 @@ async def _cut_back(ws: Path, original: str | None, fixed: str, targs: tuple = (
                     fixed = cand
                     done.append(name)
                     progress = True
+        # a definition the tests need changed stays the model's: one line of a block it rewrote at a time takes
+        # the most similar original line back (far8 coding_8001: `transfer` needs no `withdraw` entry, but
+        # `other.deposit(amount)` keeps the other side's history where the model wrote `other.balance += amount`)
+        progress = True
+        while progress:
+            progress = False
+            for name in names:
+                if name in done:
+                    continue
+                for key, cand in _line_restores(fixed, original, name):
+                    if (key, fixed) in tried:
+                        continue
+                    if time.monotonic() > deadline:
+                        return fixed, done
+                    tried.add((key, fixed))
+                    if (await call_tool("run_tests", _run_candidate, ws, cand, *targs)).ok:
+                        fixed = cand
+                        done.append(f"{name}: {key[2].strip()}")
+                        progress = True
+                        break
+                if progress:
+                    break
     except Exception:
         log.exception("cut-back of a green patch failed; the patch stays as it is")
     return fixed, done

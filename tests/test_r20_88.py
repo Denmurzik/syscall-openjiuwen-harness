@@ -139,3 +139,43 @@ def test_out_of_time_keeps_the_green_patch(tmp_path, monkeypatch):
     r = asyncio.run(fix_coding(t, FakeClient([BANK_PATCH])))
     assert r.status == "solved" and r.note == f"patched by {MODEL_FAST}"
     assert "other.balance += amount" in _mylib(t)
+
+
+# far8 coding_8001 as it is: the visible test wants no `withdraw` entry from `transfer`, so the model's `transfer`
+# stays; only the line where it inlined `other.deposit` takes the call back (the hidden test reads b's history)
+BANK_TESTS_8001 = BANK_TESTS.replace(
+    "        self.assertEqual((a.balance, b.balance), (0, 10))\n",
+    "        self.assertEqual((a.balance, b.balance), (0, 10))\n"
+    "        self.assertEqual(a.history, [(\"transfer\", 10)])\n")
+
+
+def test_the_real_coding_8001_takes_back_the_inlined_deposit_call(tmp_path):
+    t = _task(tmp_path, BANK, BANK_TESTS_8001)
+    r = asyncio.run(fix_coding(t, FakeClient([BANK_PATCH])))
+    assert r.status == "solved" and "BankAccount.transfer: other.deposit(amount)" in r.note
+    text = _mylib(t)
+    assert "other.deposit(amount)" in text and "other.balance += amount" not in text
+    assert "amount > self.balance" in text and "amount >= self.balance" not in text
+
+
+CLAMP = "def take(stock, n):\n    left = stock - n\n    if left < 0:\n        return left\n    else:\n        return 0\n"
+CLAMP_TESTS = ("import unittest\nimport mylib\n\n\nclass T(unittest.TestCase):\n"
+               "    def test_take(self):\n        self.assertEqual(mylib.take(5, 2), 3)\n"
+               "        self.assertEqual(mylib.take(1, 4), 0)\n")
+CLAMP_PATCH = "FUNC take\ndef take(stock, n):\n    left = stock - n\n    if left <= 0:\n        return 0\n" \
+              "    else:\n        return left\n"
+
+
+def test_a_condition_of_a_rewritten_block_is_never_taken_back(tmp_path):
+    # deep19 coding_9707: `if left <= 0:` -> `if left < 0:` keeps the visible tests green and breaks the hidden ones
+    t = _task(tmp_path, CLAMP, CLAMP_TESTS)
+    r = asyncio.run(fix_coding(t, FakeClient([CLAMP_PATCH])))
+    assert r.status == "solved" and r.note == f"patched by {MODEL_FAST}"
+    assert "if left <= 0:" in _mylib(t)
+
+
+def test_switch_off_keeps_the_inlined_line(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_MINIMAL_PATCH", "0")
+    t = _task(tmp_path, BANK, BANK_TESTS_8001)
+    asyncio.run(fix_coding(t, FakeClient([BANK_PATCH])))
+    assert "other.balance += amount" in _mylib(t)
