@@ -28,6 +28,7 @@ RESCUE_SYSTEM = (
     "what its name, docstring, comments, the README and the task text say for every valid input. Keep the file "
     "names, function names and signatures the tests and the task use. No explanations, no markdown fences.")
 MAX_TOKENS = 1800
+SOURCE_CHARS = 4500    # more code shown whole than this: no call (a whole-file reply would not fit MAX_TOKENS)
 FILE_CHARS = 8000      # a longer file is shown cut and may not be rewritten
 TOTAL_CHARS = 24000
 MAX_FILES = 24
@@ -247,6 +248,10 @@ async def rescue_coding(task, client, why: str) -> SolveResult:
     if await asyncio.to_thread(_verify, task, ws, {}) is True:   # nothing to repair: the file stays as it is
         return SolveResult("solved", answer="DONE", note=f"{why}; rescue: checks already pass, nothing written"[:300])
     msgs, whole = messages(task, files)
+    code = sum(len(text) for rel, text in files
+               if rel in whole and not _protected(rel) and Path(rel).suffix.lower() in _CODE_SUFFIXES)
+    if code > SOURCE_CHARS:   # a whole-file reply of that size would not fit MAX_TOKENS: two calls for nothing
+        return SolveResult("unparsed", note=f"{why}; rescue: {code} chars of source, too long to rewrite whole"[:300])
     note = why
     for model in (MODEL_FAST, MODEL_ALT):
         try:

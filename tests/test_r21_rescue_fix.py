@@ -108,3 +108,17 @@ def test_an_original_that_does_not_parse_keeps_its_prompt_lines(tmp_path):
     ok = 'def f():\n    """\n    >>> f()\n    1\n    """\n    return 1\n'
     assert rescue._examples_kept(ws, "g.py", {"g.py": ok})
     assert not rescue._examples_kept(ws, "g.py", {"g.py": ok.replace(">>> f()", ">>> f() or 1")})
+
+
+def test_too_much_source_to_rewrite_whole_costs_no_call(tmp_path):
+    long_src = "".join(f"def f{i}(x):\n    '''Return x plus {i}.'''\n    return x + {i}\n\n\n" for i in range(100))
+    t = _task(tmp_path, {"stats.js": "function f() {}\n", "lib.py": long_src, "notes.md": "x" * 6000},
+              "`node test.js` fails. Fix stats.js.")
+    c = Fake([])
+    r = asyncio.run(L.fix_coding(t, c))
+    assert r.status == "unparsed" and "too long to rewrite whole" in r.note and not c.calls
+    t = _task(tmp_path, {"stats.js": "function f() {}\n", "notes.md": "x" * 6000, "test.js": "y" * 6000},
+              "`node test.js` fails. Fix stats.js.", name="u")     # data and tests do not count
+    c = Fake(["FILE stats.js\nfunction f() { return 1; }\nEND FILE\n"])
+    r = asyncio.run(L.fix_coding(t, c))
+    assert r.status == "solved" and len(c.calls) == 1
