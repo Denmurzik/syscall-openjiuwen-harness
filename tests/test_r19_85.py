@@ -84,8 +84,8 @@ def test_the_pytest_stand_in_serves_a_file_below_the_root(tmp_path):
     assert not rep.ok and rep.failed == ["test_double"]
     (ws / "mylib.py").write_text(LIB_GOOD, encoding="utf-8")
     assert run_in_dir(ws, "tests/test_mylib.py").ok is True
-    # a conftest.py next to the test file is not followed by the stand-in: red, never green
-    (ws / "tests" / "conftest.py").write_text("", encoding="utf-8")
+    # a conftest.py with hooks next to the test file is not followed by the stand-in: red, never green (expert 10)
+    (ws / "tests" / "conftest.py").write_text("def pytest_configure(config):\n    pass\n", encoding="utf-8")
     assert run_in_dir(ws, "tests/test_mylib.py").ok is False
 
 

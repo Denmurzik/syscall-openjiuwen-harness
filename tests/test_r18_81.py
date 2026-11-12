@@ -273,7 +273,8 @@ def test_what_the_stand_in_cannot_follow_is_red(tmp_path):
     for name, tests in cases.items():
         assert not run_tests(_ws(tmp_path / name, LIB, tests)).ok, name
     ws = _ws(tmp_path / "conftest", LIB, head + "def test_a():\n    assert double(3) == 6\n")
-    (ws / "conftest.py").write_text("import pytest\n", encoding="utf-8")
+    # expert 10: a conftest.py of fixtures is followed, one with collection hooks is not
+    (ws / "conftest.py").write_text("def pytest_collection_modifyitems(items):\n    pass\n", encoding="utf-8")
     assert not run_tests(ws).ok
 
 

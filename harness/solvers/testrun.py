@@ -23,10 +23,30 @@ if _SUB:
     sys.path.insert(0, os.path.abspath(_SUB))
 
 
+def _conftests():
+    # the conftest.py files pytest would load for the test file: the root's, then each directory down to it.
+    # [] with HARNESS_CONFTEST off (any conftest.py then makes the stand-in's run red, as before expert 10)
+    if os.environ.get("HARNESS_CONFTEST", "1").strip().lower() in ("0", "false", "no", "off"):
+        return []
+    parts = [q for q in _SUB.replace("\\", "/").split("/") if q and q != "."]
+    paths = [os.path.join(*(parts[:i] + ["conftest.py"])) for i in range(len(parts) + 1)]
+    return [c for c in paths if os.path.exists(c)]
+
+
 def _wants_stub():
     # the stand-in serves only a test file that imports pytest outside a try block: a file without pytest, or one
     # that guards the import (`except ImportError: pytest = None`), runs exactly as before the stand-in existed
     import ast
+    # expert 10 (HARNESS_CONFTEST): a conftest.py that imports pytest serves a test file that takes its fixtures
+    # without importing pytest itself
+    for c in _conftests():
+        try:
+            with open(c, encoding="utf-8") as fh:
+                if any(isinstance(n, (ast.Import, ast.ImportFrom)) and "pytest" in ast.dump(n)
+                       for n in ast.walk(ast.parse(fh.read()))):
+                    return True
+        except Exception:
+            pass
     try:
         with open(os.path.join(_SUB, sys.argv[1].split(".")[0] + ".py"), encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
@@ -67,7 +87,8 @@ if _need_stub:
     _pt._wide = ({}, [])  # module-scoped fixture values and their open generators
     # pytest loads the conftest.py of the root and of every directory down to the test file
     _parts = [q for q in _SUB.replace("\\", "/").split("/") if q and q != "."]
-    if any(_os.path.exists(_os.path.join(*(_parts[:i] + ["conftest.py"]))) for i in range(len(_parts) + 1)):
+    if any(_os.path.exists(_os.path.join(*(_parts[:i] + ["conftest.py"]))) for i in range(len(_parts) + 1)) \
+            and not _conftests():
         _pt._bad.append("conftest.py")
 
     class _Failed(BaseException):
@@ -492,6 +513,28 @@ if _need_stub:
     _pt._collect, _pt._finish = _collect, _finish
     sys.modules["pytest"] = _pt
     _STUB = _pt
+    # expert 10 (HARNESS_CONFTEST): a conftest.py that only defines fixtures and helpers is loaded as pytest loads
+    # it, its fixtures land in the same registry before the test file's own (which override them by name). One with
+    # pytest_* hooks or pytest_plugins changes collection in ways the stand-in cannot follow: red, never green
+    import ast as _ast, importlib.util as _ilu
+    for _c in _conftests():
+        try:
+            with open(_c, encoding="utf-8") as _fh:
+                _body = _ast.parse(_fh.read()).body
+            if any((isinstance(_n, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and _n.name.startswith("pytest_"))
+                   or (isinstance(_n, _ast.Assign) and any(getattr(_t, "id", "") == "pytest_plugins" for _t in _n.targets))
+                   for _n in _body):
+                _pt._bad.append("conftest.py hooks")
+                continue
+            _d = _os.path.dirname(_os.path.abspath(_c))
+            if _d not in sys.path:
+                sys.path.insert(0, _d)
+            _spec = _ilu.spec_from_file_location("conftest", _c)
+            _m = _ilu.module_from_spec(_spec)
+            sys.modules["conftest"] = _m
+            _spec.loader.exec_module(_m)
+        except BaseException:
+            _pt._bad.append("conftest.py")
 suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[1:])
 script_ok = None
 _no_tests = False
