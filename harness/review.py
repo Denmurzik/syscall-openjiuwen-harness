@@ -941,7 +941,7 @@ def _loads_alone(ws: Path, target: str, src: str) -> bool:
 REVIEW_LONG = True
 # ordinary values only: zero, a negative number or an empty string is often outside the parameter's domain, and two
 # rewrites that agree there against the file show nothing about the file
-_LONG_VALUES = {int: [1, 2, 3, 10, 50, 100], float: [0.5, 1.0, 2.5, 10.0], str: ["-", " ", "x"]}
+_LONG_VALUES = {int: [1, 2, 3, 10, 50, 100], float: [0.5, 1.0, 2.5, 10.0]}   # no str: arbitrary strings fall outside an enum-like parameter (round-22 review d-I1)
 
 
 def _long_inputs(src: str, name: str, args: tuple) -> list[tuple]:

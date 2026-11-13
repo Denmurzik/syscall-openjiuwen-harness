@@ -15,7 +15,7 @@ from harness.proc import ProcResult, run_python
 # programs at once over a workspace of several hundred megabytes fill it, and the copy fails. On: a workspace above
 # BIG_WS_BYTES (or a copy that fails) is not copied: the run's directory holds the same tree of directories with a
 # symbolic link per file. Off: f296ee6
-BIG_WS = True
+BIG_WS = False   # off by default (round-22 review: linked files let a model program change the task's own data)
 BIG_WS_BYTES = 100 * 1024 * 1024
 
 

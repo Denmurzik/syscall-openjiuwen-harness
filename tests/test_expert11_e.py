@@ -28,6 +28,7 @@ def test_small_workspace_is_copied(tmp_path):
 
 
 def test_big_workspace_is_linked(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_BIG_WS", "1")   # off by default since the round-22 review
     if not _can_link(tmp_path):
         pytest.skip("no symbolic links here")
     monkeypatch.setattr(sandbox, "BIG_WS_BYTES", 1)
@@ -43,6 +44,7 @@ def test_switch_off_copies(tmp_path, monkeypatch):
 
 
 def test_failed_copy_falls_back_to_links(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_BIG_WS", "1")
     if not _can_link(tmp_path):
         pytest.skip("no symbolic links here")
 
@@ -50,3 +52,7 @@ def test_failed_copy_falls_back_to_links(tmp_path, monkeypatch):
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(sandbox.shutil, "copytree", full)
     assert sandbox.run_program(PROG, _ws(tmp_path)).stdout.split() == ["42", "True"]
+
+
+def test_off_by_default():
+    assert sandbox.BIG_WS is False
