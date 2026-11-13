@@ -90,6 +90,22 @@ def _reason_votes(task: Task) -> bool:
             and config.reason_math() and config.confirm_math())
 
 
+# default of HARNESS_PRIO_CAL. Expert 12, patch a: the 2b order is reward per estimated unit, and the estimate is off
+# by a steady factor per type (measured on x10, x11 and far8, rounds 22: real cost / estimate is 0.6-0.9 for coding,
+# 1.1-1.4 for data, 2.0-2.8 for math with its REASON call, 0.9-3.5 for search). Uncorrected, a short budget ran out
+# before any coding task (x11 at 8000 units: coding 0 of 40). Only the order changes: the estimate that gates a unit
+# against the ledger stays as it was. Off: the order of round 22
+PRIO_CAL = True
+PRIO_COST = {"coding": 0.75, "data_analysis": 1.3, "math": 2.4, "search": 1.6}
+
+
+def _prio_2b(task: Task, est: float) -> float:
+    """Reward per expected unit of a 2b task: the estimate corrected by the measured factor of its type."""
+    if config._env_bool("HARNESS_PRIO_CAL", PRIO_CAL):
+        est = est * PRIO_COST.get(task.task_type, 1.0)
+    return task.reward / est
+
+
 SECOND_TYPES = ("search", "data_analysis")   # 2b types whose first IMPOSSIBLE gets a MODEL_ALT opinion (task 86)
 
 
@@ -688,7 +704,7 @@ async def _phase2_async(left, client, ledger, t0, deadline_s, settle, status, tr
             if (res.note or "").startswith(_LLM_UNAVAILABLE):
                 ladder = (res.extra or {}).get("ladder")
                 unavailable.append(lambda: unit_2b(task, ladder))
-        return {"prio": task.reward / est, "estimate": est, "run": go, "name": task.task_id}
+        return {"prio": _prio_2b(task, est), "estimate": est, "run": go, "name": task.task_id}
 
     units = [unit_2b(t) for t in left if status.get(t.task_id) == "unparsed"
              or (t.task_id in tentative and not (tentative[t.task_id].extra or {}).keys() & {"ambiguous", "verify"})]
