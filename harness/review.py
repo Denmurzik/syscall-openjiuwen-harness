@@ -933,6 +933,38 @@ def _loads_alone(ws: Path, target: str, src: str) -> bool:
     return True
 
 
+# default of HARNESS_REVIEW_LONG. Expert 11, patch d: the trial inputs had the shape of the visible call, so a
+# parameter the visible tests always leave at its default was never given (x11: `line_total(item, qty,
+# discount_pct=0)` with a cache keyed by (item, qty): both models wrote the same fix, "no evidence"). On: after the
+# other inputs, in the same process, the visible arguments followed by other values for each such parameter.
+# Off: f296ee6
+REVIEW_LONG = True
+# ordinary values only: zero, a negative number or an empty string is often outside the parameter's domain, and two
+# rewrites that agree there against the file show nothing about the file
+_LONG_VALUES = {int: [1, 2, 3, 10, 50, 100], float: [0.5, 1.0, 2.5, 10.0], str: ["-", " ", "x"]}
+
+
+def _long_inputs(src: str, name: str, args: tuple) -> list[tuple]:
+    try:
+        node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == name)
+        a = node.args
+        if a.vararg or a.kwarg or a.kwonlyargs:
+            return []
+        total, nd = len(a.posonlyargs) + len(a.args), len(a.defaults)
+        given = len(args) - (total - nd)
+        if given < 0 or len(args) >= total:
+            return []
+        defs = [ast.literal_eval(d) for d in a.defaults]
+    except (StopIteration, SyntaxError, ValueError, TypeError, RecursionError, MemoryError):
+        return []
+    out = []
+    for j in range(given, nd):
+        d = defs[j]
+        pool = [not d] if isinstance(d, bool) else [x for x in _LONG_VALUES.get(type(d), []) if x != d]
+        out += [tuple(args) + tuple(defs[given:j]) + (x,) for x in pool[:5]]
+    return out[:10]
+
+
 class _Trial:
     """Trial inputs of one function of the file and each version's outcomes on them, one subprocess a version,
     remembered by the file's text (the third opinion probes the same versions again). A method (with
@@ -963,6 +995,8 @@ class _Trial:
                     short = [tuple(args[:need])] + [(x,) + tuple(args[1:need]) for x in _pool(args[0])[:6]]
                     self.inputs = main[:BATTERY_CAP - len(short)] + extra + short
                     self.short = set(range(len(self.inputs) - len(short), len(self.inputs)))
+                if config._env_bool("HARNESS_REVIEW_LONG", REVIEW_LONG):
+                    self.inputs = self.inputs + _long_inputs(src, name, args)   # after `short`: its indexes stay
             elif config.review_probes():
                 found = _visible_exprs(tests, name)
                 if found is not None:
