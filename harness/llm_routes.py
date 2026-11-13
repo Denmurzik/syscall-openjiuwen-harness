@@ -402,6 +402,7 @@ def describe_workspace(ws: Path) -> str:
             return "\n".join(parts)
         parts.append(n)
         used += _nbytes(n) + 1
+    cut: dict = {}   # HARNESS_FULL_SMALL: name -> (index of its preview block, path, the lines shown)
     later = []   # HARNESS_RICH_PREVIEW: what is added goes after every text preview, so it never takes the room of one
     for p, n in zip(files, names):
         try:
@@ -421,6 +422,7 @@ def describe_workspace(ws: Path) -> str:
             break
         parts.append(block)
         used += _nbytes(block) + 1
+        cut[n] = (len(parts) - 1, p, first)
         if config.rich_preview() and p.suffix.lower() == ".json":
             later.append((p, n, None, first))
     for p, n, raw, first in later:
@@ -429,7 +431,41 @@ def describe_workspace(ws: Path) -> str:
             continue
         parts.append(block)
         used += _nbytes(block) + 1
+    if full_small():
+        _whole_small(parts, cut)
     return "\n".join(parts)
+
+
+# default of HARNESS_FULL_SMALL. Expert 11, patch a: five lines of a short document hide what the question is about
+# (x11: the glossary line of the abbreviation asked for, the "Action items" of meeting notes; two programs printed
+# IMPOSSIBLE or read the wrong line). On: a small text document (notes, README, config: not a table, a log or code)
+# that its preview cut is shown whole, in listing order, within FULL_EXTRA bytes on top of PREVIEW_TOTAL.
+# Off: f296ee6
+FULL_SMALL = True
+FULL_FILE = 1500    # bytes: a larger document keeps its five lines
+FULL_EXTRA = 3000   # bytes all whole documents may add to one prompt (about 100 units of input)
+_DOC_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".rst", ".env", ".ini", ".cfg", ".conf", ".toml", ".yml",
+                           ".yaml", ".properties", ""})
+
+
+def full_small() -> bool:
+    return config._env_bool("HARNESS_FULL_SMALL", FULL_SMALL)
+
+
+def _whole_small(parts: list, cut: dict) -> None:
+    room = FULL_EXTRA
+    for n, (i, p, first) in cut.items():
+        try:
+            if p.suffix.lower() not in _DOC_SUFFIXES or p.stat().st_size > FULL_FILE:
+                continue
+            text = p.read_bytes().decode("utf-8", errors="ignore").replace("\r\n", "\n").rstrip("\n")
+        except OSError:
+            continue
+        add = _nbytes(text) - _nbytes(first)
+        if text == first or add <= 0 or add > room or "\0" in text:
+            continue
+        parts[i] = f"--- {n} (whole file) ---\n{text}"
+        room -= add
 
 
 _NOT_CONST = object()
