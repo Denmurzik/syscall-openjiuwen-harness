@@ -58,6 +58,11 @@ REASON_TOKENS = 2000    # output limit of MODEL_REASON's third opinion (low reas
 REASON_SPEND_LIMIT = 0.5   # no third opinion once this share of the budget is spent (the stage's own gate)
 REASON_MAX_CALLS = 6       # third opinions a run, at most (1 to 2K units each: a set where every file disputes would
 REASON_MAX_UNITS = 8000    # otherwise be held back by the 50 % gate alone), and the units they may spend in all
+# default of HARNESS_REVIEW_LONE. Round 19, task 87: a function only one of FAST and ALT rewrote was put to REASON.
+# Off since round 24: on live9 coding_0099 FAST and REASON (the same base model) agreed on `* 100 / span` for a
+# correct `* 100 // span` (33.33 instead of 33) and the stored file failed its hidden test; the path had won one task
+# (trap1 coding_7024, also won through the dispute path in later runs). 1 restores the round 19-23 behaviour
+REVIEW_LONE = False
 REASON_DISPUTE_CALLS = 2   # of the cap, kept for files with a dispute: a file with only one-sided cases (task 87)
 REASON_DISPUTE_UNITS = 2000  # may not take them
 
@@ -1444,7 +1449,7 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
                                                disputed, trials)
     # task 87: a function only one of them rewrote is asked about too, after the disputes
     lone = await asyncio.to_thread(_lone, ws, src, tests, target, first, second, known, stop, trials) \
-        if config.review_reason() else []
+        if config.review_reason() and config._env_bool("HARNESS_REVIEW_LONE", REVIEW_LONE) else []
     if changed and new != src:
         # the agreed fixes are written before the third opinion is asked: a failure or a cancel there keeps them
         if path.read_text(encoding="utf-8") != src:   # someone else rewrote the file meanwhile: leave it

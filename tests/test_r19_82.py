@@ -294,7 +294,8 @@ MIN_GUARD = ("def minimum(xs):\n    if not xs:\n        raise ValueError('empty'
              "        if x < best:\n            best = x\n    return best\n")      # guard-only: no case
 
 
-def test_one_sided_rewrite_the_third_opinion_agrees_with_is_stored(tmp_path):
+def test_one_sided_rewrite_the_third_opinion_agrees_with_is_stored(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     c = Fake(_reply(SQ_FIX), _reply(MIN_GUARD), _reply(SQ_FIX2))
     changed, note = _go(task, c)
@@ -308,7 +309,8 @@ def test_one_sided_rewrite_the_third_opinion_agrees_with_is_stored(tmp_path):
     assert ns["sum_squares"]([-2, 3]) == 13 and "best = xs[0]\n" in _lib(task) and "raise" not in _lib(task)
 
 
-def test_one_sided_rewrite_with_a_silent_third_opinion_is_kept(tmp_path):
+def test_one_sided_rewrite_with_a_silent_third_opinion_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     c = Fake(_reply(SQ_FIX), "NONE", "NONE")
     changed, note = _go(task, c)
@@ -316,13 +318,15 @@ def test_one_sided_rewrite_with_a_silent_third_opinion_is_kept(tmp_path):
     assert note.startswith("review: no agreement (['sum_squares'] / [])") and "sided []" in note
 
 
-def test_one_sided_rewrite_the_third_opinion_differs_from_is_kept(tmp_path):
+def test_one_sided_rewrite_the_third_opinion_differs_from_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     other = "def sum_squares(xs):\n    return sum(abs(x) * x for x in xs)\n"
     assert _go(task, Fake(_reply(SQ_FIX), "NONE", _reply(other)))[0] == [] and _lib(task) == SQ_LIB
 
 
-def test_guard_only_or_known_one_sided_rewrites_make_no_third_call(tmp_path):
+def test_guard_only_or_known_one_sided_rewrites_make_no_third_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     c = Fake(_reply(MIN_GUARD), "NONE", _reply(SQ_FIX))
     changed, note = _go(task, c)
@@ -352,3 +356,8 @@ def test_one_sided_only_files_leave_room_for_disputes():
     assert review._may_reason(c, [{"content": "x"}])
     c._review_reason = (0, review.REASON_MAX_UNITS - review.REASON_DISPUTE_UNITS)
     assert not review._may_reason(c, [{"content": "x"}], lone_only=True) and review._may_reason(c, [{"content": "x"}])
+
+
+def test_one_sided_path_is_off_by_default():
+    from harness import review
+    assert review.REVIEW_LONE is False
