@@ -266,7 +266,7 @@ python -m tools.evaluate --run set --log set/tasks/_harness_log/trajectory.jsonl
 
 ## Результаты
 
-Последние прогоны Docker по команде жюри (`BUDGET=100000`, реальная модель через прокси, коммит d638ebf (раунды 14 и 15); pool и v4 — на c914715); подсчёт `python -m tools.evaluate --run <набор> --log <набор>/tasks/_harness_log/trajectory.jsonl`, для наборов экспертов `.superpowers/sdd/expert/scripts3/score3.py`. Траектории более ранних прогонов тех же наборов (коммит d0008e4) лежат в `docs/trajectories/`.
+Последние прогоны Docker по команде жюри (`BUDGET=100000`, реальная модель через прокси, коммит d638ebf (раунды 14 и 15); pool и v4 — на c914715); подсчёт `python -m tools.evaluate --run <набор> --log <набор>/tasks/_harness_log/trajectory.jsonl` (для наборов, собранных генераторами вне репозитория, — их собственные скрипты подсчёта). Траектории более ранних прогонов тех же наборов (коммит d0008e4) лежат в `docs/trajectories/`.
 
 | Прогон | Набор | score / max | токены | время |
 |---|---|---|---|---|
