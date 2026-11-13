@@ -58,11 +58,13 @@ REASON_TOKENS = 2000    # output limit of MODEL_REASON's third opinion (low reas
 REASON_SPEND_LIMIT = 0.5   # no third opinion once this share of the budget is spent (the stage's own gate)
 REASON_MAX_CALLS = 6       # third opinions a run, at most (1 to 2K units each: a set where every file disputes would
 REASON_MAX_UNITS = 8000    # otherwise be held back by the 50 % gate alone), and the units they may spend in all
-# default of HARNESS_REVIEW_LONE. Round 19, task 87: a function only one of FAST and ALT rewrote was put to REASON.
-# Off since round 24: on live9 coding_0099 FAST and REASON (the same base model) agreed on `* 100 / span` for a
-# correct `* 100 // span` (33.33 instead of 33) and the stored file failed its hidden test; the path had won one task
-# (trap1 coding_7024, also won through the dispute path in later runs). 1 restores the round 19-23 behaviour
-REVIEW_LONE = False
+# defaults of HARNESS_REVIEW_LONE and HARNESS_REVIEW_LONE_FAST. Round 19, task 87: a function only one of FAST and
+# ALT rewrote is put to REASON. Round 24: only ALT's lone rewrites. FAST and REASON are the same base model: on live9
+# coding_0099 they agreed on `* 100 / span` for a correct `* 100 // span` (33.33 instead of 33) and the stored file
+# failed its hidden test, while ALT-alone + REASON (two models) won x10 coding_1011 in every run that had it.
+# HARNESS_REVIEW_LONE=0 drops the path; HARNESS_REVIEW_LONE_FAST=1 restores the round 19-23 behaviour
+REVIEW_LONE = True
+REVIEW_LONE_FAST = False
 REASON_DISPUTE_CALLS = 2   # of the cap, kept for files with a dispute: a file with only one-sided cases (task 87)
 REASON_DISPUTE_UNITS = 2000  # may not take them
 
@@ -1331,6 +1333,8 @@ def _lone(ws: Path, src: str, tests: str, target: str, first: dict, second: dict
             break
         if _known(src, name, known):
             continue
+        if name in first and not config._env_bool("HARNESS_REVIEW_LONE_FAST", REVIEW_LONE_FAST):
+            continue   # FAST alone + REASON is one base model agreeing with itself (live9 coding_0099)
         text, role = (first[name], "first") if name in first else (second[name], "second")
         trial = trials.setdefault(name, _Trial(src, tests, name, target))
         texts, _ = _verdict(src, tests, name, text, text, stop, trial, (role, role + " again"))

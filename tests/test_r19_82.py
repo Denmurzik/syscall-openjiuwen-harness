@@ -295,7 +295,7 @@ MIN_GUARD = ("def minimum(xs):\n    if not xs:\n        raise ValueError('empty'
 
 
 def test_one_sided_rewrite_the_third_opinion_agrees_with_is_stored(tmp_path, monkeypatch):
-    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
+    monkeypatch.setenv("HARNESS_REVIEW_LONE_FAST", "1")   # FAST-alone cases are off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     c = Fake(_reply(SQ_FIX), _reply(MIN_GUARD), _reply(SQ_FIX2))
     changed, note = _go(task, c)
@@ -310,7 +310,7 @@ def test_one_sided_rewrite_the_third_opinion_agrees_with_is_stored(tmp_path, mon
 
 
 def test_one_sided_rewrite_with_a_silent_third_opinion_is_kept(tmp_path, monkeypatch):
-    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
+    monkeypatch.setenv("HARNESS_REVIEW_LONE_FAST", "1")   # FAST-alone cases are off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     c = Fake(_reply(SQ_FIX), "NONE", "NONE")
     changed, note = _go(task, c)
@@ -319,14 +319,14 @@ def test_one_sided_rewrite_with_a_silent_third_opinion_is_kept(tmp_path, monkeyp
 
 
 def test_one_sided_rewrite_the_third_opinion_differs_from_is_kept(tmp_path, monkeypatch):
-    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
+    monkeypatch.setenv("HARNESS_REVIEW_LONE_FAST", "1")   # FAST-alone cases are off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     other = "def sum_squares(xs):\n    return sum(abs(x) * x for x in xs)\n"
     assert _go(task, Fake(_reply(SQ_FIX), "NONE", _reply(other)))[0] == [] and _lib(task) == SQ_LIB
 
 
 def test_guard_only_or_known_one_sided_rewrites_make_no_third_call(tmp_path, monkeypatch):
-    monkeypatch.setenv("HARNESS_REVIEW_LONE", "1")   # off by default since round 24
+    monkeypatch.setenv("HARNESS_REVIEW_LONE_FAST", "1")   # FAST-alone cases are off by default since round 24
     task = _task(tmp_path, lib=SQ_LIB, tests=SQ_TESTS)
     c = Fake(_reply(MIN_GUARD), "NONE", _reply(SQ_FIX))
     changed, note = _go(task, c)
@@ -358,6 +358,17 @@ def test_one_sided_only_files_leave_room_for_disputes():
     assert not review._may_reason(c, [{"content": "x"}], lone_only=True) and review._may_reason(c, [{"content": "x"}])
 
 
-def test_one_sided_path_is_off_by_default():
+def test_one_sided_path_takes_only_alt_alone_by_default():
     from harness import review
-    assert review.REVIEW_LONE is False
+    assert review.REVIEW_LONE is True and review.REVIEW_LONE_FAST is False
+
+
+def test_fast_alone_rewrite_is_not_put_to_reason_by_default(tmp_path):
+    from harness import review
+    src = "def f(x):" + chr(10) + "    return x * 99 // 10" + chr(10)
+    tests = chr(10).join(["import unittest", "import mylib as m", "", "class T(unittest.TestCase):",
+                          "    def test_f(self):", "        self.assertEqual(m.f(0), 0)", ""])
+    (tmp_path / "mylib.py").write_text(src, encoding="utf-8")
+    (tmp_path / "test_mylib.py").write_text(tests, encoding="utf-8")
+    first = {"f": "def f(x):" + chr(10) + "    return x * 100 / 10" + chr(10)}
+    assert review._lone(tmp_path, src, tests, "mylib.py", first, {}, None, None, {}) == []
