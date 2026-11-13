@@ -1342,6 +1342,28 @@ async def _third(client, msgs: list[dict], src: str) -> tuple[dict, str]:
     return third, str(sorted(third))
 
 
+# default of HARNESS_REVIEW_RETRY. Expert 11, patch c: a reply that runs into REVIEW_MAX_TOKENS (a model that
+# thinks aloud in comments inside the function: x11 coding_1013 and x10 coding_1014, MODEL_ALT both times, 550 to
+# 700+ tokens for a ten-line function) ended the review of the file. On: such a reply is asked for once more with
+# room for REVIEW_RETRY_TOKENS. Off: f296ee6
+REVIEW_RETRY = True
+REVIEW_RETRY_TOKENS = 1400
+
+
+def _cut_reply(r, limit: int) -> bool:
+    return bool(getattr(r, "truncated", False) or (r.completion_tokens or 0) >= limit)
+
+
+async def _ask(client, model: str, msgs: list[dict]):
+    """(the reply, True when it ran into its output limit)."""
+    r = await client.chat(model, msgs, REVIEW_MAX_TOKENS)
+    cut = _cut_reply(r, REVIEW_MAX_TOKENS)
+    if cut and config._env_bool("HARNESS_REVIEW_RETRY", REVIEW_RETRY):
+        r = await client.chat(model, msgs, REVIEW_RETRY_TOKENS)
+        cut = _cut_reply(r, REVIEW_RETRY_TOKENS)
+    return r, cut
+
+
 async def review(task, client, known: dict | None = None, stop: float | None = None) -> tuple[list[str], str]:
     """Names of the functions replaced in the task's file, and a note for the trajectory. `known`: `known_texts`
     (default the examples' texts only). `stop`: the monotonic time after which no probe or test run starts."""
@@ -1361,8 +1383,8 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
         return [], "review: too close to the stop to check a rewrite, kept"
     msgs = _messages(src, tests, target, test_name)
     try:
-        r = await client.chat(MODEL_FAST, msgs, REVIEW_MAX_TOKENS)
-        if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= REVIEW_MAX_TOKENS:
+        r, cut = await _ask(client, MODEL_FAST, msgs)
+        if cut:
             return [], "review: reply hit the output limit, kept"
         first = _rewrites(src, r.text)
         if not first:
@@ -1372,8 +1394,8 @@ async def review(task, client, known: dict | None = None, stop: float | None = N
             first = {n: t for n, t in first.items() if n not in blind}
             if not first:
                 return [], f"review: no visible test calls {blind}, kept"[:200]
-        r = await client.chat(MODEL_ALT, msgs, REVIEW_MAX_TOKENS)
-        if getattr(r, "truncated", False) or (r.completion_tokens or 0) >= REVIEW_MAX_TOKENS:
+        r, cut = await _ask(client, MODEL_ALT, msgs)
+        if cut:
             return [], "review: second reply hit the output limit, kept"
         second = _rewrites(src, r.text)
     except LLMUnavailable as e:
