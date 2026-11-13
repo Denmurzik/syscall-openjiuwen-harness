@@ -747,6 +747,57 @@ def is_free_coding(task: Task) -> bool:
         return False
 
 
+# default of HARNESS_KB_EXTRAS. Expert 11, patch b: the field route shows the model only `kb`. A page with no
+# `Key: value` line is an empty dict there (x11: "News 2023 ... moved its headquarters" - the program printed the old
+# city), and a file outside kb/ that the question names is not shown at all (x11: hr/salaries.csv - the program used a
+# variable that does not exist). On: the text of such pages and the first lines of such files follow the examples.
+# A base with neither gets the f296ee6 prompt byte for byte. Off: f296ee6
+KB_EXTRAS = True
+KB_EXTRA_PAGES = 4        # pages without fields shown, at most
+KB_EXTRA_PAGE_CHARS = 600
+KB_EXTRA_FILES = 6        # files outside kb/ shown, at most
+
+
+def kb_extras() -> bool:
+    return config._env_bool("HARNESS_KB_EXTRAS", KB_EXTRAS)
+
+
+def _kb_extra(ws: Path) -> str:
+    out = ""
+    pages = _kb_pages(ws)
+    bare = [t for t, text in pages.items()
+            if not any(":" in ln for ln in text.splitlines() if not ln.startswith("#"))]
+    if bare and len(bare) * 2 <= len(pages):
+        out += ("\n\nThese pages have no fields (kb[title] is empty); their full text is in the dict `pages` "
+                "(title -> text), also ALREADY loaded. Read them first: where one states a later change or a "
+                "correction of a field the question needs (a move, a new employer, a new value), that statement "
+                "wins over the field in kb, and the program prints the value it states.")
+        for t in bare[:KB_EXTRA_PAGES]:
+            body = pages[t].strip()
+            out += f"\n--- pages[{t!r}] ---\n{body[:KB_EXTRA_PAGE_CHARS]}"
+    try:
+        others = sorted(p for p in ws.rglob("*") if p.is_file() and "__pycache__" not in p.parts
+                        and "kb" not in p.relative_to(ws).parts[:1] and not _kb_junk(p))
+    except OSError:
+        others = []
+    if others:
+        out += ("\n\nBesides kb these files are in the current directory; when the question needs one, read it "
+                "with open():")
+        for p in others[:KB_EXTRA_FILES]:
+            rel = p.relative_to(ws).as_posix()
+            try:
+                with open(p, "rb") as f:
+                    raw = f.read(PREVIEW_FILE * 4)
+            except OSError:
+                continue
+            if not _is_text(raw):
+                out += f"\n--- {rel} (binary) ---"
+                continue
+            first = "\n".join(raw.decode("utf-8", errors="ignore").splitlines()[:PREVIEW_LINES])
+            out += f"\n--- {rel} (first lines) ---\n{first.encode('utf-8')[:PREVIEW_FILE].decode('utf-8', errors='ignore')}"
+    return out
+
+
 def _program_messages(task: Task) -> list[dict]:
     if _is_prose_task(task):
         question = strip_boilerplate(task.instruction)
@@ -756,6 +807,8 @@ def _program_messages(task: Task) -> list[dict]:
     if _is_kb_task(task):
         ex, n = _kb_examples(task.workspace)
         user = (f"{strip_boilerplate(task.instruction)}\n\nkb has {n} pages, for example:\n" + "\n".join(ex))
+        if kb_extras():
+            user += _kb_extra(task.workspace)
         return [{"role": "system", "content": SEARCH_SYSTEM}, {"role": "user", "content": user}]
     hint = ""
     if task.task_type == "search" and (task.workspace / "kb").is_dir():
