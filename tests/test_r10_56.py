@@ -51,6 +51,9 @@ _TYPE = {"math": "math", "data": "data_analysis", "search": "search"}
 
 
 def _scenario(tmp_path, monkeypatch, *, reason_answers=None, budget=100000, spent=0.0):
+    # the sequences below pin the 2b order of rounds 9-22; the calibrated order (expert 12, patch a) has its own
+    # tests in test_r23_prio.py
+    monkeypatch.setenv("HARNESS_PRIO_CAL", "0")
     tasks = tmp_path / "tasks"
     for tid in _2A:
         ttype = _TYPE[tid.split("_")[0]]
