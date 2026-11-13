@@ -799,6 +799,31 @@ def _kb_extra(ws: Path) -> str:
     return out
 
 
+_INITIAL_NAME = re.compile(r"\b[A-Z]\.\s?[A-Z][a-z][\w'-]*|\b[A-Z][a-z][\w'-]*\s[A-Z]\.(?!\w)")
+
+
+def _alias_hint(task: Task) -> str:
+    """Expert 12, patch c (HARNESS_INITIAL_ALIAS): the question names somebody with an initial ("R. Costa") and exactly
+    one page title fits it: the prompt says which. Before, FAST, ALT and REASON all printed IMPOSSIBLE (x11
+    search_1012). No such name, no fitting page or several: the prompt is the round-22 prompt byte for byte."""
+    try:
+        from harness.solvers.search_solver import _initial_alias_on, _initial_pages, _norm
+        if not _initial_alias_on():
+            return ""
+        titles = {_norm(t): t for t in _kb_pages(task.workspace)}
+        out = ""
+        for name in dict.fromkeys(m.group(0) for m in _INITIAL_NAME.finditer(task.instruction)):
+            if _norm(name) in titles:
+                continue
+            fits = _initial_pages(name, titles)
+            if len(fits) == 1:
+                out += (f"\n\nNote: no page is titled {name!r}; by its initial it fits exactly one page, "
+                        f"{titles[fits[0]]!r}. Take {name!r} to be that page.")
+        return out
+    except Exception:
+        return ""
+
+
 def _program_messages(task: Task) -> list[dict]:
     if _is_prose_task(task):
         question = strip_boilerplate(task.instruction)
@@ -810,6 +835,7 @@ def _program_messages(task: Task) -> list[dict]:
         user = (f"{strip_boilerplate(task.instruction)}\n\nkb has {n} pages, for example:\n" + "\n".join(ex))
         if kb_extras():
             user += _kb_extra(task.workspace)
+        user += _alias_hint(task)
         return [{"role": "system", "content": SEARCH_SYSTEM}, {"role": "user", "content": user}]
     hint = ""
     if task.task_type == "search" and (task.workspace / "kb").is_dir():

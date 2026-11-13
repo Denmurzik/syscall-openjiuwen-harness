@@ -319,9 +319,14 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
         if _norm(entity) not in index:
             if not _clean_name(entity):
                 return _unparsed(f"start entity not a clean name: {entity!r}")
-            if _near_page(entity, index):
+            alias = _initial_pages(entity, index) if _initial_alias_on() else []
+            if len(alias) > 1:
+                return _unparsed(f"start entity {entity!r} is an initial of several pages")
+            if _near_page(entity, index) and not alias:
                 return _unparsed(f"start entity {entity!r} matches one page only inexactly")
-            return SolveResult("infeasible", note=f"start entity not found: {entity!r}")
+            if not alias:
+                return SolveResult("infeasible", note=f"start entity not found: {entity!r}")
+            entity = alias[0]   # "R. Costa" is the one page "Rhea Costa"
         current = entity
         for key in path:
             nxt = lookup(current, key)
@@ -344,6 +349,35 @@ def execute(spec: dict, workspace: Path) -> SolveResult:
 
 def _words(name: str) -> set[str]:
     return {w.strip(",;:") for w in _norm(name).split()} - {""}
+
+
+# default of HARNESS_INITIAL_ALIAS. Expert 12, patch c: a start entity written with an initial ("R. Costa", "Rhea C.")
+# that fits exactly one page of the base is that page; before, the task was closed as infeasible with no further call
+# (x11 search_1012, 4 points in every run). Several fitting pages: the task goes on to 2b. None: infeasible as before
+INITIAL_ALIAS = True
+_INITIAL = re.compile(r"[^\W\d_]\.?$")
+
+
+def _initial_alias_on() -> bool:
+    import os
+    v = os.environ.get("HARNESS_INITIAL_ALIAS")
+    return INITIAL_ALIAS if v is None or v.strip() == "" else v.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _initial_pages(entity: str, index: dict) -> list:
+    """Pages whose name has the words of `entity` in order, a one-letter word of `entity` (with or without a period)
+    standing for a word that begins with it. At least one initial and one whole word are needed."""
+    want = _norm(entity).split()
+    initials = [bool(_INITIAL.fullmatch(w)) for w in want]
+    if len(want) < 2 or not any(initials) or all(initials):
+        return []
+    out = []
+    for page in index:
+        have = page.split()
+        if len(have) == len(want) and all((h.startswith(w[0]) and len(h) > 1) if ini else h == w
+                                          for w, h, ini in zip(want, have, initials)):
+            out.append(page)
+    return out
 
 
 def _near_page(entity: str, index: dict) -> bool:
