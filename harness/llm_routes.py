@@ -392,7 +392,8 @@ def _rich_block(p: Path, n: str, raw: bytes | None, first: str | None) -> str | 
 
 
 def describe_workspace(ws: Path) -> str:
-    """File tree plus first lines of text files; at most PREVIEW_TOTAL bytes of UTF-8."""
+    """File tree plus first lines of text files; at most PREVIEW_TOTAL bytes of UTF-8, plus up to FULL_EXTRA bytes of
+    short documents shown whole (HARNESS_FULL_SMALL)."""
     files = sorted(p for p in ws.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
     names = [p.relative_to(ws).as_posix() for p in files]
     head = "Files:" if names else "Files: (none)"

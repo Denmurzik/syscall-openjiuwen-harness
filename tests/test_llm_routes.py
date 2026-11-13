@@ -235,7 +235,8 @@ def test_describe_workspace_limits(tmp_path):
     for i in range(40):
         (ws / f"f{i:02d}.txt").write_text("я" * 300 + "\n" * 10, encoding="utf-8")
     d = describe_workspace(ws)
-    assert len(d.encode("utf-8")) <= 4096
+    from harness.llm_routes import FULL_EXTRA, PREVIEW_TOTAL
+    assert len(d.encode("utf-8")) <= PREVIEW_TOTAL + FULL_EXTRA   # short documents shown whole (HARNESS_FULL_SMALL)
     assert "bin.dat" in d and "binary" not in d
     blk = d.split("--- a.csv (first lines) ---\n")[1].split("\n--- ")[0]
     assert len(blk.encode()) <= 500 and blk.count("line") <= 5
